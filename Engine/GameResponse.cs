@@ -7,6 +7,8 @@ public class GameResponse
     public string? Reason { get; set; }
 
     public string? Remember { get; set; }
+    
+    public string? Item { get; set; }
 
     public int? RememberImportance { get; set; }
 }
