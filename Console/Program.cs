@@ -1,16 +1,10 @@
-﻿
-using AdventurerEngine;
+﻿using AdventurerEngine;
 using ConsoleRunner;
 using Engine.GameApiClient;
-using OpenAI;
 
-var adventurer = new Adventurer();
+var adventurer = new Adventurer(ConsoleHelper.CreateLogger());
 var session = "Bdet77gg9wwwddeee65d890wetwegweeg000";
 var gameClient = new ZorkApiClient();
-var chatClient = new ChatGPTClient(ConsoleHelper.CreateLogger())
-{
-    SystemPrompt = Prompts.SystemPrompt
-};
 
 await gameClient.GetAsync(new ZorkApiRequest("verbose", session));
 var lastResponse = await gameClient.GetAsync(new ZorkApiRequest("look", session));
@@ -30,23 +24,35 @@ for (var i = 0; i < 250; i++)
     var historyString = adventurer.HistoryString;
     var memoryString = adventurer.MemoryString;
 
-    Console.ForegroundColor = ConsoleColor.Cyan;
-    Console.WriteLine("------------------------------- History---------------------------------------");
-    Console.WriteLine(historyString);
+    if (!string.IsNullOrEmpty(historyString))
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("------------------------------- History---------------------------------------");
+        Console.WriteLine(historyString);
+    }
 
-    Console.ForegroundColor = ConsoleColor.DarkRed;
-    Console.WriteLine("------------------------------- Items---------------------------------------");
-    Console.WriteLine(itemString);
+    if (!string.IsNullOrEmpty(itemString))
+    {
+        Console.ForegroundColor = ConsoleColor.DarkRed;
+        Console.WriteLine("------------------------------- Items---------------------------------------");
+        Console.WriteLine(itemString);
+    }
 
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine("------------------------------- Memories---------------------------------------");
-    Console.WriteLine(memoryString);
+    if (!string.IsNullOrEmpty(memoryString))
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("------------------------------- Memories---------------------------------------");
+        Console.WriteLine(memoryString);
+    }
 
-    Console.ForegroundColor = ConsoleColor.Blue;
-    Console.WriteLine("------------------------------- Map ---------------------------------------");
-    Console.WriteLine(mapString);
+    if (!string.IsNullOrEmpty(mapString))
+    {
+        Console.ForegroundColor = ConsoleColor.Blue;
+        Console.WriteLine("------------------------------- Map ---------------------------------------");
+        Console.WriteLine(mapString);
+    }
 
-    AdventurerResponse chatResponse = await adventurer.ChatResponse(lastResponse, chatClient);
+    var chatResponse = await adventurer.ChatResponse(lastResponse);
 
     Console.ForegroundColor = ConsoleColor.DarkGreen;
     Console.WriteLine("> " + chatResponse.Command);
@@ -67,10 +73,7 @@ for (var i = 0; i < 250; i++)
     }
 
     lastResponse = await gameClient.GetAsync(new ZorkApiRequest(chatResponse.Command, session));
-    
+
     if (lastResponse == null)
         throw new Exception("Null from Zork");
-    
 }
-
-

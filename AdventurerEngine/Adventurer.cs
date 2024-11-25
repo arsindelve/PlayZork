@@ -1,23 +1,28 @@
 ﻿using Engine.GameApiClient;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using OpenAI;
 
 namespace AdventurerEngine;
 
-public class Adventurer
+public class Adventurer(ILogger logger)
 {
     private readonly LimitedStack<(string, string)> _history = new(15);
     private readonly UniqueLimitedStack<string> _items = new(25);
     private readonly UniqueLimitedStack<string> _map = new(25);
     private readonly Memory _memory = new(35);
     private string _lastLocation = "West Of House";
+    private readonly ChatGPTClient _chatClient = new(logger)
+    {
+        SystemPrompt = Prompts.SystemPrompt
+    };
 
     public string ItemString => Builders.BuildItems(_items);
     public string MapString => Builders.BuildMap(_map);
     public string HistoryString => Builders.BuildHistory(_history);
     public string MemoryString => Builders.BuildMemory(_memory);
 
-    public async Task<AdventurerResponse> ChatResponse(ZorkApiResponse zorkApiResponse, ChatGPTClient chatGPTClient)
+    public async Task<AdventurerResponse> ChatResponse(ZorkApiResponse zorkApiResponse)
     {
         var request = new Request
         {
@@ -53,7 +58,7 @@ public class Adventurer
                             """
         };
 
-        var gameResponse = JsonConvert.DeserializeObject<AdventurerResponse>(await chatGPTClient.CompleteChat(request));
+        var gameResponse = JsonConvert.DeserializeObject<AdventurerResponse>(await _chatClient.CompleteChat(request));
 
         if (gameResponse is null)
             throw new Exception("Null from chat");
@@ -66,7 +71,7 @@ public class Adventurer
         if (!string.IsNullOrEmpty(gameResponse.Item) && !gameResponse.Item.Contains("none "))
             _items.Push(gameResponse.Item);
 
-        if (gameResponse.RememberImportance > 0) 
+        if (gameResponse.RememberImportance > 0)
             _memory.Push(gameResponse);
 
         if (zorkApiResponse.LocationName != _lastLocation)
@@ -77,9 +82,9 @@ public class Adventurer
 
             _lastLocation = zorkApiResponse.LocationName;
         }
-        
+
         _memory.Degrade();
-        
+
         return gameResponse;
     }
 }
