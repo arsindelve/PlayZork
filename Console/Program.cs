@@ -1,21 +1,12 @@
 ﻿using AdventurerEngine;
 using ConsoleRunner;
-using Engine.GameApiClient;
 
-var adventurer = new Adventurer(ConsoleHelper.CreateLogger());
-var session = "Bdet77gg9wwwddeee65d890wetwegweeg000";
-var gameClient = new ZorkApiClient();
-
-await gameClient.GetAsync(new ZorkApiRequest("verbose", session));
-var lastResponse = await gameClient.GetAsync(new ZorkApiRequest("look", session));
-
-if (lastResponse == null)
-    throw new Exception("Null from Zork");
+var adventurer = await new Adventurer(ConsoleHelper.CreateLogger()).Initialize();
 
 for (var i = 0; i < 250; i++)
 {
     Console.ForegroundColor = ConsoleColor.White;
-    Console.WriteLine(lastResponse.Response);
+    Console.WriteLine(adventurer.LastResponse?.Response);
 
     Thread.Sleep(TimeSpan.FromSeconds(10));
 
@@ -52,7 +43,7 @@ for (var i = 0; i < 250; i++)
         Console.WriteLine(mapString);
     }
 
-    var chatResponse = await adventurer.ChatResponse(lastResponse);
+    AdventurerResponse chatResponse = await adventurer.Play();
 
     Console.ForegroundColor = ConsoleColor.DarkGreen;
     Console.WriteLine("> " + chatResponse.Command);
@@ -71,9 +62,4 @@ for (var i = 0; i < 250; i++)
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine($"{chatResponse.RememberImportance}: {chatResponse.Remember}");
     }
-
-    lastResponse = await gameClient.GetAsync(new ZorkApiRequest(chatResponse.Command, session));
-
-    if (lastResponse == null)
-        throw new Exception("Null from Zork");
 }

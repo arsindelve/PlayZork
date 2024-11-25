@@ -7,23 +7,55 @@ namespace AdventurerEngine;
 
 public class Adventurer(ILogger logger)
 {
+    private const string Session = "Bdet77gg9wwwddeee65d890wetwegweeg000";
+
+    private readonly ChatGPTClient _chatClient = new(logger)
+    {
+        SystemPrompt = Prompts.SystemPrompt
+    };
+
+    private readonly ZorkApiClient _gameClient = new();
     private readonly LimitedStack<(string, string)> _history = new(15);
     private readonly UniqueLimitedStack<string> _items = new(25);
     private readonly UniqueLimitedStack<string> _map = new(25);
     private readonly Memory _memory = new(35);
     private string _lastLocation = "West Of House";
-    private readonly ChatGPTClient _chatClient = new(logger)
-    {
-        SystemPrompt = Prompts.SystemPrompt
-    };
+
+    public ZorkApiResponse? LastResponse { get; private set; }
 
     public string ItemString => Builders.BuildItems(_items);
     public string MapString => Builders.BuildMap(_map);
     public string HistoryString => Builders.BuildHistory(_history);
     public string MemoryString => Builders.BuildMemory(_memory);
 
-    public async Task<AdventurerResponse> ChatResponse(ZorkApiResponse zorkApiResponse)
+    public async Task<Adventurer> Initialize()
     {
+        await _gameClient.GetAsync(new ZorkApiRequest("verbose", Session));
+        LastResponse = await _gameClient.GetAsync(new ZorkApiRequest("look", Session));
+
+        if (LastResponse == null)
+            throw new Exception("Null from Zork");
+
+        return this;
+    }
+
+    public async Task<AdventurerResponse> Play()
+    {
+        var chatResponse = await ChatResponse(LastResponse);
+        LastResponse = await _gameClient.GetAsync(new ZorkApiRequest(chatResponse.Command, Session));
+
+        if (LastResponse == null)
+            throw new Exception("Null from Zork");
+
+        return chatResponse;
+    }
+
+
+    private async Task<AdventurerResponse> ChatResponse(ZorkApiResponse? zorkApiResponse)
+    {
+        if (zorkApiResponse == null)
+            throw new Exception("Null from Zork");
+
         var request = new Request
         {
             UserMessage = $$"""
@@ -78,8 +110,8 @@ public class Adventurer(ILogger logger)
         {
             var locationReminder =
                 $"From: {_lastLocation} To: {zorkApiResponse.LocationName} Direction: {gameResponse.Command}";
+            
             _map.Push(locationReminder);
-
             _lastLocation = zorkApiResponse.LocationName;
         }
 
