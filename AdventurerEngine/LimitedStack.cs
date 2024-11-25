@@ -1,4 +1,4 @@
-namespace Engine;
+namespace AdventurerEngine;
 
 /// <summary>
 ///     Represents a limited-size stack - once you have the maximum number of items, pushing another
@@ -7,9 +7,9 @@ namespace Engine;
 /// <typeparam name="T">The type of elements in the stack.</typeparam>
 public class LimitedStack<T>(int size)
 {
-    private readonly LinkedList<T> _list = new();
+    protected readonly LinkedList<T> _list = new();
 
-    public void Push(T item)
+    public virtual void Push(T item)
     {
         _list.AddLast(item);
         if (_list.Count > size) _list.RemoveFirst();

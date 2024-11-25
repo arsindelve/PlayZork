@@ -1,4 +1,6 @@
-namespace Engine;
+using Engine;
+
+namespace AdventurerEngine;
 
 /// <summary>
 ///     Represents a limited-size stack - once you have the maximum number of items, pushing another
@@ -6,16 +8,16 @@ namespace Engine;
 /// </summary>
 public class Memory(int size)
 {
-    private List<GameResponse> _list = new();
+    private List<AdventurerResponse> _list = new();
 
-    public void Push(GameResponse item)
+    public void Push(AdventurerResponse item)
     {
         _list.Add(item);
         _list = _list.OrderBy(s => s.RememberImportance.GetValueOrDefault()).ToList();
         if (_list.Count > size) _list.RemoveAt(0);
     }
 
-    public List<GameResponse> GetAll()
+    public List<AdventurerResponse> GetAll()
     {
         return _list.ToList();
     }

@@ -23,7 +23,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Engine\Engine.csproj" />
+      <ProjectReference Include="..\ZorkEngine\ZorkEngine.csproj" />
     </ItemGroup>
 
 </Project>

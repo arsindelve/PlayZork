@@ -1,8 +1,8 @@
-namespace Engine;
+namespace AdventurerEngine;
 
-public class GameResponse
+public class AdventurerResponse
 {
-    public string? Command { get; set; }
+    public required string Command { get; set; }
 
     public string? Reason { get; set; }
 
