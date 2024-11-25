@@ -10,6 +10,7 @@ public class Adventurer
     private readonly UniqueLimitedStack<string> _items = new(25);
     private readonly UniqueLimitedStack<string> _map = new(25);
     private readonly Memory _memory = new(35);
+    private string _lastLocation = "West Of House";
 
     public string ItemString => Builders.BuildItems(_items);
     public string MapString => Builders.BuildMap(_map);
@@ -59,8 +60,25 @@ public class Adventurer
 
         if (gameResponse.Command is null)
             throw new Exception("Null command from chat");
-        
+
         _history.Push((zorkApiResponse.Response, gameResponse.Command));
+
+        if (!string.IsNullOrEmpty(gameResponse.Item) && !gameResponse.Item.Contains("none "))
+            _items.Push(gameResponse.Item);
+
+        if (gameResponse.RememberImportance > 0) 
+            _memory.Push(gameResponse);
+
+        if (zorkApiResponse.LocationName != _lastLocation)
+        {
+            var locationReminder =
+                $"From: {_lastLocation} To: {zorkApiResponse.LocationName} Direction: {gameResponse.Command}";
+            _map.Push(locationReminder);
+
+            _lastLocation = zorkApiResponse.LocationName;
+        }
+        
+        _memory.Degrade();
         
         return gameResponse;
     }

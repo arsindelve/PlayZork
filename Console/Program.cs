@@ -5,13 +5,12 @@ using Engine.GameApiClient;
 using OpenAI;
 
 var adventurer = new Adventurer();
-var session = "Bdet9wwwddeee65d890wetwegweeg000";
+var session = "Bdet77gg9wwwddeee65d890wetwegweeg000";
 var gameClient = new ZorkApiClient();
-var chatClient = new ChatGPTClient(ConsoleHelper.CreateLogger());
-
-var lastLocation = "West Of House";
-
-chatClient.SystemPrompt = Prompts.SystemPrompt;
+var chatClient = new ChatGPTClient(ConsoleHelper.CreateLogger())
+{
+    SystemPrompt = Prompts.SystemPrompt
+};
 
 await gameClient.GetAsync(new ZorkApiRequest("verbose", session));
 var lastResponse = await gameClient.GetAsync(new ZorkApiRequest("look", session));
@@ -59,32 +58,19 @@ for (var i = 0; i < 250; i++)
     {
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine(chatResponse.Item);
-        //items.Push(chatResponse.Item);
     }
 
     if (chatResponse.RememberImportance > 0)
     {
-        //memory.Push(chatResponse);
-
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine($"{chatResponse.RememberImportance}: {chatResponse.Remember}");
     }
 
     lastResponse = await gameClient.GetAsync(new ZorkApiRequest(chatResponse.Command, session));
+    
     if (lastResponse == null)
         throw new Exception("Null from Zork");
-
-    if (lastResponse.LocationName != lastLocation)
-    {
-        var locationReminder =
-            $"From: {lastLocation} To: {lastResponse.LocationName} Direction: {chatResponse.Command}";
-        //map.Push(locationReminder);
-        lastLocation = lastResponse.LocationName;
-        Console.ForegroundColor = ConsoleColor.Magenta;
-        Console.WriteLine(locationReminder);
-    }
-
-
+    
 }
 
 

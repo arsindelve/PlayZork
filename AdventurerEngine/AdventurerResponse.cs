@@ -10,5 +10,7 @@ public class AdventurerResponse
     
     public string? Item { get; set; }
 
-    public int? RememberImportance { get; set; }
+    public decimal? RememberImportance { get; set; }
+    
+    public string? CannotGo { get; set; }
 }

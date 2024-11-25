@@ -1,5 +1,3 @@
-using Engine;
-
 namespace AdventurerEngine;
 
 /// <summary>
@@ -12,9 +10,17 @@ public class Memory(int size)
 
     public void Push(AdventurerResponse item)
     {
+        if (!item.RememberImportance.HasValue)
+            return;
+        
         _list.Add(item);
-        _list = _list.OrderBy(s => s.RememberImportance.GetValueOrDefault()).ToList();
+        _list = _list.OrderBy(s => s.RememberImportance).ToList();
         if (_list.Count > size) _list.RemoveAt(0);
+    }
+
+    public void Degrade()
+    {
+        _list.ForEach(s => s.RememberImportance *= 0.97m);
     }
 
     public List<AdventurerResponse> GetAll()

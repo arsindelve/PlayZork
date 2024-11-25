@@ -19,8 +19,8 @@ public static class Builders
     public static string BuildMemory(Memory memory1)
     {
         var stringBuilder = new StringBuilder();
-        foreach (var item in memory1.GetAll().OrderByDescending(item => item.RememberImportance.GetValueOrDefault()))
-            stringBuilder.AppendLine($"Importance: {item.RememberImportance}. Reminder: {item.Remember}");
+        foreach (var item in memory1.GetAll().OrderByDescending(item => item.RememberImportance))
+            stringBuilder.AppendLine($"Importance: { Math.Round(item.RememberImportance.GetValueOrDefault(),0)}. Reminder: {item.Remember}");
 
         return stringBuilder.ToString();
     }

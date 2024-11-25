@@ -7,24 +7,24 @@ namespace AdventurerEngine;
 /// <typeparam name="T">The type of elements in the stack.</typeparam>
 public class LimitedStack<T>(int size)
 {
-    protected readonly LinkedList<T> _list = new();
+    protected readonly LinkedList<T> List = new();
 
     public virtual void Push(T item)
     {
-        _list.AddLast(item);
-        if (_list.Count > size) _list.RemoveFirst();
+        List.AddLast(item);
+        if (List.Count > size) List.RemoveFirst();
     }
 
     public List<T> GetAll()
     {
-        return _list.ToList();
+        return List.ToList();
     }
 
     public T? Peek()
     {
-        if (_list.Count == 0)
+        if (List.Count == 0)
             return default;
 
-        return _list.Last == null ? default : _list.Last.Value;
+        return List.Last == null ? default : List.Last.Value;
     }
 }
