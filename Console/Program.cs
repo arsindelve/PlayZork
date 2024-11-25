@@ -9,11 +9,6 @@ var session = "Bdet9wwwddeee65d890wetwegweeg000";
 var gameClient = new ZorkApiClient();
 var chatClient = new ChatGPTClient(ConsoleHelper.CreateLogger());
 
-var history = new LimitedStack<(string, string)>(15);
-var map = new UniqueLimitedStack<string>(25);
-var items = new UniqueLimitedStack<string>(25);
-var memory = new Memory(35);
-
 var lastLocation = "West Of House";
 
 chatClient.SystemPrompt = Prompts.SystemPrompt;
@@ -31,10 +26,10 @@ for (var i = 0; i < 250; i++)
 
     Thread.Sleep(TimeSpan.FromSeconds(10));
 
-    var itemString = Builders.BuildItems(items);
-    var mapString = Builders.BuildMap(map);
-    var historyString = Builders.BuildHistory(history);
-    var memoryString = Builders.BuildMemory(memory);
+    var itemString = adventurer.ItemString;
+    var mapString = adventurer.MapString;
+    var historyString = adventurer.HistoryString;
+    var memoryString = adventurer.MemoryString;
 
     Console.ForegroundColor = ConsoleColor.Cyan;
     Console.WriteLine("------------------------------- History---------------------------------------");
@@ -52,7 +47,7 @@ for (var i = 0; i < 250; i++)
     Console.WriteLine("------------------------------- Map ---------------------------------------");
     Console.WriteLine(mapString);
 
-    var chatResponse = await adventurer.ChatResponse(lastResponse, itemString, mapString, memoryString, historyString, chatClient);
+    AdventurerResponse chatResponse = await adventurer.ChatResponse(lastResponse, chatClient);
 
     Console.ForegroundColor = ConsoleColor.DarkGreen;
     Console.WriteLine("> " + chatResponse.Command);
@@ -64,12 +59,12 @@ for (var i = 0; i < 250; i++)
     {
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine(chatResponse.Item);
-        items.Push(chatResponse.Item);
+        //items.Push(chatResponse.Item);
     }
 
     if (chatResponse.RememberImportance > 0)
     {
-        memory.Push(chatResponse);
+        //memory.Push(chatResponse);
 
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine($"{chatResponse.RememberImportance}: {chatResponse.Remember}");
@@ -83,13 +78,13 @@ for (var i = 0; i < 250; i++)
     {
         var locationReminder =
             $"From: {lastLocation} To: {lastResponse.LocationName} Direction: {chatResponse.Command}";
-        map.Push(locationReminder);
+        //map.Push(locationReminder);
         lastLocation = lastResponse.LocationName;
         Console.ForegroundColor = ConsoleColor.Magenta;
         Console.WriteLine(locationReminder);
     }
 
-    history.Push((lastResponse.Response, chatResponse.Command));
+
 }
 
 
