@@ -5,12 +5,13 @@ namespace AdventurerEngine;
 public static class Builders
 {
     
-    public static string BuildMap(UniqueLimitedStack<string> uniqueLimitedStack)
+    public static string BuildMap(Map map)
     {
         var stringBuilder = new StringBuilder();
-        foreach (var line in uniqueLimitedStack.GetAll())
+        foreach (var line in map.GetAll())
         {
-            stringBuilder.AppendLine(line);
+            string destination = string.IsNullOrEmpty(line.Item3) ? "Not possible" : $"Goes to: {line.Item3}";
+            stringBuilder.AppendLine($"From {line.Item1}, Direction {line.Item2}, {destination}  ");
         }
 
         return stringBuilder.ToString();

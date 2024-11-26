@@ -1,9 +1,5 @@
 namespace AdventurerEngine;
 
-/// <summary>
-///     Represents a limited-size stack - once you have the maximum number of items, pushing another
-///     item deletes the oldest.
-/// </summary>
 public class Memory(int size)
 {
     private List<AdventurerResponse> _list = new();

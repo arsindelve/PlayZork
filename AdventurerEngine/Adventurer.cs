@@ -8,7 +8,7 @@ namespace AdventurerEngine;
 
 public class Adventurer(ILogger logger)
 {
-    private const string Session = "FUBOOBSD90wetwegweeg000";
+    private const string Session = "bub";
 
     private readonly ChatGPTClient _chatClient = new(logger)
     {
@@ -18,11 +18,8 @@ public class Adventurer(ILogger logger)
     private readonly ZorkApiClient _gameClient = new();
     private readonly LimitedStack<(string, string)> _history = new(15);
     private readonly UniqueLimitedStack<string> _items = new(25);
-    private readonly UniqueLimitedStack<string> _map = new(25);
+    private readonly Map _map = new(50);
     private readonly Memory _memory = new(35);
-    
-    private string _lastLocation = "West Of House";
-    private string? _lastDirection = null;
 
     public ZorkApiResponse? LastZorkResponse { get; private set; }
 
@@ -90,33 +87,30 @@ public class Adventurer(ILogger logger)
         if (gameResponse.RememberImportance > 0)
             _memory.Push(gameResponse);
 
-        ProcessMovement(zorkApiResponse, gameResponse);
+        ProcessMovement(zorkApiResponse);
 
         return gameResponse;
     }
 
-    private void ProcessMovement(ZorkApiResponse zorkApiResponse, AdventurerResponse gameResponse)
+    private void ProcessMovement(ZorkApiResponse zorkApiResponse)
     {
-        if (zorkApiResponse.LocationName != _lastLocation && !string.IsNullOrEmpty(gameResponse.Moved))
+        if (string.IsNullOrEmpty(zorkApiResponse.LastMovementDirection))
+            return;
+        
+        if (string.IsNullOrEmpty(zorkApiResponse.PreviousLocationName))
+            return;
+        
+        if (string.IsNullOrEmpty(zorkApiResponse.LocationName))
+            return;
+        
+        if (zorkApiResponse.LocationName != zorkApiResponse.PreviousLocationName)
         {
-            var locationReminder =
-                $"From: {_lastLocation} To: {zorkApiResponse.LocationName}, Direction: {gameResponse.Moved}";
-
-            _map.Push(locationReminder);
+            _map.Push((zorkApiResponse.PreviousLocationName, zorkApiResponse.LastMovementDirection, zorkApiResponse.LocationName));
         }
         else
         {
-            // We stayed in the same place. Did we try to move last turn? 
-            if (!string.IsNullOrEmpty(_lastDirection))
-            {
-                var locationReminder =
-                    $"From: {_lastLocation} Direction: {_lastDirection} - Not possible";
+            _map.Push((zorkApiResponse.PreviousLocationName, zorkApiResponse.LastMovementDirection, null));
 
-                _map.Push(locationReminder);
-            }
         }
-        
-        _lastLocation = zorkApiResponse.LocationName;
-        _lastDirection = gameResponse.Moved;
     }
 }

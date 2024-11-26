@@ -46,19 +46,6 @@ public class ChatGPTClient
             }
         };
 
-        // var reverse = LastFiveInputOutputs.ToList();
-        // reverse.Reverse();
-        //
-        // StringBuilder lastInputs = new();
-        // lastInputs.AppendLine(
-        //     "For reference and context, here are the player's last five interactions with the narrator:");
-        //
-        // foreach (var tuple in reverse)
-        // {
-        //     lastInputs.AppendLine($"Input: {tuple.Item1}. Output: {tuple.Item2}");
-        // }
-        //
-        // chatCompletionsOptions.Messages.Add(new ChatRequestSystemMessage(lastInputs.ToString()));
 
         // Add the most recent request
         chatCompletionsOptions.Messages.Add(new ChatRequestUserMessage(request.UserMessage));

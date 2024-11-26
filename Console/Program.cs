@@ -8,7 +8,7 @@ for (var i = 0; i < 250; i++)
     Console.ForegroundColor = ConsoleColor.White;
     Console.WriteLine(adventurer.LastZorkResponse?.Response);
 
-    Thread.Sleep(TimeSpan.FromSeconds(10));
+    Thread.Sleep(TimeSpan.FromSeconds(5));
 
     var itemString = adventurer.ItemString;
     var mapString = adventurer.MapString;
@@ -22,12 +22,12 @@ for (var i = 0; i < 250; i++)
     //     Console.WriteLine(historyString);
     // }
     //
-    // if (!string.IsNullOrEmpty(itemString))
-    // {
-    //     Console.ForegroundColor = ConsoleColor.DarkRed;
-    //     Console.WriteLine("------------------------------- Items---------------------------------------");
-    //     Console.WriteLine(itemString);
-    // }
+    if (!string.IsNullOrEmpty(itemString))
+    {
+        Console.ForegroundColor = ConsoleColor.DarkRed;
+        Console.WriteLine("------------------------------- Items---------------------------------------");
+        Console.WriteLine(itemString);
+    }
     //
     // if (!string.IsNullOrEmpty(memoryString))
     // {
