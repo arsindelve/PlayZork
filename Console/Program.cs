@@ -15,27 +15,27 @@ for (var i = 0; i < 250; i++)
     var historyString = adventurer.HistoryString;
     var memoryString = adventurer.MemoryString;
 
-    // if (!string.IsNullOrEmpty(historyString))
-    // {
-    //     Console.ForegroundColor = ConsoleColor.Cyan;
-    //     Console.WriteLine("------------------------------- History---------------------------------------");
-    //     Console.WriteLine(historyString);
-    // }
-    //
+    if (!string.IsNullOrEmpty(historyString))
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("------------------------------- History---------------------------------------");
+        Console.WriteLine(historyString);
+    }
+    
     if (!string.IsNullOrEmpty(itemString))
     {
         Console.ForegroundColor = ConsoleColor.DarkRed;
         Console.WriteLine("------------------------------- Items---------------------------------------");
         Console.WriteLine(itemString);
     }
-    //
-    // if (!string.IsNullOrEmpty(memoryString))
-    // {
-    //     Console.ForegroundColor = ConsoleColor.Yellow;
-    //     Console.WriteLine("------------------------------- Memories---------------------------------------");
-    //     Console.WriteLine(memoryString);
-    // }
-    //
+    
+    if (!string.IsNullOrEmpty(memoryString))
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("------------------------------- Memories---------------------------------------");
+        Console.WriteLine(memoryString);
+    }
+    
     if (!string.IsNullOrEmpty(mapString))
     {
         Console.ForegroundColor = ConsoleColor.Blue;
@@ -43,7 +43,17 @@ for (var i = 0; i < 250; i++)
         Console.WriteLine(mapString);
     }
 
-    AdventurerResponse response = await adventurer.Play();
+    AdventurerResponse response;
+    try
+    {
+       response = await adventurer.Play();
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine(ex.Message);
+        continue;
+    }
 
     Console.ForegroundColor = ConsoleColor.DarkGreen;
     Console.WriteLine("> " + response.Command);

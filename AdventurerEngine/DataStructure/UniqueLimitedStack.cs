@@ -1,4 +1,4 @@
-﻿namespace AdventurerEngine;
+﻿namespace AdventurerEngine.DataStructure;
 
 public class UniqueLimitedStack<T>(int size) : LimitedStack<T>(size)
 {

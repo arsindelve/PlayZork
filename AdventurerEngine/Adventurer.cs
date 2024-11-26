@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using AdventurerEngine.DataStructure;
 using Engine.GameApiClient;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -8,7 +9,7 @@ namespace AdventurerEngine;
 
 public class Adventurer(ILogger logger)
 {
-    private const string Session = "bub";
+    private const string Session = "XXXXXXXXXX";
 
     private readonly ChatGPTClient _chatClient = new(logger)
     {

@@ -44,7 +44,7 @@ public class Prompts
                      "reason": "brief explanation of why this command was chosen based on game state and history",
                      "remember": "Use this field only for new, novel or critical ideas for solving the game, new unsolved puzzles, or new obstacles essential to game progress. These are like Leonard's tattoos in Memento. Memory is limited, so avoid duplicates or minor details. Leave empty if unnecessary. Do not repeat yourself or duplicate reminders that already appear in the above prompt.",
                      "rememberImportance": "the number, between 1 and 1000, of how important the above reminder is, 1 is not really, 1000 is critical to winning the game. Lower number items are likely to be forgotten when we run out of memory."
-                     "item": "any new, interesting items I have found in this location, along with their locations, which are not already mentioned above. For example 'there is a box and a light bulb in the maintenance room'. Omit if there is nothing here" ,
+                     "item": "any new, interesting items you have found in this location, along with their locations, which are not already mentioned above. For example 'there is a box and a light bulb in the maintenance room'. Omit if there is nothing here" ,
                      "moved": "if you attempted to move in a certain direction, list the direction you tried to go. Otherwise, leave this empty."  
                  }
                  """;

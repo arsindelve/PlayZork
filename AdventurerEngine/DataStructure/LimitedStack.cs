@@ -1,4 +1,4 @@
-namespace AdventurerEngine;
+namespace AdventurerEngine.DataStructure;
 
 /// <summary>
 ///     Represents a limited-size stack - once you have the maximum number of items, pushing another

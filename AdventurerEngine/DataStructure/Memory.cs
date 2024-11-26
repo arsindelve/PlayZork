@@ -1,4 +1,4 @@
-namespace AdventurerEngine;
+namespace AdventurerEngine.DataStructure;
 
 public class Memory(int size)
 {

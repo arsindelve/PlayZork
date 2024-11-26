@@ -1,10 +1,10 @@
 ﻿using System.Text;
+using AdventurerEngine.DataStructure;
 
 namespace AdventurerEngine;
 
 public static class Builders
 {
-    
     public static string BuildMap(Map map)
     {
         var stringBuilder = new StringBuilder();

@@ -1,4 +1,4 @@
-﻿namespace AdventurerEngine;
+﻿namespace AdventurerEngine.DataStructure;
 
 public class Map(int size) : LimitedStack<(string, string, string?)>(size)
 {
