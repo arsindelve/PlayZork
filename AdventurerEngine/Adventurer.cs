@@ -21,6 +21,7 @@ public class Adventurer(ILogger logger)
     private readonly UniqueLimitedStack<string> _items = new(25);
     private readonly Map _map = new(50);
     private readonly Memory _memory = new(35);
+    private string? _lastCommand;
 
     public ZorkApiResponse? LastZorkResponse { get; private set; }
 
@@ -44,6 +45,8 @@ public class Adventurer(ILogger logger)
     {
         var chatResponse = await GetAdventurerRequest(LastZorkResponse);
         LastZorkResponse = await _gameClient.GetAsync(new ZorkApiRequest(chatResponse.Command, Session));
+
+        _lastCommand = chatResponse.Command;
 
         if (LastZorkResponse == null)
             throw new Exception("Null from Zork");
@@ -80,7 +83,8 @@ public class Adventurer(ILogger logger)
         if (gameResponse.Command is null)
             throw new Exception("Null command from chat");
 
-        _history.Push((zorkApiResponse.Response, gameResponse.Command));
+        if (!string.IsNullOrEmpty(_lastCommand))
+            _history.Push((zorkApiResponse.Response, _lastCommand));
 
         if (!string.IsNullOrEmpty(gameResponse.Item) && !gameResponse.Item.Contains("none "))
             _items.Push(gameResponse.Item);
@@ -97,21 +101,17 @@ public class Adventurer(ILogger logger)
     {
         if (string.IsNullOrEmpty(zorkApiResponse.LastMovementDirection))
             return;
-        
+
         if (string.IsNullOrEmpty(zorkApiResponse.PreviousLocationName))
             return;
-        
+
         if (string.IsNullOrEmpty(zorkApiResponse.LocationName))
             return;
-        
-        if (zorkApiResponse.LocationName != zorkApiResponse.PreviousLocationName)
-        {
-            _map.Push((zorkApiResponse.PreviousLocationName, zorkApiResponse.LastMovementDirection, zorkApiResponse.LocationName));
-        }
-        else
-        {
-            _map.Push((zorkApiResponse.PreviousLocationName, zorkApiResponse.LastMovementDirection, null));
 
-        }
+        if (zorkApiResponse.LocationName != zorkApiResponse.PreviousLocationName)
+            _map.Push((zorkApiResponse.PreviousLocationName, zorkApiResponse.LastMovementDirection,
+                zorkApiResponse.LocationName));
+        else
+            _map.Push((zorkApiResponse.PreviousLocationName, zorkApiResponse.LastMovementDirection, null));
     }
 }
