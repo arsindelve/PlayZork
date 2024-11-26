@@ -12,5 +12,5 @@ public class AdventurerResponse
 
     public decimal? RememberImportance { get; set; }
     
-    public string? CannotGo { get; set; }
+    public string? Moved { get; set; }
 }

@@ -6,7 +6,7 @@ var adventurer = await new Adventurer(ConsoleHelper.CreateLogger()).Initialize()
 for (var i = 0; i < 250; i++)
 {
     Console.ForegroundColor = ConsoleColor.White;
-    Console.WriteLine(adventurer.LastResponse?.Response);
+    Console.WriteLine(adventurer.LastZorkResponse?.Response);
 
     Thread.Sleep(TimeSpan.FromSeconds(10));
 
@@ -15,27 +15,27 @@ for (var i = 0; i < 250; i++)
     var historyString = adventurer.HistoryString;
     var memoryString = adventurer.MemoryString;
 
-    if (!string.IsNullOrEmpty(historyString))
-    {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("------------------------------- History---------------------------------------");
-        Console.WriteLine(historyString);
-    }
-
-    if (!string.IsNullOrEmpty(itemString))
-    {
-        Console.ForegroundColor = ConsoleColor.DarkRed;
-        Console.WriteLine("------------------------------- Items---------------------------------------");
-        Console.WriteLine(itemString);
-    }
-
-    if (!string.IsNullOrEmpty(memoryString))
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("------------------------------- Memories---------------------------------------");
-        Console.WriteLine(memoryString);
-    }
-
+    // if (!string.IsNullOrEmpty(historyString))
+    // {
+    //     Console.ForegroundColor = ConsoleColor.Cyan;
+    //     Console.WriteLine("------------------------------- History---------------------------------------");
+    //     Console.WriteLine(historyString);
+    // }
+    //
+    // if (!string.IsNullOrEmpty(itemString))
+    // {
+    //     Console.ForegroundColor = ConsoleColor.DarkRed;
+    //     Console.WriteLine("------------------------------- Items---------------------------------------");
+    //     Console.WriteLine(itemString);
+    // }
+    //
+    // if (!string.IsNullOrEmpty(memoryString))
+    // {
+    //     Console.ForegroundColor = ConsoleColor.Yellow;
+    //     Console.WriteLine("------------------------------- Memories---------------------------------------");
+    //     Console.WriteLine(memoryString);
+    // }
+    //
     if (!string.IsNullOrEmpty(mapString))
     {
         Console.ForegroundColor = ConsoleColor.Blue;
@@ -43,23 +43,23 @@ for (var i = 0; i < 250; i++)
         Console.WriteLine(mapString);
     }
 
-    AdventurerResponse chatResponse = await adventurer.Play();
+    AdventurerResponse response = await adventurer.Play();
 
     Console.ForegroundColor = ConsoleColor.DarkGreen;
-    Console.WriteLine("> " + chatResponse.Command);
+    Console.WriteLine("> " + response.Command);
 
     Console.ForegroundColor = ConsoleColor.Blue;
-    Console.WriteLine(chatResponse.Reason);
+    Console.WriteLine(response.Reason);
 
-    if (!string.IsNullOrEmpty(chatResponse.Item) && !chatResponse.Item.Contains("none "))
+    if (!string.IsNullOrEmpty(response.Item) && !response.Item.Contains("none "))
     {
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine(chatResponse.Item);
+        Console.WriteLine(response.Item);
     }
 
-    if (chatResponse.RememberImportance > 0)
+    if (response.RememberImportance > 0)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"{chatResponse.RememberImportance}: {chatResponse.Remember}");
+        Console.WriteLine($"{response.RememberImportance}: {response.Remember}");
     }
 }
