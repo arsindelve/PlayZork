@@ -31,3 +31,7 @@ args = "python PlayZork/VersionTwo/main.py"
 
 [deployment]
 run = ["sh", "-c", "python PlayZork/VersionTwo/main.py"]
+
+[[ports]]
+localPort = 29781
+externalPort = 80

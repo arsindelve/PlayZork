@@ -1,4 +1,6 @@
-from zork_api_client import ZorkApiClient, ZorkApiRequest, ZorkApiResponse
+from VersionTwo.zork.zork_api_client import ZorkApiClient
+from .zork_api_request import ZorkApiRequest
+from .zork_api_response import ZorkApiResponse
 
 
 class ZorkService:

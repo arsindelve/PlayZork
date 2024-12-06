@@ -1,33 +1,21 @@
 from typing import Optional
 import httpx
-from pydantic import BaseModel, Field
+
+from .zork_api_request import ZorkApiRequest
+from .zork_api_response import ZorkApiResponse
 
 # Define the API endpoint
 BASE_URL = "https://bxqzfka0hc.execute-api.us-east-1.amazonaws.com"
 
 
-# Define the request and response models
-class ZorkApiRequest(BaseModel):
-    Input: str  # Uppercase field names to match the API
-    SessionId: str
-
-
-class ZorkApiResponse(BaseModel):
-    Response: Optional[str] = Field(None, alias="response")
-    LocationName: Optional[str] = Field(None, alias="locationName")
-    Moves: int = Field(0, alias="moves")
-    Score: int = Field(0, alias="score")
-    PreviousLocationName: Optional[str] = Field(None,
-                                                alias="previousLocationName")
-    LastMovementDirection: Optional[str] = Field(None,
-                                                 alias="lastMovementDirection")
-
-
 # Define the API client
 class ZorkApiClient:
 
-    def __init__(self):
-        self.client = httpx.AsyncClient(base_url=BASE_URL)
+    def __init__(self, timeout: int = 30):
+        self.client = httpx.AsyncClient(
+            base_url=BASE_URL,
+            timeout=httpx.Timeout(timeout)  # Set custom timeout
+        )
 
     async def get_async(self,
                         resource: ZorkApiRequest) -> Optional[ZorkApiResponse]:
