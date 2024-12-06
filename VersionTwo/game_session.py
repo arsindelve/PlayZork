@@ -27,7 +27,8 @@ class GameSession:
             player_response = self.adventurer_service.handle_user_input(zork_response)
 
             # Step 4: Display the player's response
-            print(player_response)
+            print(player_response.command)
 
         except Exception as e:
             print(f"An error occurred: {e}")
+            
