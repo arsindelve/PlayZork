@@ -7,7 +7,7 @@ async def main():
     session = GameSession(session_id="123456")
 
     # Example turn: player provides input
-    await session.play_turn("verbose")
+    await session.play()
 
 
 # Run the async main function

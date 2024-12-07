@@ -4,9 +4,8 @@ from .adventurer_response import AdventurerResponse
 
 from langchain.prompts.chat import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from langchain_openai import ChatOpenAI
-from langchain_core.messages.ai import AIMessage
+from langchain_community.chat_message_histories import ChatMessageHistory
 
-import json
 
 class AdventurerService:
 
@@ -16,9 +15,13 @@ class AdventurerService:
         """
         # Initialize the LLMs
         cheap_llm = ChatOpenAI(model="gpt-3.5-turbo",
-                               temperature=0)  # Cheaper model
-        expensive_llm = ChatOpenAI(
-            model="gpt-4", temperature=0)  # More advanced model (if needed)
+                               temperature=0).with_structured_output(
+            AdventurerResponse)  # Cheaper model
+
+        self.history = ChatMessageHistory()
+
+        # expensive_llm = ChatOpenAI(
+        #    model="gpt-4", temperature=0)  # More advanced model (if needed)
 
         # Retrieve the system and user prompts
         system_prompt = PromptLibrary.get_system_prompt()
@@ -45,18 +48,10 @@ class AdventurerService:
         prompt_variables = self.__generate_prompt_variables(last_game_response)
 
         # Call the chain with the input variables to get the response
-        response = self.chain.invoke(prompt_variables)
+        adventurer_response = self.chain.invoke(prompt_variables)
 
-        # Ensure the response is an AIMessage and extract the content
-       
-        response_text = response.content  # Extract the content
-        response_data = json.loads(response_text)
-
-        # Validate the dictionary with AdventurerResponse
-        try:
-            adventurer_response = AdventurerResponse(**response_data)
-        except Exception as e:
-            raise ValueError(f"Validation failed for AdventurerResponse: {e}")
+        self.history.add_ai_message(last_game_response.Response)
+        self.history.add_user_message(adventurer_response.command)
 
         return adventurer_response
 
@@ -64,9 +59,20 @@ class AdventurerService:
         """
         Generates the variables required for the prompt.
         """
+
+        # Format the history into a readable string
+        if self.history.messages:
+            formatted_history = self.__format_message_history()
+        else:
+            formatted_history = "No previous interactions."
+
         return {
             "score": last_game_response.Score,
             "locationName": last_game_response.LocationName,
             "moves": last_game_response.Moves,
-            "history": "No previous interactions."  # Placeholder for now
+            "history": formatted_history
         }
+
+    def __format_message_history(self):
+        return "\n".join(f"{msg.type.upper()}: {msg.content}"
+                         for msg in self.history.messages)
