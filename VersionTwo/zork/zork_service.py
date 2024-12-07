@@ -1,4 +1,4 @@
-from VersionTwo.zork.zork_api_client import ZorkApiClient
+from .zork_api_client import ZorkApiClient
 from .zork_api_request import ZorkApiRequest
 from .zork_api_response import ZorkApiResponse
 
@@ -27,7 +27,7 @@ class ZorkService:
         print(f"Response: {response.Response}")
         print(f"Location: {response.LocationName}")
         print(f"Moves: {response.Moves}, Score: {response.Score}")
-        if response.PreviousLocationName:
-            print(f"Previous Location: {response.PreviousLocationName}")
-        if response.LastMovementDirection:
-            print(f"Last Movement Direction: {response.LastMovementDirection}")
+        # if response.PreviousLocationName:
+        #    print(f"Previous Location: {response.PreviousLocationName}")
+        # if response.LastMovementDirection:
+        #    print(f"Last Movement Direction: {response.LastMovementDirection}")

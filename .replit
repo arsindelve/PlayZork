@@ -30,7 +30,7 @@ task = "shell.exec"
 args = "python ~/workspace/VersionTwo/main.py"
 
 [deployment]
-run = ["sh", "-c", "python ~/workspace/VersionTwo/main.py"]
+run = ["sh", "-c", "python ~/PlayZork/VersionTwo/main.py"]
 
 [[ports]]
 localPort = 29781
