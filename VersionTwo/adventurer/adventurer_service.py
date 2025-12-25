@@ -6,21 +6,24 @@ from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTempla
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
+from tools.memory import MemoryToolkit
 from game_logger import GameLogger
 
 
 class AdventurerService:
 
-    def __init__(self, history_toolkit: HistoryToolkit):
+    def __init__(self, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit):
         """
         Initializes the AdventurerService with two-phase agent architecture.
-        Phase 1: Research agent that can call history tools
+        Phase 1: Research agent that can call history and memory tools
         Phase 2: Decision chain with structured output
 
         Args:
             history_toolkit: The HistoryToolkit instance for accessing game history
+            memory_toolkit: The MemoryToolkit instance for accessing and storing memories
         """
         self.history_toolkit = history_toolkit
+        self.memory_toolkit = memory_toolkit
         self.logger = GameLogger.get_instance()
 
         # Create research agent (Phase 1) and decision chain (Phase 2)
@@ -29,13 +32,15 @@ class AdventurerService:
 
     def _create_research_agent(self) -> Runnable:
         """
-        Create the research agent that can call history tools (Phase 1)
+        Create the research agent that can call history and memory tools (Phase 1)
 
         Returns:
-            Runnable chain configured with history tools
+            Runnable chain configured with history and memory tools
         """
         llm = ChatOpenAI(model="gpt-5.2-2025-12-11", temperature=0)
-        tools = self.history_toolkit.get_tools()
+
+        # Combine history and memory tools
+        tools = self.history_toolkit.get_tools() + self.memory_toolkit.get_tools()
 
         # Bind tools to the LLM and REQUIRE it to call at least one tool
         llm_with_tools = llm.bind_tools(tools, tool_choice="any")

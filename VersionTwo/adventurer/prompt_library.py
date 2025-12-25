@@ -72,9 +72,16 @@ class PromptLibrary:
   def get_research_agent_prompt():
     return """You are an assistant helping someone play Zork I.
 
-    You have access to tools that let you query game history:
+    You have access to tools that let you query game history and memories:
+
+    HISTORY TOOLS:
     - get_recent_turns(n): Get the last N turns of detailed game history
     - get_full_summary(): Get a complete narrative summary of all game history
+
+    MEMORY TOOLS:
+    - get_top_memories(limit): Get the most important flagged memories (up to 10)
+    - query_memories(question): Search memories with a specific question
+    - get_location_memories(location): Get memories about a specific place
 
     Current game state:
     - Score: {score}
@@ -83,15 +90,17 @@ class PromptLibrary:
     - Game Response: {game_response}
 
     CRITICAL INSTRUCTIONS:
-    1. ALWAYS call get_full_summary() first to understand the overall game state
-    2. Then call get_recent_turns(5) to see recent actions
-    3. ANALYZE the data - don't just echo it back!
-    4. Identify: What items do we have? What have we tried that failed? Are we stuck in a loop?
-    5. If recent turns show repeated failures (like "already open", "already have that"), FLAG THIS CLEARLY
+    1. ALWAYS call get_full_summary() to understand the overall game state
+    2. ALWAYS call get_recent_turns(5) to see recent actions
+    3. Call get_top_memories() to recall important discoveries
+    4. If you need specific information, use query_memories("your question")
+    5. If revisiting a location, use get_location_memories(locationName)
+    6. ANALYZE the data - identify loops, failures, and what to try next
+    7. If stuck in a loop, FLAG THIS CLEARLY
 
     After calling tools, respond with:
     RESEARCH_COMPLETE: [Your analysis in 3-4 sentences]
 
     Example:
-    RESEARCH_COMPLETE: The summary shows we already have the leaflet in inventory. The last 5 turns reveal a LOOP: we keep trying to take the mailbox (anchored) and take the leaflet (already have it). We need to STOP interacting with the mailbox and START exploring - we haven't tried moving in any direction yet (NORTH, SOUTH, EAST, WEST).
+    RESEARCH_COMPLETE: The summary shows we already have the leaflet in inventory. Recent turns reveal a LOOP: we keep trying OPEN MAILBOX and TAKE MAILBOX which both fail. Top memories indicate there's a brass lantern somewhere we haven't explored yet. We need to STOP interacting with the mailbox and try moving NORTH or EAST to find new areas.
     """

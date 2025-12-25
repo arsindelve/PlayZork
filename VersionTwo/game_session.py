@@ -1,6 +1,7 @@
 from adventurer.adventurer_service import AdventurerService
 from zork.zork_service import ZorkService
 from tools.history import HistoryToolkit
+from tools.memory import MemoryToolkit
 from langchain_openai import ChatOpenAI
 from display_manager import DisplayManager
 from game_logger import GameLogger
@@ -25,8 +26,11 @@ class GameSession:
         cheap_llm = ChatOpenAI(model="gpt-5-nano-2025-08-07", temperature=0)
         self.history_toolkit = HistoryToolkit(cheap_llm)
 
-        # Pass toolkit to adventurer service
-        self.adventurer_service = AdventurerService(self.history_toolkit)
+        # Create memory toolkit with same cheap LLM
+        self.memory_toolkit = MemoryToolkit(cheap_llm)
+
+        # Pass both toolkits to adventurer service
+        self.adventurer_service = AdventurerService(self.history_toolkit, self.memory_toolkit)
 
         self.turn_number = 0
 
@@ -83,6 +87,22 @@ class GameSession:
             # (Research phase will now see the turn we just completed)
             player_response = self.adventurer_service.handle_user_input(zork_response)
 
+            # Step 3.5: Store memory if LLM flagged something important
+            if player_response.remember and player_response.remember.strip():
+                memory_added = self.memory_toolkit.add_memory(
+                    content=player_response.remember,
+                    importance=player_response.rememberImportance,
+                    turn_number=self.turn_number,
+                    location=zork_response.LocationName,
+                    score=zork_response.Score,
+                    moves=zork_response.Moves
+                )
+
+                if memory_added:
+                    self.logger.logger.info(
+                        f"MEMORY STORED: [{player_response.rememberImportance}/1000] {player_response.remember}"
+                    )
+
             # Step 4: Update display with the turn
             display.add_turn(
                 location=zork_response.LocationName,
@@ -92,10 +112,22 @@ class GameSession:
                 moves=zork_response.Moves
             )
 
-            # Step 5: Update display with current summary
-            summary = self.history_toolkit.state.get_full_summary()
-            display.update_summary(summary)
-            self.logger.log_summary_update(summary)
+            # Step 5: Update display with current summaries
+            recent_summary = self.history_toolkit.state.get_full_summary()
+            long_summary = self.history_toolkit.state.get_long_running_summary()
+            display.update_summary(recent_summary, long_summary)
+            self.logger.log_summary_update(recent_summary)
+
+            # Step 6: Update display with memories
+            memories = self.memory_toolkit.state.get_top_memories(5)
+            if memories:
+                memories_text = ""
+                for i, mem in enumerate(memories, 1):
+                    memories_text += f"{i}. [{mem.importance}/1000] {mem.content}\n"
+                    memories_text += f"   (Turn {mem.turn_number} @ {mem.location})\n\n"
+                display.update_memories(memories_text.strip())
+            else:
+                display.update_memories("No memories recorded yet.")
 
             return player_response.command
 

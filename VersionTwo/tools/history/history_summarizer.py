@@ -47,14 +47,14 @@ class HistorySummarizer:
 
     def generate_summary(self, history_state: HistoryState, latest_turn: GameTurn) -> str:
         """
-        Generate a new summary incorporating the latest turn
+        Generate a new RECENT summary (last 15 turns only)
 
         Args:
             history_state: Current history state
             latest_turn: The most recent turn to incorporate
 
         Returns:
-            New summary text
+            New summary text for recent turns
         """
         # Get previous summary
         previous_summary = history_state.summary
@@ -70,4 +70,57 @@ class HistorySummarizer:
         result = self.chain.invoke(prompt_variables)
 
         # Extract content from AIMessage
+        return result.content if hasattr(result, 'content') else str(result)
+
+    def generate_long_running_summary(self, history_state: HistoryState, latest_turn: GameTurn) -> str:
+        """
+        Generate a comprehensive long-running summary of all game history.
+        This is more detailed and comprehensive than the recent summary.
+
+        Args:
+            history_state: Current history state
+            latest_turn: The most recent turn to incorporate
+
+        Returns:
+            New long-running summary text
+        """
+        from adventurer.prompt_library import PromptLibrary
+
+        # Get previous long-running summary
+        previous_summary = history_state.long_running_summary
+
+        # Create a prompt for comprehensive summarization
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", PromptLibrary.get_history_processor_system_prompt()),
+            ("human", """Previous comprehensive summary:
+{summary}
+
+Latest interaction:
+Player: {player_response}
+Game: {game_response}
+Location: {location}
+Score: {score}
+Moves: {moves}
+
+Update the comprehensive summary to include this new interaction. Keep track of:
+- All locations visited
+- All items found and their locations
+- All puzzles encountered (solved or unsolved)
+- Key discoveries and observations
+- Overall progress and score changes
+
+Provide a detailed but concise narrative. Output ONLY the updated summary.""")
+        ])
+
+        prompt_variables = {
+            "summary": previous_summary if previous_summary else "Game just started.",
+            "player_response": history_state.previous_command,
+            "game_response": latest_turn.game_response,
+            "location": latest_turn.location or "Unknown",
+            "score": latest_turn.score,
+            "moves": latest_turn.moves
+        }
+
+        result = (prompt | self.llm).invoke(prompt_variables)
+
         return result.content if hasattr(result, 'content') else str(result)

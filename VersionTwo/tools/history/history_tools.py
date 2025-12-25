@@ -22,21 +22,22 @@ def initialize_history_tools(history_state: HistoryState) -> None:
 
 @tool
 def get_recent_turns(n: int = 5) -> str:
-    """Get the last N turns of game history to understand recent actions and context.
+    """Get the RAW last N turns showing EXACT commands and responses - see precisely what failed or succeeded.
 
-    Use this tool when you need to:
-    - Check what actions were recently attempted
-    - See recent location changes
-    - Review recent puzzle attempts
-    - Avoid repeating failed commands
-    - Understand immediate context
+    This shows the actual command/response pairs, NOT a summary. Critical for:
+    - Detecting if you just repeated the same failed command
+    - Seeing the EXACT error message (not a paraphrase)
+    - Identifying recent location changes turn-by-turn
+    - Spotting immediate loops (tried X, failed, tried X again)
+
+    WARNING: Only shows recent turns, NOT the full game context or big picture.
 
     Args:
-        n: Number of recent turns to retrieve (1-20). Use 3-5 for immediate context,
-           10+ when investigating patterns or when stuck in loops. Default is 5.
+        n: Number of recent turns (1-20). Use 3-5 for immediate context,
+           10+ when investigating loops or patterns. Default is 5.
 
     Returns:
-        Formatted string with recent turns showing player commands and game responses
+        Raw command/response history with locations and scores
     """
     if _history_state is None:
         return "Error: History tools not initialized."
@@ -66,17 +67,20 @@ def get_recent_turns(n: int = 5) -> str:
 
 @tool
 def get_full_summary() -> str:
-    """Get the complete narrative summary of all game history from the beginning.
+    """Get narrative summary of ALL game progress from turn 1 to now - the BIG PICTURE across your entire journey.
 
-    Use this tool when you need to:
-    - Understand the overall progress in the game
-    - Review what has been accomplished so far
-    - Get context about puzzles, items, and locations discovered
-    - Plan long-term strategy
-    - Remember important details from earlier in the game
+    This is NOT raw turns - it's an AI-generated overview showing patterns and progress across
+    ALL history. Essential for:
+    - Understanding your overall strategy and what you've accomplished
+    - Seeing patterns across dozens of turns that recent history misses
+    - Remembering puzzles/items/locations discovered many turns ago
+    - Avoiding repeating strategies that failed earlier (but aren't in recent turns)
+    - Getting the full context before making important decisions
+
+    Without this, you're blind to everything beyond the last few turns.
 
     Returns:
-        Narrative summary of everything that has happened in the game
+        Comprehensive narrative of your entire game from the beginning
     """
     if _history_state is None:
         return "Error: History tools not initialized."

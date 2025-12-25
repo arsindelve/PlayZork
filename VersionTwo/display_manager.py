@@ -8,24 +8,33 @@ from typing import List, Tuple
 
 class DisplayManager:
     """
-    Manages the Rich console display with two main regions:
+    Manages the Rich console display with three main regions:
     1. Game I/O - Shows the conversation between game and agent
     2. Summary - Shows the current game summary
+    3. Memories - Shows flagged important memories
     """
 
     def __init__(self):
         self.console = Console()
         self.layout = Layout()
 
-        # Split screen into two columns: I/O (left) and Summary (right)
+        # Split screen into two columns: I/O (left) and Info (right)
         self.layout.split_row(
-            Layout(name="game_io", ratio=2),
-            Layout(name="summary", ratio=1)
+            Layout(name="game_io", ratio=1),
+            Layout(name="info_panel", ratio=1)
+        )
+
+        # Split the right column into two rows: Summary (top) and Memories (bottom)
+        self.layout["info_panel"].split_column(
+            Layout(name="summary", ratio=1),
+            Layout(name="memories", ratio=1)
         )
 
         # Initialize content
         self.game_turns: List[Tuple[str, str, str]] = []  # (location, game_text, command)
         self.current_summary = "Game has not started yet."
+        self.long_running_summary = "Game has not started yet."
+        self.current_memories = "No memories recorded yet."
         self.current_location = "Unknown"
         self.current_score = 0
         self.current_moves = 0
@@ -59,18 +68,31 @@ class DisplayManager:
 
         self._update_display()
 
-    def update_summary(self, summary: str):
+    def update_summary(self, summary: str, long_running_summary: str = None):
         """
         Update the game summary display
 
         Args:
-            summary: New summary text
+            summary: New recent summary text (last 15 turns)
+            long_running_summary: New comprehensive summary text (optional)
         """
         self.current_summary = summary
+        if long_running_summary is not None:
+            self.long_running_summary = long_running_summary
+        self._update_display()
+
+    def update_memories(self, memories_text: str):
+        """
+        Update the memories display
+
+        Args:
+            memories_text: Formatted memories text
+        """
+        self.current_memories = memories_text
         self._update_display()
 
     def _update_display(self):
-        """Update both regions of the display"""
+        """Update all three regions of the display"""
         # Update Game I/O region
         io_content = self._build_io_content()
         self.layout["game_io"].update(Panel(
@@ -84,8 +106,16 @@ class DisplayManager:
         summary_content = self._build_summary_content()
         self.layout["summary"].update(Panel(
             summary_content,
-            title="[bold magenta]Game Summary[/bold magenta]",
+            title="[bold magenta]History Summary[/bold magenta]",
             border_style="magenta"
+        ))
+
+        # Update Memories region
+        memories_content = self._build_memories_content()
+        self.layout["memories"].update(Panel(
+            memories_content,
+            title="[bold yellow]Memories[/bold yellow]",
+            border_style="yellow"
         ))
 
     def _build_io_content(self) -> Text:
@@ -122,9 +152,25 @@ class DisplayManager:
         content.append("Current Location:\n", style="bold white")
         content.append(f"{self.current_location}\n\n", style="cyan")
 
-        # Summary
-        content.append("History Summary:\n", style="bold white")
+        # Recent Summary (last 15 turns)
+        content.append("Recent (Last 15 Turns):\n", style="bold white")
         content.append(self.current_summary, style="white")
+        content.append("\n\n", style="white")
+
+        # Separator
+        content.append("─" * 40 + "\n\n", style="dim")
+
+        # Long-Running Summary (everything)
+        content.append("Complete History:\n", style="bold white")
+        content.append(self.long_running_summary, style="white")
+
+        return content
+
+    def _build_memories_content(self) -> Text:
+        """Build the memories content"""
+        content = Text()
+
+        content.append(self.current_memories, style="yellow")
 
         return content
 

@@ -51,11 +51,28 @@ class HistoryToolkit:
             moves=moves
         )
 
-        # Generate new summary incorporating this turn
-        new_summary = self.summarizer.generate_summary(self.state, turn)
+        # Generate RECENT summary (last 15 turns only)
+        # If we have more than 15 turns, reset and summarize from scratch
+        if self.state.get_turn_count() > 15:
+            # Get last 15 turns
+            recent_turns = self.state.get_recent_turns(15)
+            # Build a summary from just these turns
+            temp_summary = ""
+            for t in recent_turns:
+                # Simple concatenation for now, LLM will summarize
+                temp_summary += f"Turn {t.turn_number}: {t.player_command} -> {t.game_response[:100]}... "
 
-        # Update the state with the new summary
-        self.state.update_summary(new_summary)
+            # Use the summarizer to condense
+            new_recent_summary = self.summarizer.generate_summary(self.state, turn)
+        else:
+            # Normal incremental update
+            new_recent_summary = self.summarizer.generate_summary(self.state, turn)
+
+        self.state.update_summary(new_recent_summary)
+
+        # Generate LONG-RUNNING summary (all history, comprehensive)
+        new_long_summary = self.summarizer.generate_long_running_summary(self.state, turn)
+        self.state.update_long_running_summary(new_long_summary)
 
     def get_tools(self) -> List:
         """

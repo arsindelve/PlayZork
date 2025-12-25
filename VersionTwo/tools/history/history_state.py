@@ -20,7 +20,8 @@ class HistoryState:
 
     def __init__(self):
         self.raw_turns: List[GameTurn] = []
-        self.summary: str = ""
+        self.summary: str = ""  # Recent summary (last 15 turns)
+        self.long_running_summary: str = ""  # Complete summary of everything
         self.previous_command: str = "LOOK"
         self._turn_counter: int = 0
 
@@ -68,21 +69,39 @@ class HistoryState:
 
     def get_full_summary(self) -> str:
         """
-        Get the complete summary of all game history
+        Get the recent summary (last 15 turns)
 
         Returns:
-            Narrative summary string
+            Recent summary string
         """
         return self.summary if self.summary else "No history available yet."
 
     def update_summary(self, new_summary: str) -> None:
         """
-        Update the summary (called by summarizer)
+        Update the recent summary (called by summarizer)
 
         Args:
             new_summary: New summary text to store
         """
         self.summary = new_summary
+
+    def get_long_running_summary(self) -> str:
+        """
+        Get the complete long-running summary of all game history
+
+        Returns:
+            Long-running summary string
+        """
+        return self.long_running_summary if self.long_running_summary else "No history available yet."
+
+    def update_long_running_summary(self, new_summary: str) -> None:
+        """
+        Update the long-running summary (called by summarizer)
+
+        Args:
+            new_summary: New long-running summary text to store
+        """
+        self.long_running_summary = new_summary
 
     def get_turn_count(self) -> int:
         """Get the total number of turns recorded"""
