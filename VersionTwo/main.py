@@ -8,7 +8,7 @@ load_dotenv()
 
 async def main():
     # Initialize the GameSession with a session ID
-    session = GameSession(session_id="looooser")
+    session = GameSession(session_id="lodoooser")
 
     # Example turn: player provides input
     await session.play()

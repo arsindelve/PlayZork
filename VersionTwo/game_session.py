@@ -3,8 +3,10 @@ from zork.zork_service import ZorkService
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from display_manager import DisplayManager
 from game_logger import GameLogger
+import os
 
 
 class GameSession:
@@ -22,8 +24,9 @@ class GameSession:
 
         self.zork_service = ZorkService(session_id=session_id)
 
-        # Create history toolkit with cheap LLM for summarization
-        cheap_llm = ChatOpenAI(model="gpt-5-nano-2025-08-07", temperature=0)
+        # Create history toolkit with Llama 3.3 for summarization (cheap, local)
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        cheap_llm = ChatOllama(model="llama3.3", temperature=0, base_url=ollama_host)
         self.history_toolkit = HistoryToolkit(cheap_llm)
 
         # Create memory toolkit with same cheap LLM

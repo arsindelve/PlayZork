@@ -1,0 +1,14 @@
+=== Game Session Log ===
+Session ID: looooser
+Started: 2025-12-25 12:54:58
+================================================================================
+
+2025-12-25 12:54:58,440 - INFO - Logger initialized
+2025-12-25 12:54:58,440 - INFO - Initializing GameSession with ID: looooser
+2025-12-25 12:55:02,450 - INFO - ================================================================================
+2025-12-25 12:55:02,450 - INFO - TURN 1 START - Command: look
+2025-12-25 12:55:02,451 - INFO - ================================================================================
+2025-12-25 12:55:03,276 - INFO - GAME RESPONSE:
+Damp Cave
+This cave has exits to the west and east, and narrows to a crack toward the south. The earth is particularly damp here.
+
