@@ -6,20 +6,19 @@ class PromptLibrary:
   @staticmethod
   def get_history_processor_human_prompt():
     return """
-    Here is the previous game interaction history summary up to this point:
-
+    Previous summary:
     {summary}
 
-    Here is the most recent game interaction. Append it to the new summary you create:
-
-    Player Said: {player_response}
+    Latest interaction:
+    Player: {player_response}
     Game: {game_response}
-    
+
+    Provide an updated narrative summary that incorporates this new interaction. Output ONLY the summary text.
     """
 
   @staticmethod
   def get_history_processor_system_prompt():
-    return "You are assisting someone playing ZORK I. You will summarize the game interaction history narratively, in a way that is most useful for helping them understand what has happened so far. Only summarize past interactions, do not provide advice or strategy. Do not provide a heading or title."
+    return "You are assisting someone playing ZORK I. You will summarize the game interaction history narratively, in a way that is most useful for helping them understand what has happened so far. Only summarize past interactions, do not provide advice or strategy. Do not provide a heading or title. IMPORTANT: Only output the summary itself, nothing else. Do not include any meta-commentary, instructions, or explanations - just the narrative summary."
 
   @staticmethod
   def get_adventurer_prompt():
