@@ -100,13 +100,13 @@ class DisplayManager:
             # Location header
             content.append(f"\n[{location}]\n", style="bold cyan")
 
-            # Game text
-            content.append(game_text, style="white")
-            content.append("\n\n")
-
-            # Agent command
+            # Agent command (what was sent to the game)
             content.append("> ", style="bold green")
-            content.append(f"{command}\n", style="green")
+            content.append(f"{command}\n\n", style="green")
+
+            # Game response (to the command above)
+            content.append(game_text, style="white")
+            content.append("\n")
 
             # Separator between turns (except last)
             if i < len(self.game_turns) - 1:

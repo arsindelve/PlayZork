@@ -27,23 +27,24 @@ class GameSession:
         Press Ctrl+C to quit.
         """
         # Create display manager with Rich
-        with DisplayManager() as display:
-            try:
-                # Initialize the game state.
-                await self.zork_service.play_turn("verbose")
-                adventurer_response = await self.__play_turn("look", display)
+        display = DisplayManager()
+        try:
+            # Initialize the game state.
+            await self.zork_service.play_turn("verbose")
+            adventurer_response = await self.__play_turn("look", display)
 
-                # Run indefinitely until user interrupts
-                while True:
-                    adventurer_response = await self.__play_turn(adventurer_response, display)
+            # Run indefinitely until user interrupts
+            while True:
+                adventurer_response = await self.__play_turn(adventurer_response, display)
 
-            except KeyboardInterrupt:
-                display.stop()
-                print("\n\n🎮 Game interrupted by user. Goodbye!")
-                print(f"📊 Final Score: {display.current_score} | Total Moves: {display.current_moves}")
-            except Exception as e:
-                display.stop()
-                print(f"An error occurred during gameplay: {e}")
+        except KeyboardInterrupt:
+            # Clean exit on Ctrl+C - let main.py handle the message
+            raise
+        except Exception as e:
+            print(f"\nAn error occurred during gameplay: {e}")
+        finally:
+            # Always stop the display cleanly
+            display.stop()
 
     async def __play_turn(self, input_text: str, display: DisplayManager) -> str:
         """
@@ -62,7 +63,7 @@ class GameSession:
             # Step 3: Update history after turn completes
             self.history_toolkit.update_after_turn(
                 game_response=zork_response.Response,
-                player_command=player_response.command,
+                player_command=input_text,  # The command that was just executed
                 location=zork_response.LocationName,
                 score=zork_response.Score,
                 moves=zork_response.Moves
@@ -72,7 +73,7 @@ class GameSession:
             display.add_turn(
                 location=zork_response.LocationName,
                 game_text=zork_response.Response,
-                command=player_response.command,
+                command=input_text,  # The command that was just executed
                 score=zork_response.Score,
                 moves=zork_response.Moves
             )
@@ -83,6 +84,5 @@ class GameSession:
             return player_response.command
 
         except Exception as e:
-            display.stop()
-            print(f"An error occurred while processing turn: {e}")
-            return ""
+            print(f"\nAn error occurred while processing turn: {e}")
+            raise  # Re-raise to be caught by play() method
