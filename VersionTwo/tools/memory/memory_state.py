@@ -51,6 +51,15 @@ class MemoryState:
         if not content or not content.strip():
             return None
 
+        # Ensure importance is an integer (LLM might return string)
+        try:
+            importance = int(importance)
+        except (ValueError, TypeError):
+            importance = 500  # Default to medium importance if invalid
+
+        # Clamp to valid range
+        importance = max(1, min(1000, importance))
+
         # Check for near-duplicates (fuzzy match on content)
         for existing in self.memories:
             if self._is_similar(content, existing.content):
