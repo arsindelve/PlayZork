@@ -24,15 +24,17 @@ class PromptLibrary:
   @staticmethod
   def get_adventurer_prompt():
     return """
-    You have played {moves} moves and have a score of {score}. 
+    You have played {moves} moves and have a score of {score}.
 
     You are currently in this location: {locationName}
 
-    Here are your recent interactions with the game, from most recent to least recent. Study these carefully to avoid repeating yourself and going in circles: 
+    The game just responded: {game_response}
 
-    {history}
+    Research context from your investigation:
 
-    Instructions: Based on your recent game history, memories, and current context, provide a JSON output without backticks. Use the following format:
+    {research_context}
+
+    Instructions: Based on the research you conducted and current game state, provide a JSON output without backticks. Use the following format:
 
     {{
         "command": "your command here. Choose commands that take logical next steps toward game progression and avoid previously attempted actions unless new clues or tools suggest a different outcome. Use your history to avoid going in circles. When stuck, explore new options. You want to go somewhere, you have to navigate manually using cardinal directions like NORTH, SOUTH, etc. Try all directions even if not listed as as possible exit", 
@@ -47,13 +49,36 @@ class PromptLibrary:
   @staticmethod
   def get_system_prompt():
     return """
-    You are playing Zork One with the goal of winning the game by achieving a score of 350 points. 
+    You are playing Zork One with the goal of winning the game by achieving a score of 350 points.
     Play as if for the first time, without relying on any prior knowledge of the Zork games.
 
     Objective: Reach a score of 350 points.
     Input Style: Use simple commands with one verb and one or two nouns, such as 'OPEN DOOR' or 'TURN SCREW WITH SCREWDRIVER.'
-    Type "INVENTORY" to check items you’re carrying and "SCORE" to view your current score (so you know if you're winning).
+    Type "INVENTORY" to check items you're carrying and "SCORE" to view your current score (so you know if you're winning).
     Type "LOOK" to see where you are, and what is in the current location. Use this liberally.
-    Progression: Use the recent interactions with the game provided to avoid repeating actions you’ve already completed and going around in circles. 
+    Progression: Use the recent interactions with the game provided to avoid repeating actions you've already completed and going around in circles.
     Focus on new, logical actions that progress the game and explore new opportunities or areas based on the current context and past interactions.
+    """
+
+  @staticmethod
+  def get_research_agent_prompt():
+    return """You are an assistant helping someone play Zork I.
+
+    You have access to tools that let you query game history:
+    - get_recent_turns(n): Get the last N turns of detailed game history
+    - get_full_summary(): Get a complete narrative summary of all game history
+
+    Current game state:
+    - Score: {score}
+    - Location: {locationName}
+    - Moves: {moves}
+    - Game Response: {game_response}
+
+    Your task: Use the available tools to gather relevant context that will help make a good decision about what to do next.
+
+    After you've gathered enough context, respond with:
+    RESEARCH_COMPLETE: [Write a 2-3 sentence summary of the most relevant context you found]
+
+    Example:
+    RESEARCH_COMPLETE: The player has tried going NORTH from this location twice with no success. The summary indicates there's a rope in inventory that hasn't been used yet. The most recent turns show we're stuck in a loop in the forest area.
     """
