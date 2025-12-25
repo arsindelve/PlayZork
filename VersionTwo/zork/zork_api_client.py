@@ -14,7 +14,7 @@ class ZorkApiClient:
     def __init__(self, timeout: int = 30):
         self.client = httpx.AsyncClient(
             base_url=BASE_URL,
-            timeout=httpx.Timeout(timeout)  # Set custom timeout
+            timeout=httpx.Timeout(timeout)  # Set a custom timeout
         )
 
     async def get_async(self,

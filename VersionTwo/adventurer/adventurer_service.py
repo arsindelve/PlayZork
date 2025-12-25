@@ -3,7 +3,7 @@ from .prompt_library import PromptLibrary
 from .adventurer_response import AdventurerResponse
 from .history_processor import HistoryProcessor
 
-from langchain.prompts.chat import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from langchain_openai import ChatOpenAI
 
 
