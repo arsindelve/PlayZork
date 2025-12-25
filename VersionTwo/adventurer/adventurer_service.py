@@ -6,6 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTempla
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
+from game_logger import GameLogger
 
 
 class AdventurerService:
@@ -20,6 +21,7 @@ class AdventurerService:
             history_toolkit: The HistoryToolkit instance for accessing game history
         """
         self.history_toolkit = history_toolkit
+        self.logger = GameLogger.get_instance()
 
         # Create research agent (Phase 1) and decision chain (Phase 2)
         self.research_agent = self._create_research_agent()
@@ -35,8 +37,8 @@ class AdventurerService:
         llm = ChatOpenAI(model="gpt-5.2-2025-12-11", temperature=0)
         tools = self.history_toolkit.get_tools()
 
-        # Bind tools to the LLM
-        llm_with_tools = llm.bind_tools(tools)
+        # Bind tools to the LLM and REQUIRE it to call at least one tool
+        llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 
         # Create prompt for research agent
         prompt = ChatPromptTemplate.from_messages([
@@ -92,6 +94,7 @@ class AdventurerService:
             # Check if there are tool calls
             if hasattr(response, 'tool_calls') and response.tool_calls:
                 print(f"[Research] Agent called {len(response.tool_calls)} tool(s)")
+                self.logger.logger.info(f"Research agent called {len(response.tool_calls)} tool(s)")
 
                 tool_results = []
                 tools_map = {tool.name: tool for tool in self.history_toolkit.get_tools()}
@@ -103,10 +106,13 @@ class AdventurerService:
 
                     if tool_name in tools_map:
                         print(f"[Research] Calling {tool_name} with args: {tool_args}")
+                        self.logger.log_tool_call(tool_name, tool_args)
                         tool_result = tools_map[tool_name].invoke(tool_args)
+                        self.logger.log_tool_result(tool_name, str(tool_result))
                         tool_results.append(f"{tool_name} result: {tool_result}")
                     else:
                         print(f"[Research] Unknown tool: {tool_name}")
+                        self.logger.logger.warning(f"Unknown tool requested: {tool_name}")
 
                 # Combine tool results into summary
                 return "\n\n".join(tool_results) if tool_results else "No tools executed successfully."
@@ -137,6 +143,8 @@ class AdventurerService:
             The AI-generated response for the adventurer
         """
         # Phase 1: Research - agent gathers context
+        self.logger.log_research_start()
+
         research_input = {
             "input": "Use the available tools to gather relevant history context.",
             "score": last_game_response.Score,
@@ -146,8 +154,15 @@ class AdventurerService:
         }
 
         research_context = self._call_tools_and_get_summary(research_input)
+        self.logger.log_research_complete(research_context)
 
         # Phase 2: Decision - structured output
+        self.logger.log_decision_start(
+            last_game_response.Score,
+            last_game_response.LocationName,
+            last_game_response.Moves
+        )
+
         decision_input = {
             "score": last_game_response.Score,
             "locationName": last_game_response.LocationName,
@@ -157,6 +172,9 @@ class AdventurerService:
         }
 
         adventurer_response = self.decision_chain.invoke(decision_input)
+
+        # Log the final decision
+        self.logger.log_decision(adventurer_response.command, adventurer_response.reason)
 
         # NOTE: History update now happens in GameSession, not here
 

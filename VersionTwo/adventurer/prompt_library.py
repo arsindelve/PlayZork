@@ -29,19 +29,28 @@ class PromptLibrary:
 
     The game just responded: {game_response}
 
-    Research context from your investigation:
-
+    === RESEARCH ANALYSIS ===
     {research_context}
+    === END RESEARCH ANALYSIS ===
 
-    Instructions: Based on the research you conducted and current game state, provide a JSON output without backticks. Use the following format:
+    CRITICAL DECISION-MAKING RULES:
+    1. READ THE RESEARCH ANALYSIS ABOVE CAREFULLY - it tells you what to avoid and what to try
+    2. If research says you're in a LOOP - BREAK OUT OF IT immediately by trying something completely different
+    3. If the game says "already open", "already have", "securely anchored" - NEVER try that action again
+    4. If you've been in the same location for 3+ turns without progress, TRY MOVING: NORTH, SOUTH, EAST, WEST, UP, DOWN
+    5. Exploration is KEY - if stuck, try directional movement to find new areas
+    6. Inventory management: Use INVENTORY to check what you have, DROP items if needed
+    7. Every command must be NEW and PRODUCTIVE - no wasted turns
+
+    Instructions: Provide a JSON output without backticks:
 
     {{
-        "command": "your command here. Choose commands that take logical next steps toward game progression and avoid previously attempted actions unless new clues or tools suggest a different outcome. Use your history to avoid going in circles. When stuck, explore new options. You want to go somewhere, you have to navigate manually using cardinal directions like NORTH, SOUTH, etc. Try all directions even if not listed as as possible exit", 
-        "reason": "brief explanation of why this command was chosen based on game state and history",
+        "command": "Your NEXT command. Must NOT be a failed action from research analysis. If stuck, try directional movement.",
+        "reason": "brief explanation based on research analysis and game state",
         "remember": "Use this field only for new, novel, or critical ideas for solving the game, new unsolved puzzles, or new obstacles essential to game progress. These are like Leonard's tattoos in Memento. Memory is limited, so avoid duplicates or minor details. Leave empty if unnecessary. Do not repeat yourself or duplicate reminders that already appear in the above prompt.",
         "rememberImportance": "the number, between 1 and 1000, of how important the above reminder is, 1 is not really, 1000 is critical to winning the game. Lower number items are likely to be forgotten when we run out of memory.",
         "item": "any new, interesting items you have found in this location, along with their locations, which are not already mentioned above. For example 'there is a box and a light bulb in the maintenance room'. Omit if there is nothing here.",
-        "moved": "if you attempted to move in a certain direction, list the direction you tried to go. Otherwise, leave this empty."  
+        "moved": "if you attempted to move in a certain direction, list the direction you tried to go. Otherwise, leave this empty."
     }}
     """
 
@@ -73,11 +82,16 @@ class PromptLibrary:
     - Moves: {moves}
     - Game Response: {game_response}
 
-    Your task: Use the available tools to gather relevant context that will help make a good decision about what to do next.
+    CRITICAL INSTRUCTIONS:
+    1. ALWAYS call get_full_summary() first to understand the overall game state
+    2. Then call get_recent_turns(5) to see recent actions
+    3. ANALYZE the data - don't just echo it back!
+    4. Identify: What items do we have? What have we tried that failed? Are we stuck in a loop?
+    5. If recent turns show repeated failures (like "already open", "already have that"), FLAG THIS CLEARLY
 
-    After you've gathered enough context, respond with:
-    RESEARCH_COMPLETE: [Write a 2-3 sentence summary of the most relevant context you found]
+    After calling tools, respond with:
+    RESEARCH_COMPLETE: [Your analysis in 3-4 sentences]
 
     Example:
-    RESEARCH_COMPLETE: The player has tried going NORTH from this location twice with no success. The summary indicates there's a rope in inventory that hasn't been used yet. The most recent turns show we're stuck in a loop in the forest area.
+    RESEARCH_COMPLETE: The summary shows we already have the leaflet in inventory. The last 5 turns reveal a LOOP: we keep trying to take the mailbox (anchored) and take the leaflet (already have it). We need to STOP interacting with the mailbox and START exploring - we haven't tried moving in any direction yet (NORTH, SOUTH, EAST, WEST).
     """
