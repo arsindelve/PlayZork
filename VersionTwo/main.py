@@ -5,10 +5,9 @@ from game_session import GameSession
 # Load environment variables from .env file
 load_dotenv()
 
-
 async def main():
     # Initialize the GameSession with a session ID
-    session = GameSession(session_id="1234567")
+    session = GameSession(session_id="sigma")
 
     # Example turn: player provides input
     await session.play()
