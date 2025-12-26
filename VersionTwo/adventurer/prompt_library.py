@@ -24,39 +24,18 @@ class PromptLibrary:
   def get_decision_agent_evaluation_prompt():
     return """You are the Decision Agent in a Zork-playing AI system.
 
-YOU HAVE TWO CRITICAL TASKS EVERY TURN:
+YOUR SINGLE RESPONSIBILITY: Choose the best action from specialist agent proposals.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TASK 1: IDENTIFY NEW STRATEGIC ISSUES TO REMEMBER
+SPECIALIST AGENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Read the Game Response and identify ANY new puzzles/obstacles to track for future turns.
-
-EXAMPLES OF WHAT TO REMEMBER:
-✓ "pile of leaves" → remember: "Pile of leaves in Clearing" | rememberImportance: 600
-✓ "small mailbox here" → remember: "Small mailbox at West Of House" | rememberImportance: 700
-✓ "boarded front door" → remember: "Boarded front door blocks house entry" | rememberImportance: 800
-✓ "locked grating" → remember: "Locked grating blocks eastern passage" | rememberImportance: 900
-✓ "troll blocks bridge" → remember: "Troll blocking bridge demands payment" | rememberImportance: 1000
-
-IMPORTANCE SCORING:
-- 900-1000: Major obstacle blocking critical path (locked gates, trolls, darkness)
-- 700-800: Important items or doors (keys, treasures, entry points)
-- 500-600: Interesting objects to investigate (piles, chests, mechanisms)
-- 300-400: Minor items or flavor objects
-
-CRITICAL: You MUST populate 'remember' field when you see new objects/obstacles in Game Response!
-Only leave it empty if you see absolutely nothing new or everything mentioned is already tracked.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TASK 2: CHOOSE BEST ACTION FROM AGENT PROPOSALS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-SPECIALIST AGENTS:
 - IssueAgents: Each solves a specific tracked puzzle (importance = value for winning)
 - ExplorerAgent: Discovers new areas/items through systematic exploration
 
-DECISION CRITERIA (in priority order):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DECISION CRITERIA (in priority order)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1. HIGH-VALUE PUZZLES FIRST
    - IssueAgent with importance 800-1000 + confidence 80+ = TOP PRIORITY
@@ -78,18 +57,24 @@ DECISION CRITERIA (in priority order):
    - 50-79: Worth trying if important
    - <50: Last resort only
 
-EXPECTED VALUE CALCULATION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXPECTED VALUE CALCULATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 - IssueAgent EV = (importance/1000) × (confidence/100) × 100
 - ExplorerAgent EV = (unexplored_count/10) × (confidence/100) × 50
 - Choose highest EV unless heuristics override
 
-OUTPUT: JSON with ALL fields filled:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Output JSON with:
 - command: The action to execute (from chosen agent proposal)
 - reason: Which agent you chose and WHY (explain your decision)
-- remember: NEW strategic issue found in Game Response (or empty string if nothing new)
-- rememberImportance: Importance score 1-1000 (or null if remember is empty)
-- item: Any item mentioned in Game Response (or empty string)
 - moved: Direction if movement command (or empty string)
+
+Note: You do NOT identify new issues - that's handled by a separate Observer Agent.
 """
 
   @staticmethod

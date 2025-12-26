@@ -28,7 +28,7 @@ class GameLogger:
         self.log_file = os.path.join(self.log_dir, f"game_{session_id}.log")
 
         # Clear/reset the log file for this session
-        with open(self.log_file, 'w') as f:
+        with open(self.log_file, 'w', encoding='utf-8') as f:
             f.write(f"=== Game Session Log ===\n")
             f.write(f"Session ID: {session_id}\n")
             f.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -42,7 +42,7 @@ class GameLogger:
         root_logger.handlers = []
 
         # File handler for ALL loggers
-        file_handler = logging.FileHandler(self.log_file, mode='a')
+        file_handler = logging.FileHandler(self.log_file, mode='a', encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
 
         # Format: timestamp - level - message

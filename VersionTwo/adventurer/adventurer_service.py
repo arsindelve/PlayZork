@@ -131,10 +131,11 @@ class AdventurerService:
             "explorer_agent": None,  # Will be populated if unexplored directions exist
             "research_context": "",
             "decision": None,
+            "observer_response": None,  # Will be populated by observe node
             "memory_persisted": False
         }
 
-        # Execute the graph (SpawnAgents → Research → Decide → Persist)
+        # Execute the graph (SpawnAgents → Research → Decide → Observe → Persist)
         self.logger.log_research_start()
         final_state = self.decision_graph.invoke(initial_state)
         self.logger.log_research_complete(final_state["research_context"])
@@ -170,15 +171,17 @@ class AdventurerService:
                     f"  > Reason: {explorer_agent.reason}"
                 )
 
-        # Extract decision from final state
+        # Extract decision and observation from final state
         adventurer_response = final_state["decision"]
+        observer_response = final_state["observer_response"]
 
         # Log the final decision
         self.logger.log_decision(adventurer_response.command, adventurer_response.reason)
 
+        # Log memory persistence from Observer Agent
         if final_state["memory_persisted"]:
             self.logger.logger.info(
-                f"MEMORY STORED: [{adventurer_response.rememberImportance}/1000] {adventurer_response.remember}"
+                f"MEMORY STORED: [{observer_response.rememberImportance}/1000] {observer_response.remember}"
             )
 
         # Return the decision, issue agents, and explorer agent for display

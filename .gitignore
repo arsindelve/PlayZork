@@ -1,9 +1,11 @@
 /VersionTwo/.env
 /.claude/settings.local.json
 /.idea/*
+/VersionTwo/logs/*
 /.env
-/VersionTwo/logs/
 /VersionTwo/data/
+/logs/*
 __pycache__/
 *.pyc
 /data/zork_sessions.db
+nul

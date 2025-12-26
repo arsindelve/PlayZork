@@ -3,9 +3,12 @@ from typing import Optional
 
 
 class AdventurerResponse(BaseModel):
-    command: str = Field()
-    reason: Optional[str] = Field(default="")
-    remember: Optional[str] = Field(default="")
-    rememberImportance: Optional[int] = Field(default=0)
-    item: Optional[str] = Field(default="")
-    moved: Optional[str] = Field(default="")
+    """
+    Response from the Decision Agent (arbiter).
+
+    The Decision Agent ONLY chooses the best action from specialist agent proposals.
+    It does NOT identify new issues - that's handled by the Observer Agent.
+    """
+    command: str = Field(description="The command to execute (chosen from agent proposals)")
+    reason: Optional[str] = Field(default="", description="Which agent was chosen and why")
+    moved: Optional[str] = Field(default="", description="Direction if movement command")

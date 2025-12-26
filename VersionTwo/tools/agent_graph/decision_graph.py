@@ -1,7 +1,7 @@
 """
 Simple LangGraph for managing the decision-making flow.
 
-Flow: SpawnAgents → Research → Decide → Persist → END
+Flow: SpawnAgents → Research → Decide → Observe → Persist → END
 
 This introduces graph-based control flow while keeping the existing
 research and decision logic intact.
@@ -16,6 +16,8 @@ from tools.mapping import MapperToolkit
 from langchain_core.runnables import Runnable
 from .issue_agent import IssueAgent
 from .explorer_agent import ExplorerAgent
+from .observer_agent import ObserverAgent
+from .observer_response import ObserverResponse
 
 
 class DecisionState(TypedDict):
@@ -33,6 +35,9 @@ class DecisionState(TypedDict):
 
     # Decision phase output
     decision: Optional[AdventurerResponse]
+
+    # Observation phase output
+    observer_response: Optional[ObserverResponse]
 
     # Persistence tracking
     memory_persisted: bool
@@ -375,6 +380,60 @@ def _format_agent_proposals(issue_agents, explorer_agent):
     return "\n".join(lines) if lines else "No proposals available. Choose LOOK to observe the current situation."
 
 
+def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit):
+    """
+    Create the observation node that identifies new strategic issues.
+
+    This node runs AFTER the decision is made and analyzes the game response
+    to identify new puzzles, obstacles, or items.
+
+    Args:
+        decision_llm: The LLM to use for observation
+        research_agent: Research agent with access to history tools
+        history_toolkit: HistoryToolkit for accessing game history
+        memory_toolkit: MemoryToolkit for accessing tracked issues
+
+    Returns:
+        Node function for the graph
+    """
+    def observe_node(state: DecisionState) -> DecisionState:
+        """
+        Observation phase: Identify new strategic issues from game response.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        zork_response = state["game_response"]
+
+        logger.info("========== OBSERVE_NODE START ==========")
+        logger.info(f"Analyzing game response at {zork_response.LocationName}")
+
+        # Create ObserverAgent to analyze the game response
+        observer = ObserverAgent()
+
+        # Get history tools
+        history_tools = history_toolkit.get_tools()
+
+        # Analyze game response and identify new issues (with full context)
+        observer_response = observer.observe(
+            game_response=zork_response.Response,
+            location=zork_response.LocationName or "Unknown",
+            score=zork_response.Score,
+            moves=zork_response.Moves,
+            decision_llm=decision_llm,
+            research_agent=research_agent,
+            history_tools=history_tools,
+            memory_toolkit=memory_toolkit
+        )
+
+        state["observer_response"] = observer_response
+
+        logger.info("========== OBSERVE_NODE END ==========")
+        return state
+
+    return observe_node
+
+
 def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
     """
     Create the persistence node that stores strategic issues.
@@ -388,24 +447,24 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
     """
     def persist_node(state: DecisionState) -> DecisionState:
         """
-        Persistence phase: Store strategic issues if flagged.
+        Persistence phase: Store strategic issues identified by Observer Agent.
         """
         import logging
         logger = logging.getLogger(__name__)
 
-        decision = state["decision"]
+        observer_response = state["observer_response"]
         zork_response = state["game_response"]
 
         logger.info("========== PERSIST_NODE START ==========")
-        logger.info(f"Decision.remember: '{decision.remember}'")
-        logger.info(f"Decision.rememberImportance: {decision.rememberImportance}")
-        logger.info(f"Decision.item: '{decision.item}'")
+        logger.info(f"Observer.remember: '{observer_response.remember}'")
+        logger.info(f"Observer.rememberImportance: {observer_response.rememberImportance}")
+        logger.info(f"Observer.item: '{observer_response.item}'")
 
-        if decision.remember and decision.remember.strip():
-            logger.info(f"ATTEMPTING TO STORE MEMORY: [{decision.rememberImportance}/1000] {decision.remember}")
+        if observer_response.remember and observer_response.remember.strip():
+            logger.info(f"ATTEMPTING TO STORE MEMORY: [{observer_response.rememberImportance}/1000] {observer_response.remember}")
             was_added = memory_toolkit.add_memory(
-                content=decision.remember,
-                importance=decision.rememberImportance or 500,
+                content=observer_response.remember,
+                importance=observer_response.rememberImportance or 500,
                 turn_number=turn_number_ref["current"],
                 location=zork_response.LocationName or "Unknown",
                 score=zork_response.Score,
@@ -436,12 +495,12 @@ def create_decision_graph(
     Build the decision-making graph.
 
     Flow:
-        SpawnAgents → Research → Decide → Persist → END
+        SpawnAgents → Research → Decide → Observe → Persist → END
 
     Args:
         research_agent: Research agent that calls history tools
         decision_chain: Decision chain with structured output
-        decision_llm: LLM for IssueAgent and ExplorerAgent proposals
+        decision_llm: LLM for IssueAgent, ExplorerAgent proposals, and Observer
         history_toolkit: History toolkit for tool execution
         memory_toolkit: Memory toolkit for persistence and issue agent spawning
         mapper_toolkit: Mapper toolkit for ExplorerAgent spawning
@@ -462,13 +521,15 @@ def create_decision_graph(
     ))
     graph.add_node("research", create_research_node(research_agent, history_toolkit))
     graph.add_node("decide", create_decision_node(decision_chain))
+    graph.add_node("observe", create_observe_node(decision_llm, research_agent, history_toolkit, memory_toolkit))
     graph.add_node("persist", create_persist_node(memory_toolkit, turn_number_ref))
 
     # Define flow
     graph.set_entry_point("spawn_agents")
     graph.add_edge("spawn_agents", "research")
     graph.add_edge("research", "decide")
-    graph.add_edge("decide", "persist")
+    graph.add_edge("decide", "observe")
+    graph.add_edge("observe", "persist")
     graph.add_edge("persist", END)
 
     return graph.compile()
