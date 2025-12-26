@@ -4,10 +4,8 @@ from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.database import DatabaseManager
 from langchain_openai import ChatOpenAI
-from langchain_ollama import ChatOllama
 from display_manager import DisplayManager
 from game_logger import GameLogger
-import os
 
 
 class GameSession:
@@ -30,9 +28,8 @@ class GameSession:
 
         self.zork_service = ZorkService(session_id=session_id)
 
-        # Create history toolkit with Llama 3.3 for summarization (cheap, local)
-        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        cheap_llm = ChatOllama(model="llama3.3", temperature=0, base_url=ollama_host)
+        # Create history toolkit with GPT-5-nano for summarization (cheap)
+        cheap_llm = ChatOpenAI(model="gpt-5-nano-2025-08-07", temperature=0)
         self.history_toolkit = HistoryToolkit(cheap_llm, session_id, self.db)
 
         # Create memory toolkit (write-only strategic issue storage)
@@ -92,25 +89,12 @@ class GameSession:
                 moves=zork_response.Moves
             )
 
-            # Step 3: Process the response through the AdventurerService
-            # (Research phase will now see the turn we just completed)
-            player_response = self.adventurer_service.handle_user_input(zork_response)
-
-            # Step 3.5: Store memory if LLM flagged something important
-            if player_response.remember and player_response.remember.strip():
-                memory_added = self.memory_toolkit.add_memory(
-                    content=player_response.remember,
-                    importance=player_response.rememberImportance,
-                    turn_number=self.turn_number,
-                    location=zork_response.LocationName,
-                    score=zork_response.Score,
-                    moves=zork_response.Moves
-                )
-
-                if memory_added:
-                    self.logger.logger.info(
-                        f"MEMORY STORED: [{player_response.rememberImportance}/1000] {player_response.remember}"
-                    )
+            # Step 3: Process through LangGraph (Research → Decide → Persist)
+            # The graph handles: research, decision, and memory persistence
+            player_response = self.adventurer_service.handle_user_input(
+                zork_response,
+                self.turn_number
+            )
 
             # Step 4: Update display with the turn
             display.add_turn(

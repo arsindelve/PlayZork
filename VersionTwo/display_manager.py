@@ -114,7 +114,7 @@ class DisplayManager:
         memories_content = self._build_memories_content()
         self.layout["memories"].update(Panel(
             memories_content,
-            title="[bold yellow]Memories[/bold yellow]",
+            title="[bold yellow]Issues / Puzzles / Obstacles[/bold yellow]",
             border_style="yellow"
         ))
 
