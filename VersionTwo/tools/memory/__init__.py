@@ -1,5 +1,7 @@
 from .memory_state import MemoryState, Memory
+from .memory_deduplicator import MemoryDeduplicator
 from tools.database import DatabaseManager
+from langchain_openai import ChatOpenAI
 
 
 class MemoryToolkit:
@@ -8,17 +10,21 @@ class MemoryToolkit:
 
     Memory is WRITE-ONLY: the agent flags strategic issues via the 'remember' field,
     but cannot query them as tools. All strategic issues persist to SQLite.
+
+    Includes LLM-based de-duplication to prevent storing semantically similar issues.
     """
 
-    def __init__(self, session_id: str, db: DatabaseManager):
+    def __init__(self, session_id: str, db: DatabaseManager, dedup_llm: ChatOpenAI):
         """
-        Initialize the memory toolkit with database backend.
+        Initialize the memory toolkit with database backend and de-duplication.
 
         Args:
             session_id: Unique identifier for this game session
             db: DatabaseManager instance for persistence
+            dedup_llm: ChatOpenAI instance for semantic de-duplication (should be cheap model)
         """
-        self.state = MemoryState(session_id=session_id, db=db)
+        self.deduplicator = MemoryDeduplicator(llm=dedup_llm)
+        self.state = MemoryState(session_id=session_id, db=db, deduplicator=self.deduplicator)
 
     def add_memory(
         self,

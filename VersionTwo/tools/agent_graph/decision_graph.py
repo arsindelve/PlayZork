@@ -138,7 +138,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
         zork_response = state["game_response"]
 
         if decision.remember and decision.remember.strip():
-            memory_toolkit.add_memory(
+            was_added = memory_toolkit.add_memory(
                 content=decision.remember,
                 importance=decision.rememberImportance or 500,
                 turn_number=turn_number_ref["current"],
@@ -146,7 +146,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
                 score=zork_response.Score,
                 moves=zork_response.Moves
             )
-            state["memory_persisted"] = True
+            state["memory_persisted"] = was_added
         else:
             state["memory_persisted"] = False
 

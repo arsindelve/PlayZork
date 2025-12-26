@@ -2,6 +2,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from tools.database import DatabaseManager
+from .memory_deduplicator import MemoryDeduplicator
+import logging
 
 
 class Memory(BaseModel):
@@ -22,16 +24,18 @@ class Memory(BaseModel):
 class MemoryState:
     """SQLite-backed storage for all memories"""
 
-    def __init__(self, session_id: str, db: DatabaseManager):
+    def __init__(self, session_id: str, db: DatabaseManager, deduplicator: Optional[MemoryDeduplicator] = None):
         """
         Initialize memory state with database backend.
 
         Args:
             session_id: Unique identifier for this game session
             db: DatabaseManager instance for persistence
+            deduplicator: Optional MemoryDeduplicator for semantic de-duplication
         """
         self.session_id = session_id
         self.db = db
+        self.deduplicator = deduplicator
 
     def add_memory(
         self,
@@ -72,6 +76,18 @@ class MemoryState:
         # Check for exact duplicates in database
         if self.db.check_duplicate_memory(self.session_id, content.strip()):
             return None  # Don't add duplicate
+
+        # Check for semantic duplicates using LLM (if deduplicator available)
+        if self.deduplicator:
+            existing_memories = self.get_top_memories(limit=50)  # Check against recent memories
+            if existing_memories:
+                existing_contents = [mem.content for mem in existing_memories]
+                is_dup, reason = self.deduplicator.is_duplicate(content.strip(), existing_contents)
+                if is_dup:
+                    # Log why it was skipped (but don't add to database)
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"DUPLICATE MEMORY SKIPPED: '{content.strip()}' - Reason: {reason}")
+                    return None
 
         memory = Memory(
             turn_number=turn_number,

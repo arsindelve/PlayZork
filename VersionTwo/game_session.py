@@ -28,12 +28,14 @@ class GameSession:
 
         self.zork_service = ZorkService(session_id=session_id)
 
-        # Create history toolkit with GPT-5-nano for summarization (cheap)
+        # Create cheap LLM for summarization and de-duplication
         cheap_llm = ChatOpenAI(model="gpt-5-nano-2025-08-07", temperature=0)
+
+        # Create history toolkit with cheap LLM for summarization
         self.history_toolkit = HistoryToolkit(cheap_llm, session_id, self.db)
 
-        # Create memory toolkit (write-only strategic issue storage)
-        self.memory_toolkit = MemoryToolkit(session_id, self.db)
+        # Create memory toolkit with cheap LLM for de-duplication (write-only strategic issue storage)
+        self.memory_toolkit = MemoryToolkit(session_id, self.db, cheap_llm)
 
         # Pass both toolkits to adventurer service
         self.adventurer_service = AdventurerService(self.history_toolkit, self.memory_toolkit)
