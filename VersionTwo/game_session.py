@@ -54,6 +54,9 @@ class GameSession:
         self.turn_number = last_turn if last_turn is not None else 0
         self.logger.logger.info(f"Resuming from turn {self.turn_number}")
 
+        # Track reasoning from previous turn (to display with correct command)
+        self.pending_reasoning = None
+
     async def play(self):
         """
         Main gameplay loop. Runs indefinitely until interrupted.
@@ -117,15 +120,19 @@ class GameSession:
                 self.turn_number
             )
 
-            # Step 4: Update display with the turn (include decision reasoning)
+            # Step 4: Update display with the turn
+            # Use pending_reasoning from PREVIOUS turn (reasoning for the command that just executed)
             display.add_turn(
                 location=zork_response.LocationName,
                 game_text=zork_response.Response,
                 command=input_text,  # The command that was just executed
                 score=zork_response.Score,
                 moves=zork_response.Moves,
-                reasoning=player_response.reason  # Decision Agent's reasoning
+                reasoning=self.pending_reasoning  # Reasoning for THIS command (from previous turn)
             )
+
+            # Store reasoning for the NEXT turn
+            self.pending_reasoning = player_response.reason
 
             # Step 5: Update display with current summaries
             recent_summary = self.history_toolkit.state.get_full_summary()

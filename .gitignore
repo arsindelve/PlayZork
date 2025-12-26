@@ -6,3 +6,4 @@
 /VersionTwo/data/
 __pycache__/
 *.pyc
+/data/zork_sessions.db

@@ -172,9 +172,11 @@ class DisplayManager:
         """Update all four regions of the display"""
         # Update Game I/O region
         io_content = self._build_io_content()
+        # Keep only the last 5 turns to prevent overflow (scrolling doesn't work well in Rich panels)
+        # Older turns are still available in summaries
         self.layout["game_io"].update(Panel(
             io_content,
-            title=f"[bold cyan]Game I/O[/bold cyan] - Score: [yellow]{self.current_score}[/yellow] | Moves: [green]{self.current_moves}[/green]",
+            title=f"[bold cyan]Game I/O (Last 5 Turns)[/bold cyan] - Score: [yellow]{self.current_score}[/yellow] | Moves: [green]{self.current_moves}[/green]",
             subtitle="[dim]Press Ctrl+C to quit[/dim]",
             border_style="cyan"
         ))
@@ -211,7 +213,10 @@ class DisplayManager:
             content.append("Waiting for game to start...", style="dim")
             return content
 
-        for i, (location, game_text, command, reasoning) in enumerate(self.game_turns):
+        # Show only last 5 turns to prevent overflow (older turns available in summary)
+        recent_turns = self.game_turns[-5:]
+
+        for i, (location, game_text, command, reasoning) in enumerate(recent_turns):
             # Location header
             content.append(f"\n[{location}]\n", style="bold cyan")
 
@@ -229,7 +234,7 @@ class DisplayManager:
             content.append("\n")
 
             # Separator between turns (except last)
-            if i < len(self.game_turns) - 1:
+            if i < len(recent_turns) - 1:
                 content.append("─" * 50 + "\n", style="dim")
 
         return content

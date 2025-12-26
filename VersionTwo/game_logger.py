@@ -34,14 +34,14 @@ class GameLogger:
             f.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 80 + "\n\n")
 
-        # Set up logger
-        self.logger = logging.getLogger(f"GameSession_{session_id}")
-        self.logger.setLevel(logging.DEBUG)
+        # Set up ROOT logger so ALL loggers write to file (including decision_graph, etc.)
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
 
-        # Remove any existing handlers
-        self.logger.handlers = []
+        # Remove any existing handlers from root
+        root_logger.handlers = []
 
-        # File handler
+        # File handler for ALL loggers
         file_handler = logging.FileHandler(self.log_file, mode='a')
         file_handler.setLevel(logging.DEBUG)
 
@@ -49,7 +49,11 @@ class GameLogger:
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
 
-        self.logger.addHandler(file_handler)
+        root_logger.addHandler(file_handler)
+
+        # Also create a session-specific logger for backwards compatibility
+        self.logger = logging.getLogger(f"GameSession_{session_id}")
+        self.logger.setLevel(logging.DEBUG)
 
         self.logger.info("Logger initialized")
 

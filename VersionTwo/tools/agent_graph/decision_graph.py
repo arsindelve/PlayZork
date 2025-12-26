@@ -390,10 +390,19 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
         """
         Persistence phase: Store strategic issues if flagged.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         decision = state["decision"]
         zork_response = state["game_response"]
 
+        logger.info("========== PERSIST_NODE START ==========")
+        logger.info(f"Decision.remember: '{decision.remember}'")
+        logger.info(f"Decision.rememberImportance: {decision.rememberImportance}")
+        logger.info(f"Decision.item: '{decision.item}'")
+
         if decision.remember and decision.remember.strip():
+            logger.info(f"ATTEMPTING TO STORE MEMORY: [{decision.rememberImportance}/1000] {decision.remember}")
             was_added = memory_toolkit.add_memory(
                 content=decision.remember,
                 importance=decision.rememberImportance or 500,
@@ -403,9 +412,12 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
                 moves=zork_response.Moves
             )
             state["memory_persisted"] = was_added
+            logger.info(f"Memory added: {was_added}")
         else:
+            logger.info("NO MEMORY TO STORE (remember field empty or whitespace)")
             state["memory_persisted"] = False
 
+        logger.info("========== PERSIST_NODE END ==========")
         return state
 
     return persist_node
