@@ -3,13 +3,14 @@ from .prompt_library import PromptLibrary
 from .adventurer_response import AdventurerResponse
 
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
 from tools.agent_graph import create_decision_graph, ExplorerAgent, IssueClosedResponse, ObserverResponse
 from game_logger import GameLogger
+from config import CHEAP_MODEL, EXPENSIVE_MODEL
 from typing import List, Tuple, Optional
 
 
@@ -34,8 +35,8 @@ class AdventurerService:
         # Turn number tracking (mutable reference for persist node)
         self.turn_number_ref = {"current": 0}
 
-        # Create LLM for decisions and IssueAgent proposals
-        self.decision_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        # Create LLM for decisions and IssueAgent proposals (using expensive model)
+        self.decision_llm = ChatOllama(model=EXPENSIVE_MODEL, temperature=0)
 
         # Create research agent and decision chain
         self.research_agent = self._create_research_agent()
@@ -59,8 +60,8 @@ class AdventurerService:
         Returns:
             Runnable chain configured with tools
         """
-        # Use GPT-4o-mini for reasoning with tools
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        # Use cheap model for reasoning with tools
+        llm = ChatOllama(model=CHEAP_MODEL, temperature=0)
 
         # Combine history and mapper tools
         tools = self.history_toolkit.get_tools() + self.mapper_toolkit.get_tools()
@@ -131,6 +132,7 @@ class AdventurerService:
             "game_response": last_game_response,
             "issue_agents": [],  # Will be populated by spawn_agents node
             "explorer_agent": None,  # Will be populated if unexplored directions exist
+            "loop_detection_agent": None,  # Will be populated by spawn_agents node (always)
             "research_context": "",
             "decision": None,
             "issue_closed_response": None,  # Will be populated by close_issues node
@@ -172,6 +174,21 @@ class AdventurerService:
             if explorer_agent.reason:
                 self.logger.logger.info(
                     f"  > Reason: {explorer_agent.reason}"
+                )
+
+        # Log loop detection agent if loop detected
+        loop_detection_agent = final_state["loop_detection_agent"]
+        if loop_detection_agent and loop_detection_agent.loop_detected:
+            self.logger.logger.info(f"SPAWNED 1 LoopDetectionAgent - ⚠️ LOOP DETECTED:")
+            self.logger.logger.info(
+                f"  [LOOP: {loop_detection_agent.loop_type}]"
+            )
+            self.logger.logger.info(
+                f"  > Proposed: '{loop_detection_agent.proposed_action}' (confidence: {loop_detection_agent.confidence}/100)"
+            )
+            if loop_detection_agent.reason:
+                self.logger.logger.info(
+                    f"  > Reason: {loop_detection_agent.reason}"
                 )
 
         # Extract decision, closed issues, and observation from final state

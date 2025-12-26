@@ -9,7 +9,7 @@ Responsibility: Single-purpose observer that ONLY identifies what's new.
 Does NOT make decisions about what command to execute.
 """
 from typing import Optional, List
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.tools import BaseTool
 from .observer_response import ObserverResponse
 from tools.memory import MemoryToolkit
@@ -41,7 +41,7 @@ class ObserverAgent:
         location: str,
         score: int,
         moves: int,
-        decision_llm: ChatOpenAI,
+        decision_llm: ChatOllama,
         research_agent,
         history_tools: List[BaseTool],
         memory_toolkit: MemoryToolkit
@@ -177,8 +177,13 @@ WHAT TO IDENTIFY (ONLY IF NEW)
 
 ✓ NEW opportunities:
   - Mechanisms or switches discovered
-  - Pathways revealed
   - Clues about puzzle solutions
+
+✗ DO NOT TRACK (ExplorerAgent handles these):
+  - Blocked paths ("You can't go that way")
+  - New directions or exits mentioned
+  - Movement confirmations
+  - Simple location descriptions
 
 EXAMPLES:
 
@@ -220,10 +225,11 @@ CRITICAL RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1. Check TRACKED ISSUES first - if already listed, leave 'remember' EMPTY
-2. Only track TRULY NEW discoveries
-3. General descriptions are NOT strategic issues
-4. Movement confirmations are NOT strategic issues
-5. Include location name in 'remember' field for context
+2. Only track TRULY NEW discoveries that require puzzle-solving
+3. DO NOT track blocked paths, new exits, or directions (ExplorerAgent handles exploration)
+4. DO NOT track general location descriptions or movement confirmations
+5. ONLY track items, obstacles, or puzzles that need solving
+6. Include location name in 'remember' field for context
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CURRENT ANALYSIS

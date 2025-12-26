@@ -16,6 +16,7 @@ from tools.mapping import MapperToolkit
 from langchain_core.runnables import Runnable
 from .issue_agent import IssueAgent
 from .explorer_agent import ExplorerAgent
+from .loop_detection_agent import LoopDetectionAgent
 from .issue_closed_agent import IssueClosedAgent
 from .issue_closed_response import IssueClosedResponse
 from .observer_agent import ObserverAgent
@@ -31,6 +32,7 @@ class DecisionState(TypedDict):
     # Spawn phase output
     issue_agents: List[IssueAgent]
     explorer_agent: Optional[ExplorerAgent]  # Single agent, can be None
+    loop_detection_agent: Optional[LoopDetectionAgent]  # Single agent, always spawned
 
     # Research phase output
     research_context: str
@@ -152,8 +154,13 @@ def create_spawn_agents_node(
             else:
                 logger.info("NO ExplorerAgent spawned - all directions explored from this location")
 
-            # ========== PARALLEL RESEARCH: IssueAgents + ExplorerAgent ==========
-            logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {1 if explorer_agent else 0} ExplorerAgent...")
+            # ========== NEW: Spawn ONE LoopDetectionAgent (ALWAYS) ==========
+            loop_detection_agent = LoopDetectionAgent()
+            logger.info("SPAWNED 1 LoopDetectionAgent - monitors for stuck/oscillating patterns")
+
+            # ========== PARALLEL RESEARCH: IssueAgents + ExplorerAgent + LoopDetectionAgent ==========
+            num_special_agents = (1 if explorer_agent else 0) + 1  # +1 for LoopDetectionAgent
+            logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {num_special_agents} special agents...")
 
             # Get tools
             history_tools = history_toolkit.get_tools()
@@ -175,6 +182,19 @@ def create_spawn_agents_node(
                             current_moves=current_moves
                         )
                         logger.info(f"Research complete for ExplorerAgent -> {agent.proposed_action}")
+                    elif isinstance(agent, LoopDetectionAgent):
+                        logger.info(f"Starting research for LoopDetectionAgent")
+                        agent.research_and_propose(
+                            research_agent=research_agent,
+                            decision_llm=decision_llm,
+                            history_tools=history_tools,
+                            mapper_tools=mapper_tools,
+                            current_location=current_location,
+                            current_game_response=current_game_text,
+                            current_score=current_score,
+                            current_moves=current_moves
+                        )
+                        logger.info(f"Research complete for LoopDetectionAgent -> {agent.proposed_action} (conf: {agent.confidence})")
                     else:  # IssueAgent
                         logger.info(f"Starting research for IssueAgent: '{agent.issue_content}'")
                         agent.research_and_propose(
@@ -198,8 +218,8 @@ def create_spawn_agents_node(
                     agent.confidence = 0
                     agent.reason = f"Research failed: {str(e)}"
 
-            # Combine all agents
-            all_agents = issue_agents + ([explorer_agent] if explorer_agent else [])
+            # Combine all agents (IssueAgents + ExplorerAgent + LoopDetectionAgent)
+            all_agents = issue_agents + ([explorer_agent] if explorer_agent else []) + [loop_detection_agent]
 
             # Run all agents in parallel using threads
             if all_agents:
@@ -219,6 +239,7 @@ def create_spawn_agents_node(
 
             state["issue_agents"] = issue_agents
             state["explorer_agent"] = explorer_agent  # Single agent, can be None
+            state["loop_detection_agent"] = loop_detection_agent  # Always present
             return state
 
         except Exception as e:
@@ -226,6 +247,7 @@ def create_spawn_agents_node(
             # Return empty agents on error
             state["issue_agents"] = []
             state["explorer_agent"] = None
+            state["loop_detection_agent"] = None
             return state
 
     return spawn_agents_node
@@ -323,6 +345,7 @@ def create_decision_node(decision_chain: Runnable):
         research_context = state["research_context"]
         issue_agents = state["issue_agents"]
         explorer_agent = state["explorer_agent"]
+        loop_detection_agent = state["loop_detection_agent"]
 
         logger.info("========== DECISION_NODE INPUT ==========")
         logger.info(f"Location: {zork_response.LocationName}")
@@ -331,7 +354,7 @@ def create_decision_node(decision_chain: Runnable):
         logger.info(f"Research Context (first 500):\n{research_context[:500]}...")
 
         # Format agent proposals for Decision Agent
-        agent_proposals_text = _format_agent_proposals(issue_agents, explorer_agent)
+        agent_proposals_text = _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent)
         logger.info(f"Agent Proposals:\n{agent_proposals_text}")
         logger.info("=========================================")
 
@@ -358,9 +381,17 @@ def create_decision_node(decision_chain: Runnable):
     return decision_node
 
 
-def _format_agent_proposals(issue_agents, explorer_agent):
+def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent):
     """Format agent proposals for Decision Agent evaluation"""
     lines = []
+
+    # LoopDetectionAgent (FIRST - highest priority if loop detected)
+    if loop_detection_agent and loop_detection_agent.confidence > 0:
+        lines.append(f"LoopDetectionAgent: [⚠️ LOOP DETECTED, Confidence: {loop_detection_agent.confidence}/100]")
+        lines.append(f"  Loop Type: {loop_detection_agent.loop_type}")
+        lines.append(f"  Proposed Action: {loop_detection_agent.proposed_action}")
+        lines.append(f"  Reason: {loop_detection_agent.reason}")
+        lines.append("")
 
     # IssueAgents
     for i, agent in enumerate(issue_agents, 1):

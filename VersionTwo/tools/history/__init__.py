@@ -1,4 +1,4 @@
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from typing import List
 
 from .history_state import HistoryState, GameTurn
@@ -14,7 +14,7 @@ class HistoryToolkit:
     Now with SQLite persistence.
     """
 
-    def __init__(self, summarizer_llm: ChatOpenAI, session_id: str, db: DatabaseManager):
+    def __init__(self, summarizer_llm: ChatOllama, session_id: str, db: DatabaseManager):
         """
         Initialize the history toolkit with database backend
 

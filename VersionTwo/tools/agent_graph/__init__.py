@@ -2,6 +2,7 @@
 from .decision_graph import create_decision_graph, DecisionState
 from .issue_agent import IssueAgent
 from .explorer_agent import ExplorerAgent
+from .loop_detection_agent import LoopDetectionAgent
 from .issue_closed_agent import IssueClosedAgent
 from .issue_closed_response import IssueClosedResponse
 from .observer_agent import ObserverAgent
@@ -12,6 +13,7 @@ __all__ = [
     "DecisionState",
     "IssueAgent",
     "ExplorerAgent",
+    "LoopDetectionAgent",
     "IssueClosedAgent",
     "IssueClosedResponse",
     "ObserverAgent",

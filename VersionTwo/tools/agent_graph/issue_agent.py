@@ -4,7 +4,7 @@ from typing import Optional
 from pydantic import BaseModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 import logging
 
 
@@ -64,7 +64,7 @@ class IssueAgent:
     def research_and_propose(
         self,
         research_agent: Runnable,
-        decision_llm: ChatOpenAI,
+        decision_llm: ChatOllama,
         history_tools: list,
         current_location: str,
         current_game_response: str,
@@ -133,33 +133,72 @@ class IssueAgent:
         logger.info(f"[IssueAgent] Research context length: {len(self.research_context)} chars")
 
         proposal_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an IssueAgent tasked with solving a specific puzzle/obstacle in Zork.
+            ("system", """You are an IssueAgent tasked with solving ONE SPECIFIC puzzle/obstacle in Zork.
 
-YOUR RESPONSIBILITY:
-Propose the BEST solution for YOUR specific issue based on available information.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL QUESTION YOU MUST ANSWER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-CRITICAL: Be HONEST about your confidence. Your job is NOT to advocate for your issue.
-Your job is to provide the BEST idea for solving it. If you don't have a good solution, give a LOW score.
+"Does the action I'm proposing DIRECTLY solve MY SPECIFIC issue?"
 
-Rules for proposed_action:
-- If there's a clear, actionable step to solve YOUR issue, propose it (e.g., "OPEN WINDOW", "TAKE KEY", "GO NORTH")
-- If you need more information or have no viable solution right now, respond with "nothing"
-- Be specific to YOUR issue only - don't propose actions for other problems
+If YES → Give high confidence (70-100)
+If NO → Give confidence 0 or very low (1-20)
 
-Rules for reason:
-- Explain HOW this action will solve YOUR specific issue
-- Reference relevant history or evidence from your research
-- Be concise (1-2 sentences)
-- If action is "nothing", explain why you lack a viable solution
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+YOUR RESPONSIBILITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Confidence score (1-100) - BE HONEST:
-- 80-100: Strong, actionable solution with clear path to solving YOUR issue
-- 50-79: Reasonable approach, worth trying, likely to make progress
-- 20-49: Weak idea, uncertain if it will help, better than nothing
-- 1-19: No good solution available, just guessing
+You ONLY propose actions that solve YOUR specific issue.
+You do NOT propose actions for other issues, exploration, or general progress.
 
-IMPORTANT: If you don't have a confident solution for YOUR issue, give a LOW score (20 or below).
-The Decision Agent will choose the IssueAgent with the MOST CONFIDENT, VIABLE solution.
+EXAMPLES OF CORRECT BEHAVIOR:
+
+Your Issue: "Locked door in Kitchen - need key"
+Action: "UNLOCK DOOR WITH KEY" → Confidence 90 ✓ (solves YOUR issue)
+Action: "GO NORTH" → Confidence 0 ✗ (doesn't solve YOUR issue)
+Action: "EXAMINE ROOM" → Confidence 0 ✗ (doesn't solve YOUR issue)
+
+Your Issue: "Troll blocking Bridge - need to defeat or bypass"
+Action: "KILL TROLL WITH SWORD" → Confidence 85 ✓ (solves YOUR issue)
+Action: "TAKE LAMP" → Confidence 0 ✗ (doesn't solve YOUR issue)
+Action: "GO EAST" → Confidence 0 ✗ (doesn't solve YOUR issue)
+
+Your Issue: "Small mailbox at West of House"
+Action: "OPEN MAILBOX" → Confidence 80 ✓ (solves YOUR issue)
+Action: "GO WEST" → Confidence 0 ✗ (doesn't solve YOUR issue)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULES FOR PROPOSED_ACTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. If you have a DIRECT solution for YOUR issue → propose it clearly
+2. If you DON'T have a solution for YOUR issue → propose "nothing" and confidence 0
+3. NEVER propose actions that help other issues or general exploration
+4. NEVER propose movement commands unless movement DIRECTLY solves YOUR issue
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONFIDENCE SCORING (BE BRUTALLY HONEST)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Ask yourself: "Will this action DIRECTLY solve MY specific issue?"
+
+90-100: Definite solution - this action will solve MY issue right now
+70-89:  Very likely - this action should solve MY issue
+50-69:  Moderate - this action might solve MY issue
+20-49:  Weak - this action probably won't solve MY issue
+0-19:   No solution - this action doesn't solve MY issue at all
+
+CRITICAL: If your proposed action doesn't DIRECTLY address YOUR SPECIFIC issue,
+your confidence MUST be 0 or very low (1-20).
+
+Don't give 70+ confidence unless the action DIRECTLY solves YOUR issue!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REASON FIELD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Explain EXACTLY HOW this action solves YOUR SPECIFIC issue.
+If you can't explain how it solves YOUR issue → confidence should be 0.
 
 Respond with structured output."""),
             ("human", """ISSUE YOU ARE SOLVING:
