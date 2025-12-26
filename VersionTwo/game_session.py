@@ -2,6 +2,7 @@ from adventurer.adventurer_service import AdventurerService
 from zork.zork_service import ZorkService
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
+from tools.database import DatabaseManager
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from display_manager import DisplayManager
@@ -22,15 +23,20 @@ class GameSession:
         self.logger = GameLogger.get_instance(session_id)
         self.logger.logger.info(f"Initializing GameSession with ID: {session_id}")
 
+        # Initialize database for persistent storage
+        self.db = DatabaseManager()
+        self.db.create_session(session_id)
+        self.logger.logger.info(f"Created database session: {session_id}")
+
         self.zork_service = ZorkService(session_id=session_id)
 
         # Create history toolkit with Llama 3.3 for summarization (cheap, local)
         ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         cheap_llm = ChatOllama(model="llama3.3", temperature=0, base_url=ollama_host)
-        self.history_toolkit = HistoryToolkit(cheap_llm)
+        self.history_toolkit = HistoryToolkit(cheap_llm, session_id, self.db)
 
-        # Create memory toolkit with same cheap LLM
-        self.memory_toolkit = MemoryToolkit(cheap_llm)
+        # Create memory toolkit (write-only strategic issue storage)
+        self.memory_toolkit = MemoryToolkit(session_id, self.db)
 
         # Pass both toolkits to adventurer service
         self.adventurer_service = AdventurerService(self.history_toolkit, self.memory_toolkit)

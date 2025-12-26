@@ -4,10 +4,12 @@ from .adventurer_response import AdventurerResponse
 
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from game_logger import GameLogger
+import os
 
 
 class AdventurerService:
@@ -32,15 +34,17 @@ class AdventurerService:
 
     def _create_research_agent(self) -> Runnable:
         """
-        Create the research agent that can call history and memory tools (Phase 1)
+        Create the research agent that can call history tools (Phase 1)
 
         Returns:
-            Runnable chain configured with history and memory tools
+            Runnable chain configured with history tools
         """
-        llm = ChatOpenAI(model="gpt-5.2-2025-12-11", temperature=0)
+        # Use Llama 3.3 for reasoning with tools (local on Mac)
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        llm = ChatOllama(model="llama3.3", temperature=0, base_url=ollama_host)
 
-        # Combine history and memory tools
-        tools = self.history_toolkit.get_tools() + self.memory_toolkit.get_tools()
+        # Only history tools (memory is write-only, not queryable)
+        tools = self.history_toolkit.get_tools()
 
         # Bind tools to the LLM and REQUIRE it to call at least one tool
         llm_with_tools = llm.bind_tools(tools, tool_choice="any")
@@ -61,7 +65,9 @@ class AdventurerService:
         Returns:
             Runnable chain that returns AdventurerResponse
         """
-        llm = ChatOpenAI(model="gpt-5.2-2025-12-11", temperature=0)
+        # Use Llama 3.3 for decision making with structured output (local on Mac)
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        llm = ChatOllama(model="llama3.3", temperature=0, base_url=ollama_host)
 
         # Retrieve the predefined system prompt
         system_prompt = PromptLibrary.get_system_prompt()

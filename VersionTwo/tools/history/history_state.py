@@ -1,5 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel
+from tools.database import DatabaseManager
 
 
 class GameTurn(BaseModel):
@@ -15,13 +16,19 @@ class GameTurn(BaseModel):
 class HistoryState:
     """
     Pure state management for game history.
-    Maintains raw turns and summary without LLM logic.
+    Maintains raw turns and summary with SQLite persistence.
     """
 
-    def __init__(self):
-        self.raw_turns: List[GameTurn] = []
-        self.summary: str = ""  # Recent summary (last 15 turns)
-        self.long_running_summary: str = ""  # Complete summary of everything
+    def __init__(self, session_id: str, db: DatabaseManager):
+        """
+        Initialize history state with database backend.
+
+        Args:
+            session_id: Unique identifier for this game session
+            db: DatabaseManager instance for persistence
+        """
+        self.session_id = session_id
+        self.db = db
         self.previous_command: str = "LOOK"
         self._turn_counter: int = 0
 
@@ -29,7 +36,7 @@ class HistoryState:
                  location: Optional[str] = None, score: int = 0,
                  moves: int = 0) -> GameTurn:
         """
-        Add a new turn to raw history
+        Add a new turn to raw history (persisted to database)
 
         Args:
             game_response: Text response from the game
@@ -50,13 +57,24 @@ class HistoryState:
             score=score,
             moves=moves
         )
-        self.raw_turns.append(turn)
+
+        # Persist to database
+        self.db.add_turn(
+            session_id=self.session_id,
+            turn_number=self._turn_counter,
+            player_command=player_command,
+            game_response=game_response,
+            location=location or "",
+            score=score,
+            moves=moves
+        )
+
         self.previous_command = player_command
         return turn
 
     def get_recent_turns(self, n: int) -> List[GameTurn]:
         """
-        Get the last N turns from history
+        Get the last N turns from history (from database)
 
         Args:
             n: Number of recent turns to retrieve
@@ -64,45 +82,83 @@ class HistoryState:
         Returns:
             List of most recent GameTurn objects
         """
-        n = min(n, len(self.raw_turns))
-        return self.raw_turns[-n:] if n > 0 else []
+        db_turns = self.db.get_recent_turns(self.session_id, n)
+        # Convert database tuples to GameTurn objects
+        # db_turns format: (turn_number, player_command, game_response, location, score, moves)
+        turns = []
+        for turn_data in reversed(db_turns):  # Reverse because DB returns DESC order
+            turns.append(GameTurn(
+                turn_number=turn_data[0],
+                player_command=turn_data[1],
+                game_response=turn_data[2],
+                location=turn_data[3] or None,
+                score=turn_data[4],
+                moves=turn_data[5]
+            ))
+        return turns
 
     def get_full_summary(self) -> str:
         """
-        Get the recent summary (last 15 turns)
+        Get the recent summary (last 15 turns) from database
 
         Returns:
             Recent summary string
         """
-        return self.summary if self.summary else "No history available yet."
+        summary_data = self.db.get_latest_summary(self.session_id)
+        if summary_data:
+            return summary_data[0]  # recent_summary is first element
+        return "No history available yet."
 
     def update_summary(self, new_summary: str) -> None:
         """
-        Update the recent summary (called by summarizer)
+        Update the recent summary (called by summarizer, persisted to database)
 
         Args:
             new_summary: New summary text to store
         """
-        self.summary = new_summary
+        # Get existing long-running summary if any
+        summary_data = self.db.get_latest_summary(self.session_id)
+        long_running = summary_data[1] if summary_data else ""
+
+        # Save both summaries with current turn number
+        self.db.save_summary(
+            session_id=self.session_id,
+            turn_number=self._turn_counter,
+            recent_summary=new_summary,
+            long_running_summary=long_running
+        )
 
     def get_long_running_summary(self) -> str:
         """
-        Get the complete long-running summary of all game history
+        Get the complete long-running summary of all game history from database
 
         Returns:
             Long-running summary string
         """
-        return self.long_running_summary if self.long_running_summary else "No history available yet."
+        summary_data = self.db.get_latest_summary(self.session_id)
+        if summary_data and summary_data[1]:
+            return summary_data[1]  # long_running_summary is second element
+        return "No history available yet."
 
     def update_long_running_summary(self, new_summary: str) -> None:
         """
-        Update the long-running summary (called by summarizer)
+        Update the long-running summary (called by summarizer, persisted to database)
 
         Args:
             new_summary: New long-running summary text to store
         """
-        self.long_running_summary = new_summary
+        # Get existing recent summary if any
+        summary_data = self.db.get_latest_summary(self.session_id)
+        recent = summary_data[0] if summary_data else ""
+
+        # Save both summaries with current turn number
+        self.db.save_summary(
+            session_id=self.session_id,
+            turn_number=self._turn_counter,
+            recent_summary=recent,
+            long_running_summary=new_summary
+        )
 
     def get_turn_count(self) -> int:
         """Get the total number of turns recorded"""
-        return len(self.raw_turns)
+        return self._turn_counter

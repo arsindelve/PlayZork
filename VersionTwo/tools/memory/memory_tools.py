@@ -21,20 +21,24 @@ def initialize_memory_tools(memory_state: MemoryState, retriever: MemoryRetrieve
 @tool
 def get_top_memories(limit: int = 10) -> str:
     """
-    Get the discoveries YOU EXPLICITLY FLAGGED as worth remembering - your own persistent insights.
+    Get strategic issues YOU FLAGGED: unsolved puzzles, major obstacles, obvious things to try.
 
-    These are NOT automatic - these are things you consciously chose to remember via the
-    'remember' field because they were critical: puzzle solutions, important items, obstacles,
-    key locations, breakthrough discoveries. Sorted by importance (you rated 1-1000).
+    These are ACTIONABLE CHALLENGES you recorded, sorted by how much solving them helps win
+    the game (importance 1-1000). This is NOT a list of observations or items - it's a list
+    of PROBLEMS TO SOLVE and OBSTACLES TO OVERCOME.
 
-    If you flagged something as worth remembering, it was IMPORTANT. Ignoring this means
-    forgetting your own hard-won insights from earlier exploration.
+    Each memory is a strategic issue like:
+    - "locked grating blocks path east" (puzzle to solve)
+    - "need to get inside white house" (obvious thing to try)
+    - "troll demands payment to pass bridge" (major obstacle)
+
+    Higher importance = more critical to winning. Focus on high-importance issues first.
 
     Args:
-        limit: Number of top memories (default: 10, max: 20)
+        limit: Number of top strategic issues (default: 10, max: 20)
 
     Returns:
-        Your most important flagged discoveries with importance scores
+        Strategic issues sorted by importance with scores
     """
     if _memory_state is None:
         return "Error: Memory system not initialized."
@@ -44,7 +48,7 @@ def get_top_memories(limit: int = 10) -> str:
     top_memories = _memory_state.get_top_memories(limit)
 
     if not top_memories:
-        return "No memories recorded yet. As you play, important discoveries will be remembered here."
+        return "No strategic issues recorded yet. As you discover unsolved puzzles, obstacles, or obvious things to try, they'll be tracked here."
 
     return _memory_retriever.get_top_insights(top_memories, limit)
 
@@ -52,25 +56,24 @@ def get_top_memories(limit: int = 10) -> str:
 @tool
 def query_memories(question: str) -> str:
     """
-    Search your flagged memories with AI-powered semantic search to answer a SPECIFIC question.
+    Search strategic issues (puzzles, obstacles, things to try) with AI-powered semantic search.
 
-    This uses an LLM to intelligently find relevant memories and synthesize an answer - NOT
-    just keyword matching. Ask about items, locations, puzzles, obstacles, anything you
-    previously flagged as important.
+    This uses an LLM to intelligently find relevant UNSOLVED PROBLEMS and synthesize an answer.
+    Ask about specific puzzles, obstacles, or challenges you've encountered.
 
-    Examples of powerful queries:
-        "Where did I see a rusty key?" - Find item locations
-        "What puzzles are still unsolved?" - Track progress
-        "Which doors are locked?" - Remember obstacles
-        "What do I know about the attic?" - Recall location details
+    Example queries:
+        "What puzzles are still unsolved?" - Track what needs solving
+        "What obstacles are blocking my progress?" - Find what to overcome
+        "What obvious things should I try?" - Get leads
+        "Are there any locked doors?" - Find blocking obstacles
 
-    This is your ONLY way to search memories by content, not just look at the top 10.
+    This searches your STRATEGIC ISSUES, not general observations.
 
     Args:
         question: Natural language question
 
     Returns:
-        AI-generated answer based on relevant memories found
+        AI-generated answer based on relevant strategic issues
     """
     if _memory_state is None:
         return "Error: Memory system not initialized."
@@ -78,10 +81,11 @@ def query_memories(question: str) -> str:
     if not question or not question.strip():
         return "Error: Please provide a specific question."
 
-    all_memories = _memory_state.get_all_memories()
+    # Get top memories (limit 100 for search corpus)
+    all_memories = _memory_state.get_top_memories(limit=100)
 
     if not all_memories:
-        return "No memories to search. Nothing important has been flagged yet."
+        return "No strategic issues to search. No puzzles, obstacles, or challenges have been flagged yet."
 
     return _memory_retriever.query_memories(question, all_memories, max_results=5)
 
@@ -89,23 +93,23 @@ def query_memories(question: str) -> str:
 @tool
 def get_location_memories(location: str) -> str:
     """
-    Recall EVERYTHING you flagged as important at a specific location - essential when revisiting places.
+    Get strategic issues (puzzles, obstacles) you flagged at a specific location.
 
-    When you return to a location, this shows all discoveries you made there: items found,
-    puzzles encountered, observations noted. Critical for:
-    - Remembering what items were available here
-    - Recalling puzzle clues specific to this room
-    - Avoiding re-exploring what you already checked
-    - Seeing if you have new tools/knowledge to solve old obstacles
+    When revisiting a place, this shows PROBLEMS YOU NEED TO SOLVE there:
+    - Unsolved puzzles at this location
+    - Obstacles blocking progress here
+    - Things you should try at this place
 
-    Without this, returning to a location means starting from scratch instead of building
-    on what you learned before.
+    Critical when returning to a location with new items or knowledge - you can see
+    if you now have what's needed to solve puzzles you couldn't solve before.
+
+    Does NOT show general observations or items - only ACTIONABLE CHALLENGES.
 
     Args:
         location: Exact location name (e.g., "West Of House", "Living Room")
 
     Returns:
-        All memories from that location with context
+        Strategic issues at that location with importance scores
     """
     if _memory_state is None:
         return "Error: Memory system not initialized."
@@ -116,7 +120,7 @@ def get_location_memories(location: str) -> str:
     location_memories = _memory_state.get_memories_by_location(location)
 
     if not location_memories:
-        return f"No memories recorded for '{location}'. Either you haven't been there or nothing important was noted."
+        return f"No strategic issues recorded for '{location}'. No unsolved puzzles or obstacles were flagged at this location."
 
     return _memory_retriever.summarize_location_memories(location, location_memories)
 

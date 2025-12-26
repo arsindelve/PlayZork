@@ -4,22 +4,26 @@ from typing import List
 from .history_state import HistoryState, GameTurn
 from .history_summarizer import HistorySummarizer
 from .history_tools import initialize_history_tools, get_history_tools
+from tools.database import DatabaseManager
 
 
 class HistoryToolkit:
     """
     Facade for the history tool system.
     Manages state, summarization, and provides tools for LangChain agents.
+    Now with SQLite persistence.
     """
 
-    def __init__(self, summarizer_llm: ChatOpenAI):
+    def __init__(self, summarizer_llm: ChatOpenAI, session_id: str, db: DatabaseManager):
         """
-        Initialize the history toolkit
+        Initialize the history toolkit with database backend
 
         Args:
-            summarizer_llm: LLM to use for generating summaries (should be cheap like GPT-3.5)
+            summarizer_llm: LLM to use for generating summaries (should be cheap)
+            session_id: Unique identifier for this game session
+            db: DatabaseManager instance for persistence
         """
-        self.state = HistoryState()
+        self.state = HistoryState(session_id=session_id, db=db)
         self.summarizer = HistorySummarizer(summarizer_llm)
 
         # Initialize the module-level state for tools

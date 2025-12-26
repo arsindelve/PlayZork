@@ -1,29 +1,24 @@
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import Tool
-from typing import List
 from .memory_state import MemoryState, Memory
-from .memory_retriever import MemoryRetriever
-from .memory_tools import initialize_memory_tools, get_memory_tools
+from tools.database import DatabaseManager
 
 
 class MemoryToolkit:
     """
-    Facade for the memory system.
-    Manages memory state and provides tools for the agent.
+    Manages strategic issue storage (puzzles, obstacles, things to try).
+
+    Memory is WRITE-ONLY: the agent flags strategic issues via the 'remember' field,
+    but cannot query them as tools. All strategic issues persist to SQLite.
     """
 
-    def __init__(self, retriever_llm: ChatOpenAI):
+    def __init__(self, session_id: str, db: DatabaseManager):
         """
-        Initialize the memory toolkit.
+        Initialize the memory toolkit with database backend.
 
         Args:
-            retriever_llm: A cheap LLM for semantic search (e.g., GPT-3.5-turbo)
+            session_id: Unique identifier for this game session
+            db: DatabaseManager instance for persistence
         """
-        self.state = MemoryState()
-        self.retriever = MemoryRetriever(retriever_llm)
-
-        # Initialize module-level tools
-        initialize_memory_tools(self.state, self.retriever)
+        self.state = MemoryState(session_id=session_id, db=db)
 
     def add_memory(
         self,
@@ -59,22 +54,14 @@ class MemoryToolkit:
 
         return memory is not None
 
-    def get_tools(self) -> List[Tool]:
-        """
-        Get all memory tools for the agent to use.
-
-        Returns:
-            List of LangChain tools: get_top_memories, query_memories, get_location_memories
-        """
-        return get_memory_tools()
-
     def get_memory_count(self) -> int:
         """Get total number of stored memories"""
         return self.state.get_memory_count()
 
     def get_summary_stats(self) -> dict:
         """Get summary statistics about memories"""
-        memories = self.state.get_all_memories()
+        # Get top memories (up to 100) for stats
+        memories = self.state.get_top_memories(limit=100)
 
         if not memories:
             return {
@@ -84,10 +71,10 @@ class MemoryToolkit:
             }
 
         return {
-            "total_memories": len(memories),
+            "total_memories": self.state.get_memory_count(),
             "avg_importance": sum(m.importance for m in memories) / len(memories),
             "locations_covered": len(set(m.location for m in memories)),
-            "top_location": max(set(m.location for m in memories), key=lambda loc: sum(1 for m in memories if m.location == loc))
+            "top_location": max(set(m.location for m in memories), key=lambda loc: sum(1 for m in memories if m.location == loc)) if memories else ""
         }
 
 

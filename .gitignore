@@ -2,3 +2,7 @@
 /.claude/settings.local.json
 /.idea/*
 /.env
+/VersionTwo/logs/
+/VersionTwo/data/
+__pycache__/
+*.pyc

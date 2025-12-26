@@ -47,8 +47,8 @@ class PromptLibrary:
     {{
         "command": "Your NEXT command. Must NOT be a failed action from research analysis. If stuck, try directional movement.",
         "reason": "brief explanation based on research analysis and game state",
-        "remember": "Use this field only for new, novel, or critical ideas for solving the game, new unsolved puzzles, or new obstacles essential to game progress. These are like Leonard's tattoos in Memento. Memory is limited, so avoid duplicates or minor details. Leave empty if unnecessary. Do not repeat yourself or duplicate reminders that already appear in the above prompt.",
-        "rememberImportance": "the number, between 1 and 1000, of how important the above reminder is, 1 is not really, 1000 is critical to winning the game. Lower number items are likely to be forgotten when we run out of memory.",
+        "remember": "Record STRATEGIC ISSUES only: (1) UNSOLVED PUZZLES you discovered (e.g., 'locked grating blocks path east', 'need to cross the river somehow'), (2) OBVIOUS THINGS TO TRY that could unlock progress (e.g., 'get inside the white house', 'find a light source for dark areas'), (3) MAJOR OBSTACLES preventing advancement (e.g., 'troll demands payment to pass', 'cyclops is hostile and blocking path'). Do NOT record observations, items, or general notes. Memory is limited. Leave empty if no strategic issue discovered this turn.",
+        "rememberImportance": "Score 1-1000 based on: How much will SOLVING/OVERCOMING this issue help us WIN the game (reach 350 points)? Major blocking puzzles/obstacles = 800-1000. Promising leads = 500-700. Minor puzzles = 100-400. This score determines priority when making decisions.",
         "item": "any new, interesting items you have found in this location, along with their locations, which are not already mentioned above. For example 'there is a box and a light bulb in the maintenance room'. Omit if there is nothing here.",
         "moved": "if you attempted to move in a certain direction, list the direction you tried to go. Otherwise, leave this empty."
     }}
@@ -72,16 +72,11 @@ class PromptLibrary:
   def get_research_agent_prompt():
     return """You are an assistant helping someone play Zork I.
 
-    You have access to tools that let you query game history and memories:
+    You have access to tools that let you query game history:
 
     HISTORY TOOLS:
     - get_recent_turns(n): Get the last N turns of detailed game history
     - get_full_summary(): Get a complete narrative summary of all game history
-
-    MEMORY TOOLS:
-    - get_top_memories(limit): Get the most important flagged memories (up to 10)
-    - query_memories(question): Search memories with a specific question
-    - get_location_memories(location): Get memories about a specific place
 
     Current game state:
     - Score: {score}
@@ -92,15 +87,14 @@ class PromptLibrary:
     CRITICAL INSTRUCTIONS:
     1. ALWAYS call get_full_summary() to understand the overall game state
     2. ALWAYS call get_recent_turns(5) to see recent actions
-    3. Call get_top_memories() to recall important discoveries
-    4. If you need specific information, use query_memories("your question")
-    5. If revisiting a location, use get_location_memories(locationName)
-    6. ANALYZE the data - identify loops, failures, and what to try next
-    7. If stuck in a loop, FLAG THIS CLEARLY
+    3. ANALYZE the data - identify loops, failures, and what to try next
+    4. If stuck in a loop, FLAG THIS CLEARLY
+    5. Look for patterns of repeated failed commands
+    6. Check if we've been in the same location multiple turns without progress
 
     After calling tools, respond with:
     RESEARCH_COMPLETE: [Your analysis in 3-4 sentences]
 
     Example:
-    RESEARCH_COMPLETE: The summary shows we already have the leaflet in inventory. Recent turns reveal a LOOP: we keep trying OPEN MAILBOX and TAKE MAILBOX which both fail. Top memories indicate there's a brass lantern somewhere we haven't explored yet. We need to STOP interacting with the mailbox and try moving NORTH or EAST to find new areas.
+    RESEARCH_COMPLETE: The summary shows we already have the leaflet in inventory. Recent turns reveal a LOOP: we keep trying OPEN MAILBOX and TAKE MAILBOX which both fail. We need to STOP interacting with the mailbox and try moving NORTH or EAST to find new areas.
     """

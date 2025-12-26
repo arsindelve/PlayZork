@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+from tools.database import DatabaseManager
 
 
 class Memory(BaseModel):
@@ -19,10 +20,18 @@ class Memory(BaseModel):
 
 
 class MemoryState:
-    """In-memory storage for all memories"""
+    """SQLite-backed storage for all memories"""
 
-    def __init__(self):
-        self.memories: List[Memory] = []
+    def __init__(self, session_id: str, db: DatabaseManager):
+        """
+        Initialize memory state with database backend.
+
+        Args:
+            session_id: Unique identifier for this game session
+            db: DatabaseManager instance for persistence
+        """
+        self.session_id = session_id
+        self.db = db
 
     def add_memory(
         self,
@@ -34,7 +43,7 @@ class MemoryState:
         moves: int
     ) -> Optional[Memory]:
         """
-        Add a new memory.
+        Add a new memory (persisted to database).
 
         Args:
             content: What to remember
@@ -47,7 +56,7 @@ class MemoryState:
         Returns:
             The created Memory, or None if skipped (empty or duplicate)
         """
-        # Don't add empty or duplicate memories
+        # Don't add empty memories
         if not content or not content.strip():
             return None
 
@@ -60,13 +69,9 @@ class MemoryState:
         # Clamp to valid range
         importance = max(1, min(1000, importance))
 
-        # Check for near-duplicates (fuzzy match on content)
-        for existing in self.memories:
-            if self._is_similar(content, existing.content):
-                # Update importance if new one is higher
-                if importance > existing.importance:
-                    existing.importance = importance
-                return None  # Don't add duplicate
+        # Check for exact duplicates in database
+        if self.db.check_duplicate_memory(self.session_id, content.strip()):
+            return None  # Don't add duplicate
 
         memory = Memory(
             turn_number=turn_number,
@@ -78,41 +83,56 @@ class MemoryState:
             timestamp=datetime.now().isoformat()
         )
 
-        self.memories.append(memory)
-
-        # Keep sorted by importance (highest first)
-        self.memories.sort(key=lambda m: m.importance, reverse=True)
+        # Persist to database
+        self.db.add_memory(
+            session_id=self.session_id,
+            turn_number=turn_number,
+            content=content.strip(),
+            importance=importance,
+            location=location,
+            score=score,
+            moves=moves
+        )
 
         return memory
 
-    def _is_similar(self, text1: str, text2: str) -> bool:
-        """Simple similarity check to avoid duplicates"""
-        # Normalize
-        t1 = text1.lower().strip()
-        t2 = text2.lower().strip()
-
-        # Exact match
-        if t1 == t2:
-            return True
-
-        # One contains the other (80% threshold)
-        if len(t1) > len(t2):
-            return t2 in t1 and len(t2) / len(t1) > 0.8
-        else:
-            return t1 in t2 and len(t1) / len(t2) > 0.8
-
     def get_top_memories(self, limit: int = 10) -> List[Memory]:
-        """Get the N most important memories"""
-        return self.memories[:limit]
+        """Get the N most important memories (from database)"""
+        db_memories = self.db.get_top_memories(self.session_id, limit)
+        # Convert database tuples to Memory objects
+        # db_memories format: (content, importance, turn_number, location)
+        memories = []
+        for mem_data in db_memories:
+            memories.append(Memory(
+                content=mem_data[0],
+                importance=mem_data[1],
+                turn_number=mem_data[2],
+                location=mem_data[3] or "",
+                score=0,  # Not stored separately in query
+                moves=0,  # Not stored separately in query
+                timestamp=datetime.now().isoformat()
+            ))
+        return memories
 
-    def get_memories_by_location(self, location: str) -> List[Memory]:
-        """Get all memories associated with a specific location"""
-        return [m for m in self.memories if m.location.lower() == location.lower()]
-
-    def get_all_memories(self) -> List[Memory]:
-        """Get all memories (sorted by importance)"""
-        return self.memories
+    def get_memories_by_location(self, location: str, limit: int = 5) -> List[Memory]:
+        """Get memories associated with a specific location (from database)"""
+        db_memories = self.db.get_location_memories(self.session_id, location, limit)
+        # db_memories format: (content, importance, turn_number)
+        memories = []
+        for mem_data in db_memories:
+            memories.append(Memory(
+                content=mem_data[0],
+                importance=mem_data[1],
+                turn_number=mem_data[2],
+                location=location,
+                score=0,
+                moves=0,
+                timestamp=datetime.now().isoformat()
+            ))
+        return memories
 
     def get_memory_count(self) -> int:
-        """Total number of memories stored"""
-        return len(self.memories)
+        """Total number of memories stored (from database)"""
+        # Quick count via get_top_memories (not efficient but works)
+        all_mems = self.db.get_top_memories(self.session_id, limit=1000)
+        return len(all_mems)

@@ -56,8 +56,8 @@ class HistorySummarizer:
         Returns:
             New summary text for recent turns
         """
-        # Get previous summary
-        previous_summary = history_state.summary
+        # Get previous summary from database
+        previous_summary = history_state.get_full_summary()
 
         # Generate variables for the prompt
         prompt_variables = {
@@ -86,8 +86,8 @@ class HistorySummarizer:
         """
         from adventurer.prompt_library import PromptLibrary
 
-        # Get previous long-running summary
-        previous_summary = history_state.long_running_summary
+        # Get previous long-running summary from database
+        previous_summary = history_state.get_long_running_summary()
 
         # Create a prompt for comprehensive summarization
         prompt = ChatPromptTemplate.from_messages([
