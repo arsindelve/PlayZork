@@ -81,20 +81,21 @@ class AdventurerService:
         """
         Create the decision chain with structured output (Phase 2)
 
+        This chain evaluates proposals from IssueAgents and ExplorerAgent
+        and chooses the best action.
+
         Returns:
             Runnable chain that returns AdventurerResponse
         """
-        # Retrieve the predefined system prompt
-        system_prompt = PromptLibrary.get_system_prompt()
-
-        # Retrieve the user-specific prompt for the adventurer's context
-        user_prompt = PromptLibrary.get_adventurer_prompt()
+        # Use new evaluation prompt that judges agent proposals
+        system_prompt = PromptLibrary.get_decision_agent_evaluation_prompt()
+        human_prompt = PromptLibrary.get_decision_agent_human_prompt()
 
         # Create a template for the system's initial message
         system_message = SystemMessagePromptTemplate.from_template(system_prompt)
 
         # Create a template for the human player's input
-        human_message = HumanMessagePromptTemplate.from_template(user_prompt)
+        human_message = HumanMessagePromptTemplate.from_template(human_prompt)
 
         # Combine system and human prompts into a chat prompt template
         chat_prompt_template = ChatPromptTemplate.from_messages(

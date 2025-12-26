@@ -304,19 +304,25 @@ def create_decision_node(decision_chain: Runnable):
     """
     def decision_node(state: DecisionState) -> DecisionState:
         """
-        Decision phase: Generate AdventurerResponse based on research.
+        Decision phase: Generate AdventurerResponse based on agent proposals.
         """
         import logging
         logger = logging.getLogger(__name__)
 
         zork_response = state["game_response"]
         research_context = state["research_context"]
+        issue_agents = state["issue_agents"]
+        explorer_agent = state["explorer_agent"]
 
         logger.info("========== DECISION_NODE INPUT ==========")
         logger.info(f"Location: {zork_response.LocationName}")
         logger.info(f"Score: {zork_response.Score}, Moves: {zork_response.Moves}")
         logger.info(f"Game Response (first 100): {zork_response.Response[:100]}...")
         logger.info(f"Research Context (first 500):\n{research_context[:500]}...")
+
+        # Format agent proposals for Decision Agent
+        agent_proposals_text = _format_agent_proposals(issue_agents, explorer_agent)
+        logger.info(f"Agent Proposals:\n{agent_proposals_text}")
         logger.info("=========================================")
 
         decision_input = {
@@ -324,7 +330,8 @@ def create_decision_node(decision_chain: Runnable):
             "locationName": zork_response.LocationName,
             "moves": zork_response.Moves,
             "game_response": zork_response.Response,
-            "research_context": research_context
+            "research_context": research_context,
+            "agent_proposals": agent_proposals_text
         }
 
         # Invoke decision chain with descriptive LangSmith name
@@ -339,6 +346,33 @@ def create_decision_node(decision_chain: Runnable):
         return state
 
     return decision_node
+
+
+def _format_agent_proposals(issue_agents, explorer_agent):
+    """Format agent proposals for Decision Agent evaluation"""
+    lines = []
+
+    # IssueAgents
+    for i, agent in enumerate(issue_agents, 1):
+        if agent.proposed_action and agent.confidence is not None:
+            ev = (agent.importance/1000) * (agent.confidence/100) * 100
+            lines.append(f"IssueAgent #{i}: [Importance: {agent.importance}/1000, Confidence: {agent.confidence}/100, EV: {ev:.1f}]")
+            lines.append(f"  Issue: {agent.issue_content}")
+            lines.append(f"  Proposed Action: {agent.proposed_action}")
+            lines.append(f"  Reason: {agent.reason}")
+            lines.append("")
+
+    # ExplorerAgent
+    if explorer_agent and explorer_agent.proposed_action and explorer_agent.confidence is not None:
+        ev = (len(explorer_agent.unexplored_directions)/10) * (explorer_agent.confidence/100) * 50
+        lines.append(f"ExplorerAgent: [Confidence: {explorer_agent.confidence}/100, EV: {ev:.1f}]")
+        lines.append(f"  Best Direction: {explorer_agent.best_direction}")
+        lines.append(f"  Proposed Action: {explorer_agent.proposed_action}")
+        lines.append(f"  Reason: {explorer_agent.reason}")
+        lines.append(f"  Unexplored Directions: {len(explorer_agent.unexplored_directions)} total")
+        lines.append("")
+
+    return "\n".join(lines) if lines else "No proposals available. Choose LOOK to observe the current situation."
 
 
 def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):

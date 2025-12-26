@@ -33,7 +33,7 @@ class DisplayManager:
         )
 
         # Initialize content
-        self.game_turns: List[Tuple[str, str, str]] = []  # (location, game_text, command)
+        self.game_turns: List[Tuple[str, str, str, str]] = []  # (location, game_text, command, reasoning)
         self.current_summary = "Game has not started yet."
         self.long_running_summary = "Game has not started yet."
         self.current_memories = "No memories recorded yet."
@@ -49,7 +49,7 @@ class DisplayManager:
         self.live = Live(self.layout, console=self.console, refresh_per_second=4)
         self.live.start()
 
-    def add_turn(self, location: str, game_text: str, command: str, score: int, moves: int):
+    def add_turn(self, location: str, game_text: str, command: str, score: int, moves: int, reasoning: str = ""):
         """
         Add a new turn to the game I/O display
 
@@ -59,8 +59,9 @@ class DisplayManager:
             command: Command issued by agent
             score: Current score
             moves: Current move count
+            reasoning: Decision Agent's reasoning for this command
         """
-        self.game_turns.append((location, game_text, command))
+        self.game_turns.append((location, game_text, command, reasoning))
         self.current_location = location
         self.current_score = score
         self.current_moves = moves
@@ -102,6 +103,69 @@ class DisplayManager:
             map_text: Formatted map transitions text
         """
         self.current_map = map_text
+        self._update_display()
+
+    def update_agents(self, issue_agents: list, explorer_agent):
+        """
+        Update the agents display (formats internally)
+
+        Args:
+            issue_agents: List of IssueAgent objects
+            explorer_agent: ExplorerAgent object or None
+        """
+        from tools.agent_graph import ExplorerAgent
+
+        all_agents = issue_agents + ([explorer_agent] if explorer_agent else [])
+
+        if all_agents:
+            # Sort by confidence descending
+            all_agents.sort(key=lambda a: a.confidence if a.confidence else 0, reverse=True)
+
+            agents_text = ""
+            for i, agent in enumerate(all_agents[:10], 1):  # Show top 10
+                # Determine type and display accordingly
+                if isinstance(agent, ExplorerAgent):
+                    agents_text += f"{i}. [EXPLORE] {agent.best_direction} from {agent.current_location}\n"
+                    agents_text += f"   Unexplored: {len(agent.unexplored_directions)} total"
+                    if agent.mentioned_directions:
+                        agents_text += f" (Mentioned: {', '.join(agent.mentioned_directions)})"
+                    agents_text += "\n"
+                else:  # IssueAgent
+                    agents_text += f"{i}. [{agent.importance}/1000] {agent.issue_content}\n"
+                    agents_text += f"   Turn {agent.turn_number} @ {agent.location}\n"
+
+                # Show proposal (same format for both)
+                if agent.proposed_action and agent.confidence is not None:
+                    agents_text += f"   > Proposal: {agent.proposed_action}\n"
+                    if agent.reason:
+                        agents_text += f"   > Reason: {agent.reason}\n"
+                    agents_text += f"   > Confidence: {agent.confidence}/100\n"
+                else:
+                    agents_text += f"   > Proposal: (pending)\n"
+
+                agents_text += "\n"
+
+            self.current_memories = agents_text.strip()
+        else:
+            self.current_memories = "No agents active."
+
+        self._update_display()
+
+    def update_map_from_transitions(self, transitions: list):
+        """
+        Update the map display from transition objects (formats internally)
+
+        Args:
+            transitions: List of LocationTransition objects
+        """
+        if transitions:
+            map_text = ""
+            for trans in transitions:
+                map_text += f"{trans.from_location} --[{trans.direction}]--> {trans.to_location} (T{trans.turn_discovered})\n"
+            self.current_map = map_text.strip()
+        else:
+            self.current_map = "No map data yet."
+
         self._update_display()
 
     def _update_display(self):
@@ -147,9 +211,14 @@ class DisplayManager:
             content.append("Waiting for game to start...", style="dim")
             return content
 
-        for i, (location, game_text, command) in enumerate(self.game_turns):
+        for i, (location, game_text, command, reasoning) in enumerate(self.game_turns):
             # Location header
             content.append(f"\n[{location}]\n", style="bold cyan")
+
+            # Decision Agent reasoning (shown BEFORE command)
+            if reasoning:
+                content.append("🤖 Decision: ", style="bold yellow")
+                content.append(f"{reasoning}\n\n", style="yellow")
 
             # Agent command (what was sent to the game)
             content.append("> ", style="bold green")

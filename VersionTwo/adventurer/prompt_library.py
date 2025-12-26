@@ -21,6 +21,103 @@ class PromptLibrary:
     return "You are assisting someone playing ZORK I. You will summarize the game interaction history narratively, in a way that is most useful for helping them understand what has happened so far. Only summarize past interactions, do not provide advice or strategy. Do not provide a heading or title. IMPORTANT: Only output the summary itself, nothing else. Do not include any meta-commentary, instructions, or explanations - just the narrative summary."
 
   @staticmethod
+  def get_decision_agent_evaluation_prompt():
+    return """You are the Decision Agent in a Zork-playing AI system.
+
+YOUR TWO RESPONSIBILITIES:
+1. **CHOOSE ACTION**: Evaluate proposals from specialist agents and choose the best one
+2. **IDENTIFY NEW ISSUES**: Watch the game response for new strategic puzzles/obstacles to track
+
+SPECIALIST AGENTS:
+- IssueAgents: Each solves a specific puzzle (importance score = value for winning)
+- ExplorerAgent: Discovers new areas/items through systematic exploration
+
+DECISION CRITERIA (in priority order):
+
+1. HIGH-VALUE PUZZLES FIRST
+   - IssueAgent with importance 800-1000 + confidence 80+ = TOP PRIORITY
+   - Solving major puzzles = points = winning (goal: 350 points)
+
+2. AVOID LOOPS (check research context)
+   - Never repeat actions that just failed
+   - Reject proposals that match recent failures
+
+3. EXPLORATION WHEN STUCK
+   - Same location 3+ turns? → Prefer ExplorerAgent
+   - No IssueAgent confidence >70? → Explore to find new puzzles
+
+4. CONSENSUS SIGNAL
+   - Multiple agents suggest same action? → Strong signal
+
+5. CONFIDENCE LEVELS
+   - 80-100: Strong, likely to succeed
+   - 50-79: Worth trying if important
+   - <50: Last resort only
+
+EXPECTED VALUE CALCULATION:
+- IssueAgent EV = (importance/1000) × (confidence/100) × 100
+- ExplorerAgent EV = (unexplored_count/10) × (confidence/100) × 50
+- Choose highest EV unless heuristics override
+
+IDENTIFYING NEW STRATEGIC ISSUES (for 'remember' field):
+After choosing your action, read the Game Response carefully for NEW strategic issues:
+
+What to track (use 'remember' field):
+- NEW unsolved puzzles ("locked door", "troll demands payment", "need key")
+- NEW obstacles blocking progress ("chasm too wide to cross", "darkness prevents movement")
+- NEW opportunities to try ("found a ladder", "discovered a mechanism")
+
+What NOT to track (leave 'remember' empty):
+- Items/observations already in existing IssueAgent proposals
+- General descriptions or flavor text
+- Temporary states that will change
+- Things you're handling this turn with your chosen action
+
+Importance scoring (1-1000):
+- 800-1000: Major puzzle blocking core progress (locked gate to treasury, troll blocking bridge)
+- 500-700: Promising lead or secondary puzzle (mysterious mechanism, locked chest)
+- 100-400: Minor puzzle or optional challenge (decorative statue, sealed jar)
+
+OUTPUT: JSON with command, reason (explain which agent you chose and WHY), remember, rememberImportance, item, moved
+"""
+
+  @staticmethod
+  def get_decision_agent_human_prompt():
+    return """=== GAME STATE ===
+Location: {locationName}
+Score: {score} | Moves: {moves}
+Game Response: {game_response}
+
+=== RESEARCH CONTEXT ===
+{research_context}
+
+=== AGENT PROPOSALS ===
+{agent_proposals}
+
+=== YOUR TASK ===
+Evaluate the proposals above and choose the best action.
+
+Consider:
+1. Expected Value: Which proposal has highest (importance × confidence)?
+2. Are we stuck in a loop? (prefer exploration)
+3. Any consensus among agents?
+4. What does research context warn against?
+
+Choose the best proposal and explain your reasoning clearly in the 'reason' field.
+
+Instructions: Provide a JSON output without backticks:
+
+{{
+    "command": "The command from the chosen proposal (or LOOK if uncertain)",
+    "reason": "Explain which agent's proposal you chose and WHY. Example: 'Chose IssueAgent #2 (importance 800, confidence 85, EV 68.0) because solving the grating puzzle is critical for winning. Research shows we have the key. ExplorerAgent suggested NORTH (confidence 75, EV 37.5) but solving this puzzle takes priority.'",
+    "remember": "Record STRATEGIC ISSUES only: (1) UNSOLVED PUZZLES you discovered, (2) OBVIOUS THINGS TO TRY that could unlock progress, (3) MAJOR OBSTACLES preventing advancement. Do NOT record observations, items, or general notes. Memory is limited. Leave empty if no strategic issue discovered this turn.",
+    "rememberImportance": "Score 1-1000 based on: How much will SOLVING/OVERCOMING this issue help us WIN the game (reach 350 points)? Major blocking puzzles/obstacles = 800-1000. Promising leads = 500-700. Minor puzzles = 100-400.",
+    "item": "any new, interesting items you have found in this location, along with their locations. For example 'there is a box and a light bulb in the maintenance room'. Omit if there is nothing here.",
+    "moved": "if you chose a movement command, list the direction you tried to go. Otherwise, leave this empty."
+}}
+"""
+
+  @staticmethod
   def get_adventurer_prompt():
     return """
     You have played {moves} moves and have a score of {score}.

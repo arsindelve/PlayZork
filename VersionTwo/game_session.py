@@ -4,7 +4,6 @@ from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
 from tools.database import DatabaseManager
-from tools.agent_graph import ExplorerAgent
 from langchain_openai import ChatOpenAI
 from display_manager import DisplayManager
 from game_logger import GameLogger
@@ -118,13 +117,14 @@ class GameSession:
                 self.turn_number
             )
 
-            # Step 4: Update display with the turn
+            # Step 4: Update display with the turn (include decision reasoning)
             display.add_turn(
                 location=zork_response.LocationName,
                 game_text=zork_response.Response,
                 command=input_text,  # The command that was just executed
                 score=zork_response.Score,
-                moves=zork_response.Moves
+                moves=zork_response.Moves,
+                reasoning=player_response.reason  # Decision Agent's reasoning
             )
 
             # Step 5: Update display with current summaries
@@ -133,50 +133,12 @@ class GameSession:
             display.update_summary(recent_summary, long_summary)
             self.logger.log_summary_update(recent_summary)
 
-            # Step 6: Update display with ALL agents (IssueAgents + ExplorerAgent if present)
-            all_agents = issue_agents + ([explorer_agent] if explorer_agent else [])
+            # Step 6: Update display with agents (formatting handled by DisplayManager)
+            display.update_agents(issue_agents, explorer_agent)
 
-            if all_agents:
-                # Sort by confidence descending
-                all_agents.sort(key=lambda a: a.confidence if a.confidence else 0, reverse=True)
-
-                agents_text = ""
-                for i, agent in enumerate(all_agents[:10], 1):  # Show top 10
-                    # Determine type and display accordingly
-                    if isinstance(agent, ExplorerAgent):
-                        agents_text += f"{i}. [EXPLORE] {agent.best_direction} from {agent.current_location}\n"
-                        agents_text += f"   Unexplored: {len(agent.unexplored_directions)} total"
-                        if agent.mentioned_directions:
-                            agents_text += f" (Mentioned: {', '.join(agent.mentioned_directions)})"
-                        agents_text += "\n"
-                    else:  # IssueAgent
-                        agents_text += f"{i}. [{agent.importance}/1000] {agent.issue_content}\n"
-                        agents_text += f"   Turn {agent.turn_number} @ {agent.location}\n"
-
-                    # Show proposal (same format for both)
-                    if agent.proposed_action and agent.confidence is not None:
-                        agents_text += f"   > Proposal: {agent.proposed_action}\n"
-                        if agent.reason:
-                            agents_text += f"   > Reason: {agent.reason}\n"
-                        agents_text += f"   > Confidence: {agent.confidence}/100\n"
-                    else:
-                        agents_text += f"   > Proposal: (pending)\n"
-
-                    agents_text += "\n"
-
-                display.update_memories(agents_text.strip())
-            else:
-                display.update_memories("No agents active.")
-
-            # Step 7: Update display with map transitions
+            # Step 7: Update display with map (formatting handled by DisplayManager)
             transitions = self.mapper_toolkit.state.get_all_transitions()
-            if transitions:
-                map_text = ""
-                for trans in transitions:
-                    map_text += f"{trans.from_location} --[{trans.direction}]--> {trans.to_location} (T{trans.turn_discovered})\n"
-                display.update_map(map_text.strip())
-            else:
-                display.update_map("No map data yet.")
+            display.update_map_from_transitions(transitions)
 
             return player_response.command
 
