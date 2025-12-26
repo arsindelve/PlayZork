@@ -149,11 +149,19 @@ class DatabaseManager:
     # ===== Session Management =====
 
     def create_session(self, session_id: str) -> None:
-        """Create a new game session (or skip if already exists)"""
+        """Create a new game session (deletes old session data if exists)"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
+
+            # Delete all old data for this session_id
+            cursor.execute("DELETE FROM memories WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM summaries WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+
+            # Now create fresh session
             cursor.execute(
-                "INSERT OR IGNORE INTO sessions (session_id, status) VALUES (?, ?)",
+                "INSERT INTO sessions (session_id, status) VALUES (?, ?)",
                 (session_id, "active")
             )
 
@@ -181,6 +189,17 @@ class DatabaseManager:
                 )
 
     # ===== Turn History =====
+
+    def get_latest_turn_number(self, session_id: str) -> Optional[int]:
+        """Get the highest turn number for this session"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT MAX(turn_number) FROM turns WHERE session_id = ?",
+                (session_id,)
+            )
+            result = cursor.fetchone()
+            return result[0] if result and result[0] is not None else None
 
     def add_turn(
         self,

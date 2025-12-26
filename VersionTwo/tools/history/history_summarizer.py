@@ -130,7 +130,7 @@ Provide a detailed but concise narrative. Output ONLY the updated summary.""")
 
         prompt_variables = {
             "summary": previous_summary if previous_summary else "Game just started.",
-            "player_response": history_state.previous_command,
+            "player_response": latest_turn.player_command,  # FIX: Use latest_turn, not history_state.previous_command
             "game_response": latest_turn.game_response,
             "location": latest_turn.location or "Unknown",
             "score": latest_turn.score,

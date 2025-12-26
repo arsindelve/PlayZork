@@ -50,7 +50,10 @@ class GameSession:
             self.mapper_toolkit
         )
 
-        self.turn_number = 0
+        # Resume turn numbering from where this session left off
+        last_turn = self.db.get_latest_turn_number(session_id)
+        self.turn_number = last_turn if last_turn is not None else 0
+        self.logger.logger.info(f"Resuming from turn {self.turn_number}")
 
     async def play(self):
         """
