@@ -89,20 +89,31 @@ class MapperState:
         import logging
         logger = logging.getLogger(__name__)
 
-        # If we have a previous location and it's different, we moved
-        if self.previous_location and self.previous_location != current_location:
-            # Try to extract direction from command
-            direction = self._extract_direction(player_command)
+        # Try to extract direction from command FIRST
+        direction = self._extract_direction(player_command)
 
-            if direction:
+        if self.previous_location:
+            if self.previous_location != current_location:
+                # Location CHANGED - successful movement
+                if direction:
+                    self.record_movement(
+                        from_location=self.previous_location,
+                        to_location=current_location,
+                        direction=direction,
+                        turn_number=turn_number
+                    )
+                else:
+                    logger.debug(f"[MAPPER] Location changed but no direction detected: '{player_command}'")
+            elif direction:
+                # Location SAME but direction command was issued - BLOCKED direction
+                logger.info(f"[MAPPER] BLOCKED: {self.previous_location} --[{direction}]--> (failed)")
+                # Record as transition to "BLOCKED" so ExplorerAgent knows not to try it
                 self.record_movement(
                     from_location=self.previous_location,
-                    to_location=current_location,
+                    to_location="BLOCKED",
                     direction=direction,
                     turn_number=turn_number
                 )
-            else:
-                logger.debug(f"[MAPPER] Location changed but no direction detected: '{player_command}'")
 
         # Update previous location for next turn
         self.previous_location = current_location
