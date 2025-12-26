@@ -145,7 +145,9 @@ class ExplorerAgent:
         }
 
         try:
-            research_response = research_agent.invoke(research_input)
+            research_response = research_agent.with_config(
+                run_name=f"ExplorerAgent Research: {self.best_direction} from {self.current_location}"
+            ).invoke(research_input)
 
             # Execute tool calls if present
             if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
@@ -223,7 +225,9 @@ Propose exploring {best_direction}.""")
         try:
             proposal_chain = proposal_prompt | decision_llm.with_structured_output(ExplorerProposal)
 
-            proposal = proposal_chain.invoke({
+            proposal = proposal_chain.with_config(
+                run_name=f"ExplorerAgent Proposal: {self.best_direction} from {self.current_location}"
+            ).invoke({
                 "best_direction": self.best_direction,
                 "current_location": self.current_location,
                 "unexplored_count": len(self.unexplored_directions),

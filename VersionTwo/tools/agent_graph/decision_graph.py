@@ -70,14 +70,14 @@ def create_spawn_agents_node(
         try:
             logger.info("========== SPAWN_AGENTS_NODE STARTING ==========")
 
-            # Get all tracked issues from database (ordered by importance)
-            memories = memory_toolkit.state.get_top_memories(limit=100)
+            # Get top 5 tracked issues from database (ordered by importance)
+            memories = memory_toolkit.state.get_top_memories(limit=5)
             logger.info(f"Retrieved {len(memories)} memories from database")
 
-            # Create one IssueAgent for each issue
+            # Create one IssueAgent for each issue (max 5)
             issue_agents = [IssueAgent(memory=mem) for mem in memories]
 
-            logger.info(f"SPAWNED {len(issue_agents)} IssueAgents")
+            logger.info(f"SPAWNED {len(issue_agents)} IssueAgents (top 5 by importance)")
 
             # Extract current game state
             game_response = state["game_response"]
@@ -327,8 +327,10 @@ def create_decision_node(decision_chain: Runnable):
             "research_context": research_context
         }
 
-        # Invoke decision chain
-        decision = decision_chain.invoke(decision_input)
+        # Invoke decision chain with descriptive LangSmith name
+        decision = decision_chain.with_config(
+            run_name="Decision Agent"
+        ).invoke(decision_input)
 
         logger.info(f"DECISION MADE: {decision.command}")
         logger.info(f"REASON: {decision.reason}")

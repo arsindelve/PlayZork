@@ -76,8 +76,10 @@ class HistorySummarizer:
         logger.info(f"Latest location: {latest_turn.location}")
         logger.info(f"Latest game response (first 100 chars): {latest_turn.game_response[:100]}...")
 
-        # Invoke the LLM to get a summary
-        result = self.chain.invoke(prompt_variables)
+        # Invoke the LLM to get a summary with descriptive LangSmith name
+        result = self.chain.with_config(
+            run_name=f"Summary Generation: Turn {latest_turn.turn_number} @ {latest_turn.location}"
+        ).invoke(prompt_variables)
 
         # Extract content from AIMessage
         new_summary = result.content if hasattr(result, 'content') else str(result)
@@ -135,6 +137,8 @@ Provide a detailed but concise narrative. Output ONLY the updated summary.""")
             "moves": latest_turn.moves
         }
 
-        result = (prompt | self.llm).invoke(prompt_variables)
+        result = (prompt | self.llm).with_config(
+            run_name=f"Long-Running Summary: Turn {latest_turn.turn_number} @ {latest_turn.location}"
+        ).invoke(prompt_variables)
 
         return result.content if hasattr(result, 'content') else str(result)

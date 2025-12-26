@@ -101,9 +101,11 @@ class IssueAgent:
         }
 
         logger.info(f"[IssueAgent] Calling research_agent.invoke()...")
-        # Call research agent (can call tools)
+        # Call research agent (can call tools) with descriptive LangSmith name
         try:
-            research_response = research_agent.invoke(research_input)
+            research_response = research_agent.with_config(
+                run_name=f"IssueAgent Research: {self.issue_content[:60]}"
+            ).invoke(research_input)
             logger.info(f"[IssueAgent] Research agent responded successfully")
         except Exception as e:
             logger.error(f"[IssueAgent] Research agent failed: {e}")
@@ -172,7 +174,9 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
 
         logger.info(f"[IssueAgent] Calling proposal_chain.invoke()...")
         try:
-            proposal = proposal_chain.invoke({
+            proposal = proposal_chain.with_config(
+                run_name=f"IssueAgent Proposal: {self.issue_content[:60]}"
+            ).invoke({
                 "issue": self.issue_content,
                 "current_location": current_location,
                 "game_response": current_game_response,
