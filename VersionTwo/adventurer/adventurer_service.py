@@ -8,7 +8,7 @@ from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
-from tools.agent_graph import create_decision_graph, ExplorerAgent
+from tools.agent_graph import create_decision_graph, ExplorerAgent, IssueClosedResponse, ObserverResponse
 from game_logger import GameLogger
 from typing import List, Tuple, Optional
 
@@ -104,22 +104,24 @@ class AdventurerService:
         # Chain with structured output (using shared decision_llm)
         return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent]]:
+    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[IssueClosedResponse], Optional[ObserverResponse]]:
         """
-        Execute the LangGraph decision flow: SpawnAgents → Research → Decide → Persist
+        Execute the LangGraph decision flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
 
         The graph manages the entire flow:
         1. SpawnAgents node: Creates IssueAgents + ExplorerAgent
         2. Research node: Calls history tools to gather context
         3. Decision node: Generates AdventurerResponse with structured output
-        4. Persist node: Stores strategic issues in memory (if flagged)
+        4. CloseIssues node: Identifies and removes resolved issues from memory
+        5. Observe node: Identifies new strategic issues to track
+        6. Persist node: Stores new strategic issues in memory (if flagged)
 
         Args:
             last_game_response: The most recent response from the Zork game
             turn_number: Current turn number for memory persistence
 
         Returns:
-            Tuple of (AdventurerResponse, List[IssueAgent], Optional[ExplorerAgent]) - the decision, issue agents, and explorer agent
+            Tuple of (AdventurerResponse, List[IssueAgent], Optional[ExplorerAgent], Optional[IssueClosedResponse], Optional[ObserverResponse]) - the decision, issue agents, explorer agent, closed issues, and observer response
         """
         # Update turn number reference for persist node
         self.turn_number_ref["current"] = turn_number
@@ -131,11 +133,12 @@ class AdventurerService:
             "explorer_agent": None,  # Will be populated if unexplored directions exist
             "research_context": "",
             "decision": None,
+            "issue_closed_response": None,  # Will be populated by close_issues node
             "observer_response": None,  # Will be populated by observe node
             "memory_persisted": False
         }
 
-        # Execute the graph (SpawnAgents → Research → Decide → Observe → Persist)
+        # Execute the graph (SpawnAgents → Research → Decide → CloseIssues → Observe → Persist)
         self.logger.log_research_start()
         final_state = self.decision_graph.invoke(initial_state)
         self.logger.log_research_complete(final_state["research_context"])
@@ -171,12 +174,23 @@ class AdventurerService:
                     f"  > Reason: {explorer_agent.reason}"
                 )
 
-        # Extract decision and observation from final state
+        # Extract decision, closed issues, and observation from final state
         adventurer_response = final_state["decision"]
+        issue_closed_response = final_state["issue_closed_response"]
         observer_response = final_state["observer_response"]
 
         # Log the final decision
         self.logger.log_decision(adventurer_response.command, adventurer_response.reason)
+
+        # Log closed issues from IssueClosedAgent
+        if issue_closed_response and issue_closed_response.closed_issues:
+            self.logger.logger.info(
+                f"ISSUES CLOSED: {len(issue_closed_response.closed_issues)} issue(s) resolved"
+            )
+            for closed_issue in issue_closed_response.closed_issues:
+                self.logger.logger.info(f"  - CLOSED: '{closed_issue}'")
+            if issue_closed_response.reasoning:
+                self.logger.logger.info(f"  Reasoning: {issue_closed_response.reasoning}")
 
         # Log memory persistence from Observer Agent
         if final_state["memory_persisted"]:
@@ -184,5 +198,5 @@ class AdventurerService:
                 f"MEMORY STORED: [{observer_response.rememberImportance}/1000] {observer_response.remember}"
             )
 
-        # Return the decision, issue agents, and explorer agent for display
-        return adventurer_response, final_state["issue_agents"], final_state["explorer_agent"]
+        # Return the decision, issue agents, explorer agent, closed issues, and observer response for display
+        return adventurer_response, final_state["issue_agents"], final_state["explorer_agent"], issue_closed_response, observer_response

@@ -113,12 +113,16 @@ class GameSession:
                 turn_number=self.turn_number
             )
 
-            # Step 3: Process through LangGraph (Research → Decide → Persist)
-            # The graph handles: research, decision, and memory persistence
-            player_response, issue_agents, explorer_agent = self.adventurer_service.handle_user_input(
+            # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)
+            # The graph handles: research, decision, issue closing, observation, and memory persistence
+            player_response, issue_agents, explorer_agent, issue_closed_response, observer_response = self.adventurer_service.handle_user_input(
                 zork_response,
                 self.turn_number
             )
+
+            # Extract closed issues and new issue from responses
+            closed_issues = issue_closed_response.closed_issues if issue_closed_response else []
+            new_issue = observer_response.remember if observer_response and observer_response.remember else None
 
             # Step 4: Update display with the turn
             # Use pending_reasoning from PREVIOUS turn (reasoning for the command that just executed)
@@ -128,7 +132,9 @@ class GameSession:
                 command=input_text,  # The command that was just executed
                 score=zork_response.Score,
                 moves=zork_response.Moves,
-                reasoning=self.pending_reasoning  # Reasoning for THIS command (from previous turn)
+                reasoning=self.pending_reasoning,  # Reasoning for THIS command (from previous turn)
+                closed_issues=closed_issues,  # Issues that were resolved this turn
+                new_issue=new_issue  # New issue identified this turn
             )
 
             # Store reasoning for the NEXT turn

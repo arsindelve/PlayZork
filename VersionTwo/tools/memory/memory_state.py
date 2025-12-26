@@ -9,6 +9,7 @@ import logging
 class Memory(BaseModel):
     """A single memory flagged by the LLM as important"""
 
+    id: Optional[int] = None   # Database ID (None for new memories)
     turn_number: int           # When this was remembered
     content: str               # What to remember (from AdventurerResponse.remember)
     importance: int            # 1-1000 priority (from AdventurerResponse.rememberImportance)
@@ -116,14 +117,15 @@ class MemoryState:
         """Get the N most important memories (from database)"""
         db_memories = self.db.get_top_memories(self.session_id, limit)
         # Convert database tuples to Memory objects
-        # db_memories format: (content, importance, turn_number, location)
+        # db_memories format: (id, content, importance, turn_number, location)
         memories = []
         for mem_data in db_memories:
             memories.append(Memory(
-                content=mem_data[0],
-                importance=mem_data[1],
-                turn_number=mem_data[2],
-                location=mem_data[3] or "",
+                id=mem_data[0],
+                content=mem_data[1],
+                importance=mem_data[2],
+                turn_number=mem_data[3],
+                location=mem_data[4] or "",
                 score=0,  # Not stored separately in query
                 moves=0,  # Not stored separately in query
                 timestamp=datetime.now().isoformat()
@@ -152,3 +154,33 @@ class MemoryState:
         # Quick count via get_top_memories (not efficient but works)
         all_mems = self.db.get_top_memories(self.session_id, limit=1000)
         return len(all_mems)
+
+    def remove_memory(self, memory_id: int) -> bool:
+        """
+        Remove a memory by ID.
+
+        Args:
+            memory_id: Database ID of the memory to remove
+
+        Returns:
+            True if memory was removed, False otherwise
+        """
+        return self.db.remove_memory(self.session_id, memory_id)
+
+    def decay_all_importances(self, decay_factor: float = 0.9) -> int:
+        """
+        Decay all memory importance scores by a factor (default 10% reduction).
+
+        This ensures new issues are naturally higher priority and stale issues
+        gradually lose importance, preventing loops on unproductive issues.
+
+        Args:
+            decay_factor: Multiply importance by this (0.9 = 10% reduction)
+
+        Returns:
+            Number of memories updated
+        """
+        logger = logging.getLogger(__name__)
+        count = self.db.decay_all_importances(self.session_id, decay_factor)
+        logger.info(f"[MemoryState] Decayed {count} memories by {int((1-decay_factor)*100)}%")
+        return count

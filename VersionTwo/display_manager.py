@@ -33,7 +33,7 @@ class DisplayManager:
         )
 
         # Initialize content
-        self.game_turns: List[Tuple[str, str, str, str]] = []  # (location, game_text, command, reasoning)
+        self.game_turns: List[Tuple[str, str, str, str, list, str]] = []  # (location, game_text, command, reasoning, closed_issues, new_issue)
         self.current_summary = "Game has not started yet."
         self.long_running_summary = "Game has not started yet."
         self.current_memories = "No memories recorded yet."
@@ -49,7 +49,7 @@ class DisplayManager:
         self.live = Live(self.layout, console=self.console, refresh_per_second=4)
         self.live.start()
 
-    def add_turn(self, location: str, game_text: str, command: str, score: int, moves: int, reasoning: str = ""):
+    def add_turn(self, location: str, game_text: str, command: str, score: int, moves: int, reasoning: str = "", closed_issues: list = None, new_issue: str = None):
         """
         Add a new turn to the game I/O display
 
@@ -60,8 +60,10 @@ class DisplayManager:
             score: Current score
             moves: Current move count
             reasoning: Decision Agent's reasoning for this command
+            closed_issues: List of issues that were resolved this turn
+            new_issue: New issue identified by Observer this turn
         """
-        self.game_turns.append((location, game_text, command, reasoning))
+        self.game_turns.append((location, game_text, command, reasoning, closed_issues or [], new_issue))
         self.current_location = location
         self.current_score = score
         self.current_moves = moves
@@ -216,7 +218,7 @@ class DisplayManager:
         # Show only last 5 turns to prevent overflow (older turns available in summary)
         recent_turns = self.game_turns[-5:]
 
-        for i, (location, game_text, command, reasoning) in enumerate(recent_turns):
+        for i, (location, game_text, command, reasoning, closed_issues, new_issue) in enumerate(recent_turns):
             # Location header
             content.append(f"\n[{location}]\n", style="bold cyan")
 
@@ -232,6 +234,17 @@ class DisplayManager:
             # Game response (to the command above)
             content.append(game_text, style="white")
             content.append("\n")
+
+            # Closed issues (shown AFTER game response, in red/orange)
+            if closed_issues:
+                content.append("\n🔒 Issues Resolved:\n", style="bold red")
+                for issue in closed_issues:
+                    content.append(f"  ✓ {issue}\n", style="red")
+
+            # New issue identified (shown AFTER game response, in bright green)
+            if new_issue:
+                content.append("\n🔍 New Issue Identified:\n", style="bold bright_green")
+                content.append(f"  → {new_issue}\n", style="bright_green")
 
             # Separator between turns (except last)
             if i < len(recent_turns) - 1:

@@ -1,7 +1,7 @@
 """
 Simple LangGraph for managing the decision-making flow.
 
-Flow: SpawnAgents → Research → Decide → Observe → Persist → END
+Flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist → END
 
 This introduces graph-based control flow while keeping the existing
 research and decision logic intact.
@@ -16,6 +16,8 @@ from tools.mapping import MapperToolkit
 from langchain_core.runnables import Runnable
 from .issue_agent import IssueAgent
 from .explorer_agent import ExplorerAgent
+from .issue_closed_agent import IssueClosedAgent
+from .issue_closed_response import IssueClosedResponse
 from .observer_agent import ObserverAgent
 from .observer_response import ObserverResponse
 
@@ -35,6 +37,9 @@ class DecisionState(TypedDict):
 
     # Decision phase output
     decision: Optional[AdventurerResponse]
+
+    # Issue closing phase output
+    issue_closed_response: Optional[IssueClosedResponse]
 
     # Observation phase output
     observer_response: Optional[ObserverResponse]
@@ -380,6 +385,55 @@ def _format_agent_proposals(issue_agents, explorer_agent):
     return "\n".join(lines) if lines else "No proposals available. Choose LOOK to observe the current situation."
 
 
+def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit):
+    """
+    Create the issue closing node that identifies and removes resolved issues.
+
+    This node runs AFTER the decision is made and BEFORE the observer identifies new issues.
+    It analyzes recent history to close issues that have been solved.
+
+    Args:
+        decision_llm: The LLM to use for analysis
+        history_toolkit: HistoryToolkit for accessing recent game history
+        memory_toolkit: MemoryToolkit for removing resolved issues
+
+    Returns:
+        Node function for the graph
+    """
+    def close_issues_node(state: DecisionState) -> DecisionState:
+        """
+        Issue closing phase: Identify and remove resolved issues from memory.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        zork_response = state["game_response"]
+
+        logger.info("========== CLOSE_ISSUES_NODE START ==========")
+        logger.info(f"Analyzing recent history at {zork_response.LocationName}")
+
+        # Create IssueClosedAgent to analyze recent history
+        issue_closer = IssueClosedAgent()
+
+        # Analyze recent history and close resolved issues
+        issue_closed_response = issue_closer.analyze(
+            game_response=zork_response.Response,
+            location=zork_response.LocationName or "Unknown",
+            score=zork_response.Score,
+            moves=zork_response.Moves,
+            decision_llm=decision_llm,
+            history_toolkit=history_toolkit,
+            memory_toolkit=memory_toolkit
+        )
+
+        state["issue_closed_response"] = issue_closed_response
+
+        logger.info("========== CLOSE_ISSUES_NODE END ==========")
+        return state
+
+    return close_issues_node
+
+
 def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit):
     """
     Create the observation node that identifies new strategic issues.
@@ -476,6 +530,12 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
             logger.info("NO MEMORY TO STORE (remember field empty or whitespace)")
             state["memory_persisted"] = False
 
+        # Decay all existing memory importance scores by 10%
+        # This ensures new issues are prioritized and stale issues lose importance
+        logger.info("Decaying all memory importance scores by 10%...")
+        decay_count = memory_toolkit.state.decay_all_importances(decay_factor=0.9)
+        logger.info(f"Decayed {decay_count} memories")
+
         logger.info("========== PERSIST_NODE END ==========")
         return state
 
@@ -495,12 +555,12 @@ def create_decision_graph(
     Build the decision-making graph.
 
     Flow:
-        SpawnAgents → Research → Decide → Observe → Persist → END
+        SpawnAgents → Research → Decide → CloseIssues → Observe → Persist → END
 
     Args:
         research_agent: Research agent that calls history tools
         decision_chain: Decision chain with structured output
-        decision_llm: LLM for IssueAgent, ExplorerAgent proposals, and Observer
+        decision_llm: LLM for IssueAgent, ExplorerAgent proposals, Observer, and IssueClosedAgent
         history_toolkit: History toolkit for tool execution
         memory_toolkit: Memory toolkit for persistence and issue agent spawning
         mapper_toolkit: Mapper toolkit for ExplorerAgent spawning
@@ -521,6 +581,7 @@ def create_decision_graph(
     ))
     graph.add_node("research", create_research_node(research_agent, history_toolkit))
     graph.add_node("decide", create_decision_node(decision_chain))
+    graph.add_node("close_issues", create_close_issues_node(decision_llm, history_toolkit, memory_toolkit))
     graph.add_node("observe", create_observe_node(decision_llm, research_agent, history_toolkit, memory_toolkit))
     graph.add_node("persist", create_persist_node(memory_toolkit, turn_number_ref))
 
@@ -528,7 +589,8 @@ def create_decision_graph(
     graph.set_entry_point("spawn_agents")
     graph.add_edge("spawn_agents", "research")
     graph.add_edge("research", "decide")
-    graph.add_edge("decide", "observe")
+    graph.add_edge("decide", "close_issues")
+    graph.add_edge("close_issues", "observe")
     graph.add_edge("observe", "persist")
     graph.add_edge("persist", END)
 

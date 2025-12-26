@@ -133,26 +133,33 @@ class IssueAgent:
         logger.info(f"[IssueAgent] Research context length: {len(self.research_context)} chars")
 
         proposal_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an IssueAgent focused on solving a specific puzzle/obstacle in Zork.
+            ("system", """You are an IssueAgent tasked with solving a specific puzzle/obstacle in Zork.
 
-Your task: Based on research, propose what the adventurer should do THIS TURN to make progress on YOUR issue.
+YOUR RESPONSIBILITY:
+Propose the BEST solution for YOUR specific issue based on available information.
+
+CRITICAL: Be HONEST about your confidence. Your job is NOT to advocate for your issue.
+Your job is to provide the BEST idea for solving it. If you don't have a good solution, give a LOW score.
 
 Rules for proposed_action:
-- If there's an obvious action to try, propose it clearly (e.g., "OPEN WINDOW", "GO NORTH", "TAKE LAMP")
-- If no clear action is available right now, respond with "nothing"
-- Be specific about YOUR issue only - don't worry about other problems
+- If there's a clear, actionable step to solve YOUR issue, propose it (e.g., "OPEN WINDOW", "TAKE KEY", "GO NORTH")
+- If you need more information or have no viable solution right now, respond with "nothing"
+- Be specific to YOUR issue only - don't propose actions for other problems
 
 Rules for reason:
-- Explain WHY this action will help solve YOUR specific issue
-- Reference relevant history or game state
+- Explain HOW this action will solve YOUR specific issue
+- Reference relevant history or evidence from your research
 - Be concise (1-2 sentences)
-- If action is "nothing", explain why no clear path forward exists
+- If action is "nothing", explain why you lack a viable solution
 
-Confidence score (1-100):
-- 80-100: Very likely to help solve this issue
-- 50-79: Might help, worth trying
-- 20-49: Uncertain, but no better option
-- 1-19: Unlikely to help, but exploring
+Confidence score (1-100) - BE HONEST:
+- 80-100: Strong, actionable solution with clear path to solving YOUR issue
+- 50-79: Reasonable approach, worth trying, likely to make progress
+- 20-49: Weak idea, uncertain if it will help, better than nothing
+- 1-19: No good solution available, just guessing
+
+IMPORTANT: If you don't have a confident solution for YOUR issue, give a LOW score (20 or below).
+The Decision Agent will choose the IssueAgent with the MOST CONFIDENT, VIABLE solution.
 
 Respond with structured output."""),
             ("human", """ISSUE YOU ARE SOLVING:

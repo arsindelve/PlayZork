@@ -329,24 +329,24 @@ class DatabaseManager:
         self,
         session_id: str,
         limit: int = 10
-    ) -> List[Tuple[str, int, int, str]]:
+    ) -> List[Tuple[int, str, int, int, str]]:
         """
         Get top N memories by importance.
 
         Returns:
-            List of (content, importance, turn_number, location)
+            List of (id, content, importance, turn_number, location)
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """SELECT content, importance, turn_number, location
+                """SELECT id, content, importance, turn_number, location
                    FROM memories
                    WHERE session_id = ?
                    ORDER BY importance DESC, turn_number DESC
                    LIMIT ?""",
                 (session_id, limit)
             )
-            return [(row[0], row[1], row[2], row[3])
+            return [(row[0], row[1], row[2], row[3], row[4])
                     for row in cursor.fetchall()]
 
     def get_location_memories(
@@ -389,6 +389,53 @@ class DatabaseManager:
             )
             count = cursor.fetchone()[0]
             return count > 0
+
+    def remove_memory(
+        self,
+        session_id: str,
+        memory_id: int
+    ) -> bool:
+        """
+        Remove a memory by ID.
+
+        Returns:
+            True if memory was removed, False otherwise
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """DELETE FROM memories
+                   WHERE session_id = ? AND id = ?""",
+                (session_id, memory_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def decay_all_importances(
+        self,
+        session_id: str,
+        decay_factor: float = 0.9
+    ) -> int:
+        """
+        Decay all memory importance scores by a factor (default 10% reduction).
+
+        Args:
+            session_id: Session ID
+            decay_factor: Multiply importance by this (0.9 = 10% reduction)
+
+        Returns:
+            Number of memories updated
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE memories
+                   SET importance = CAST(importance * ? AS INTEGER)
+                   WHERE session_id = ? AND importance > 0""",
+                (decay_factor, session_id)
+            )
+            conn.commit()
+            return cursor.rowcount
 
     # ===== Map Management =====
 
