@@ -110,6 +110,21 @@ class DatabaseManager:
                 )
             """)
 
+            # Map transitions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS map_transitions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    from_location TEXT NOT NULL,
+                    to_location TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    turn_discovered INTEGER NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id),
+                    UNIQUE(session_id, from_location, direction)
+                )
+            """)
+
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_turns_session
@@ -124,6 +139,11 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_memories_session_importance
                 ON memories(session_id, importance DESC)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_map_transitions_session
+                ON map_transitions(session_id, from_location)
             """)
 
     # ===== Session Management =====
@@ -350,3 +370,75 @@ class DatabaseManager:
             )
             count = cursor.fetchone()[0]
             return count > 0
+
+    # ===== Map Management =====
+
+    def add_map_transition(
+        self,
+        session_id: str,
+        from_location: str,
+        to_location: str,
+        direction: str,
+        turn_number: int
+    ) -> bool:
+        """
+        Add a map transition (movement from one location to another).
+        Returns True if this is a new transition, False if already known.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """INSERT INTO map_transitions
+                       (session_id, from_location, to_location, direction, turn_discovered)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (session_id, from_location, to_location, direction, turn_number)
+                )
+                return True  # New transition discovered
+            except Exception:
+                # Transition already exists (UNIQUE constraint)
+                return False
+
+    def get_all_transitions(
+        self,
+        session_id: str
+    ) -> List[Tuple[str, str, str, int]]:
+        """
+        Get all known map transitions.
+
+        Returns:
+            List of (from_location, to_location, direction, turn_discovered)
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT from_location, to_location, direction, turn_discovered
+                   FROM map_transitions
+                   WHERE session_id = ?
+                   ORDER BY turn_discovered ASC""",
+                (session_id,)
+            )
+            return [(row[0], row[1], row[2], row[3])
+                    for row in cursor.fetchall()]
+
+    def get_transitions_from_location(
+        self,
+        session_id: str,
+        location: str
+    ) -> List[Tuple[str, str]]:
+        """
+        Get all known exits from a specific location.
+
+        Returns:
+            List of (direction, destination)
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT direction, to_location
+                   FROM map_transitions
+                   WHERE session_id = ? AND from_location = ?
+                   ORDER BY direction ASC""",
+                (session_id, location)
+            )
+            return [(row[0], row[1]) for row in cursor.fetchall()]

@@ -109,16 +109,49 @@ class HistoryState:
             return summary_data[0]  # recent_summary is first element
         return "No history available yet."
 
+    def save_both_summaries(self, recent_summary: str, long_running_summary: str) -> None:
+        """
+        Save both recent and long-running summaries together in a single operation.
+        This avoids race conditions from saving them separately.
+
+        Args:
+            recent_summary: The recent summary text
+            long_running_summary: The long-running summary text
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        logger.info(f"[save_both_summaries] Saving turn {self._turn_counter}")
+        logger.info(f"  Recent summary (first 100): {recent_summary[:100]}...")
+        logger.info(f"  Long-running (first 100): {long_running_summary[:100]}...")
+
+        # Save both summaries with current turn number in a single operation
+        self.db.save_summary(
+            session_id=self.session_id,
+            turn_number=self._turn_counter,
+            recent_summary=recent_summary,
+            long_running_summary=long_running_summary
+        )
+
     def update_summary(self, new_summary: str) -> None:
         """
+        DEPRECATED: Use save_both_summaries() instead to avoid race conditions.
+
         Update the recent summary (called by summarizer, persisted to database)
 
         Args:
             new_summary: New summary text to store
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Get existing long-running summary if any
         summary_data = self.db.get_latest_summary(self.session_id)
         long_running = summary_data[1] if summary_data else ""
+
+        logger.warning(f"[update_summary] DEPRECATED - use save_both_summaries instead")
+        logger.info(f"  Recent summary (first 100): {new_summary[:100]}...")
+        logger.info(f"  Long-running (from DB, first 100): {long_running[:100] if long_running else 'EMPTY'}...")
 
         # Save both summaries with current turn number
         self.db.save_summary(
@@ -142,16 +175,26 @@ class HistoryState:
 
     def update_long_running_summary(self, new_summary: str) -> None:
         """
+        DEPRECATED: Use save_both_summaries() instead to avoid race conditions.
+
         Update the long-running summary (called by summarizer, persisted to database)
 
         Args:
             new_summary: New long-running summary text to store
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Get existing recent summary if any
         summary_data = self.db.get_latest_summary(self.session_id)
         recent = summary_data[0] if summary_data else ""
 
+        logger.warning(f"[update_long_running_summary] DEPRECATED - use save_both_summaries instead")
+        logger.info(f"  Recent (from DB, first 100): {recent[:100] if recent else 'EMPTY'}...")
+        logger.info(f"  Long-running summary (first 100): {new_summary[:100]}...")
+
         # Save both summaries with current turn number
+        # WARNING: This uses INSERT OR REPLACE, which can cause race conditions!
         self.db.save_summary(
             session_id=self.session_id,
             turn_number=self._turn_counter,

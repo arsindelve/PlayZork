@@ -7,14 +7,15 @@ from langchain_openai import ChatOpenAI
 from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
-from tools.agent_graph import create_decision_graph
+from tools.mapping import MapperToolkit
+from tools.agent_graph import create_decision_graph, ExplorerAgent
 from game_logger import GameLogger
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 
 class AdventurerService:
 
-    def __init__(self, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit):
+    def __init__(self, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit, mapper_toolkit: MapperToolkit):
         """
         Initializes the AdventurerService with LangGraph-managed flow.
 
@@ -23,9 +24,11 @@ class AdventurerService:
         Args:
             history_toolkit: The HistoryToolkit instance for accessing game history
             memory_toolkit: The MemoryToolkit instance for storing strategic issues
+            mapper_toolkit: The MapperToolkit instance for tracking the map
         """
         self.history_toolkit = history_toolkit
         self.memory_toolkit = memory_toolkit
+        self.mapper_toolkit = mapper_toolkit
         self.logger = GameLogger.get_instance()
 
         # Turn number tracking (mutable reference for persist node)
@@ -45,21 +48,22 @@ class AdventurerService:
             decision_llm=self.decision_llm,
             history_toolkit=self.history_toolkit,
             memory_toolkit=self.memory_toolkit,
+            mapper_toolkit=self.mapper_toolkit,
             turn_number_ref=self.turn_number_ref
         )
 
     def _create_research_agent(self) -> Runnable:
         """
-        Create the research agent that can call history tools (Phase 1)
+        Create the research agent that can call history and mapper tools (Phase 1)
 
         Returns:
-            Runnable chain configured with history tools
+            Runnable chain configured with tools
         """
         # Use GPT-4o-mini for reasoning with tools
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-        # Only history tools (memory is write-only, not queryable)
-        tools = self.history_toolkit.get_tools()
+        # Combine history and mapper tools
+        tools = self.history_toolkit.get_tools() + self.mapper_toolkit.get_tools()
 
         # Bind tools to the LLM and REQUIRE it to call at least one tool
         llm_with_tools = llm.bind_tools(tools, tool_choice="any")
@@ -99,12 +103,12 @@ class AdventurerService:
         # Chain with structured output (using shared decision_llm)
         return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List]:
+    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent]]:
         """
         Execute the LangGraph decision flow: SpawnAgents → Research → Decide → Persist
 
         The graph manages the entire flow:
-        1. SpawnAgents node: Creates IssueAgent for each tracked strategic issue
+        1. SpawnAgents node: Creates IssueAgents + ExplorerAgent
         2. Research node: Calls history tools to gather context
         3. Decision node: Generates AdventurerResponse with structured output
         4. Persist node: Stores strategic issues in memory (if flagged)
@@ -114,7 +118,7 @@ class AdventurerService:
             turn_number: Current turn number for memory persistence
 
         Returns:
-            Tuple of (AdventurerResponse, List[IssueAgent]) - the decision and the issue agents with proposals
+            Tuple of (AdventurerResponse, List[IssueAgent], Optional[ExplorerAgent]) - the decision, issue agents, and explorer agent
         """
         # Update turn number reference for persist node
         self.turn_number_ref["current"] = turn_number
@@ -123,6 +127,7 @@ class AdventurerService:
         initial_state = {
             "game_response": last_game_response,
             "issue_agents": [],  # Will be populated by spawn_agents node
+            "explorer_agent": None,  # Will be populated if unexplored directions exist
             "research_context": "",
             "decision": None,
             "memory_persisted": False
@@ -142,12 +147,27 @@ class AdventurerService:
                     f"  {i}. [{agent.importance}/1000] {agent.issue_content}"
                 )
                 self.logger.logger.info(
-                    f"     → Proposed: '{agent.proposed_action}' (confidence: {agent.confidence}/100)"
+                    f"     > Proposed: '{agent.proposed_action}' (confidence: {agent.confidence}/100)"
                 )
                 if agent.reason:
                     self.logger.logger.info(
-                        f"     → Reason: {agent.reason}"
+                        f"     > Reason: {agent.reason}"
                     )
+
+        # Log explorer agent if present
+        explorer_agent = final_state["explorer_agent"]
+        if explorer_agent:
+            self.logger.logger.info(f"SPAWNED 1 ExplorerAgent - Proposal:")
+            self.logger.logger.info(
+                f"  [EXPLORE] {explorer_agent.best_direction} from {explorer_agent.current_location}"
+            )
+            self.logger.logger.info(
+                f"  > Proposed: '{explorer_agent.proposed_action}' (confidence: {explorer_agent.confidence}/100)"
+            )
+            if explorer_agent.reason:
+                self.logger.logger.info(
+                    f"  > Reason: {explorer_agent.reason}"
+                )
 
         # Extract decision from final state
         adventurer_response = final_state["decision"]
@@ -160,5 +180,5 @@ class AdventurerService:
                 f"MEMORY STORED: [{adventurer_response.rememberImportance}/1000] {adventurer_response.remember}"
             )
 
-        # Return both the decision and the issue agents for display
-        return adventurer_response, final_state["issue_agents"]
+        # Return the decision, issue agents, and explorer agent for display
+        return adventurer_response, final_state["issue_agents"], final_state["explorer_agent"]

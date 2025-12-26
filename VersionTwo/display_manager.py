@@ -8,10 +8,11 @@ from typing import List, Tuple
 
 class DisplayManager:
     """
-    Manages the Rich console display with three main regions:
+    Manages the Rich console display with four main regions:
     1. Game I/O - Shows the conversation between game and agent
     2. Summary - Shows the current game summary
     3. Memories - Shows flagged important memories
+    4. Map - Shows discovered location transitions
     """
 
     def __init__(self):
@@ -24,10 +25,11 @@ class DisplayManager:
             Layout(name="info_panel", ratio=1)
         )
 
-        # Split the right column into two rows: Summary (top) and Memories (bottom)
+        # Split the right column into three rows: Summary (top), Memories (middle), Map (bottom)
         self.layout["info_panel"].split_column(
             Layout(name="summary", ratio=1),
-            Layout(name="memories", ratio=1)
+            Layout(name="memories", ratio=1),
+            Layout(name="map", ratio=1)
         )
 
         # Initialize content
@@ -35,6 +37,7 @@ class DisplayManager:
         self.current_summary = "Game has not started yet."
         self.long_running_summary = "Game has not started yet."
         self.current_memories = "No memories recorded yet."
+        self.current_map = "No map data yet."
         self.current_location = "Unknown"
         self.current_score = 0
         self.current_moves = 0
@@ -91,8 +94,18 @@ class DisplayManager:
         self.current_memories = memories_text
         self._update_display()
 
+    def update_map(self, map_text: str):
+        """
+        Update the map display
+
+        Args:
+            map_text: Formatted map transitions text
+        """
+        self.current_map = map_text
+        self._update_display()
+
     def _update_display(self):
-        """Update all three regions of the display"""
+        """Update all four regions of the display"""
         # Update Game I/O region
         io_content = self._build_io_content()
         self.layout["game_io"].update(Panel(
@@ -116,6 +129,14 @@ class DisplayManager:
             memories_content,
             title="[bold yellow]Issues / Puzzles / Obstacles[/bold yellow]",
             border_style="yellow"
+        ))
+
+        # Update Map region
+        map_content = self._build_map_content()
+        self.layout["map"].update(Panel(
+            map_content,
+            title="[bold green]Map - Location Transitions[/bold green]",
+            border_style="green"
         ))
 
     def _build_io_content(self) -> Text:
@@ -149,19 +170,19 @@ class DisplayManager:
         content = Text()
 
         # Current location highlight
-        content.append("Current Location:\n", style="bold white")
+        content.append("Location: ", style="bold white")
         content.append(f"{self.current_location}\n\n", style="cyan")
 
         # Recent Summary (last 15 turns)
-        content.append("Recent (Last 15 Turns):\n", style="bold white")
+        content.append("Recent:\n", style="bold white")
         content.append(self.current_summary, style="white")
-        content.append("\n\n", style="white")
+        content.append("\n", style="white")
 
         # Separator
-        content.append("─" * 40 + "\n\n", style="dim")
+        content.append("─" * 40 + "\n", style="dim")
 
         # Long-Running Summary (everything)
-        content.append("Complete History:\n", style="bold white")
+        content.append("Complete:\n", style="bold white")
         content.append(self.long_running_summary, style="white")
 
         return content
@@ -171,6 +192,14 @@ class DisplayManager:
         content = Text()
 
         content.append(self.current_memories, style="yellow")
+
+        return content
+
+    def _build_map_content(self) -> Text:
+        """Build the map content"""
+        content = Text()
+
+        content.append(self.current_map, style="green")
 
         return content
 

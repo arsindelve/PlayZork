@@ -56,21 +56,35 @@ class HistorySummarizer:
         Returns:
             New summary text for recent turns
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Get previous summary from database
         previous_summary = history_state.get_full_summary()
 
         # Generate variables for the prompt
         prompt_variables = {
             "summary": previous_summary if previous_summary else "This is the first turn.",
-            "player_response": history_state.previous_command,
+            "player_response": latest_turn.player_command,  # FIX: Use the actual latest command, not previous_command
             "game_response": latest_turn.game_response
         }
+
+        # LOG what we're passing to the LLM
+        logger.info(f"=== GENERATING SUMMARY FOR TURN {latest_turn.turn_number} ===")
+        logger.info(f"Previous summary (first 100 chars): {previous_summary[:100]}...")
+        logger.info(f"Latest command: {latest_turn.player_command}")
+        logger.info(f"Latest location: {latest_turn.location}")
+        logger.info(f"Latest game response (first 100 chars): {latest_turn.game_response[:100]}...")
 
         # Invoke the LLM to get a summary
         result = self.chain.invoke(prompt_variables)
 
         # Extract content from AIMessage
-        return result.content if hasattr(result, 'content') else str(result)
+        new_summary = result.content if hasattr(result, 'content') else str(result)
+
+        logger.info(f"New summary (first 100 chars): {new_summary[:100]}...")
+
+        return new_summary
 
     def generate_long_running_summary(self, history_state: HistoryState, latest_turn: GameTurn) -> str:
         """

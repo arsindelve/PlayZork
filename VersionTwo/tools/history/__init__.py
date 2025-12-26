@@ -46,37 +46,54 @@ class HistoryToolkit:
             score: Current game score
             moves: Current move count
         """
-        # Create and add the turn to state
-        turn = self.state.add_turn(
-            game_response=game_response,
-            player_command=player_command,
-            location=location,
-            score=score,
-            moves=moves
-        )
+        import logging
+        logger = logging.getLogger(__name__)
 
-        # Generate RECENT summary (last 15 turns only)
-        # If we have more than 15 turns, reset and summarize from scratch
-        if self.state.get_turn_count() > 15:
-            # Get last 15 turns
-            recent_turns = self.state.get_recent_turns(15)
-            # Build a summary from just these turns
-            temp_summary = ""
-            for t in recent_turns:
-                # Simple concatenation for now, LLM will summarize
-                temp_summary += f"Turn {t.turn_number}: {t.player_command} -> {t.game_response[:100]}... "
+        try:
+            # Create and add the turn to state
+            turn = self.state.add_turn(
+                game_response=game_response,
+                player_command=player_command,
+                location=location,
+                score=score,
+                moves=moves
+            )
 
-            # Use the summarizer to condense
-            new_recent_summary = self.summarizer.generate_summary(self.state, turn)
-        else:
-            # Normal incremental update
-            new_recent_summary = self.summarizer.generate_summary(self.state, turn)
+            logger.info(f"Added turn {turn.turn_number}: {player_command}")
 
-        self.state.update_summary(new_recent_summary)
+            # Generate RECENT summary (last 15 turns only)
+            # If we have more than 15 turns, reset and summarize from scratch
+            if self.state.get_turn_count() > 15:
+                # Get last 15 turns
+                recent_turns = self.state.get_recent_turns(15)
+                # Build a summary from just these turns
+                temp_summary = ""
+                for t in recent_turns:
+                    # Simple concatenation for now, LLM will summarize
+                    temp_summary += f"Turn {t.turn_number}: {t.player_command} -> {t.game_response[:100]}... "
 
-        # Generate LONG-RUNNING summary (all history, comprehensive)
-        new_long_summary = self.summarizer.generate_long_running_summary(self.state, turn)
-        self.state.update_long_running_summary(new_long_summary)
+                # Use the summarizer to condense
+                logger.info("Generating recent summary (15+ turns)...")
+                new_recent_summary = self.summarizer.generate_summary(self.state, turn)
+            else:
+                # Normal incremental update
+                logger.info(f"Generating recent summary (turn {turn.turn_number})...")
+                new_recent_summary = self.summarizer.generate_summary(self.state, turn)
+
+            logger.info(f"Recent summary generated: {new_recent_summary[:100]}...")
+
+            # Generate LONG-RUNNING summary (all history, comprehensive)
+            logger.info("Generating long-running summary...")
+            new_long_summary = self.summarizer.generate_long_running_summary(self.state, turn)
+            logger.info(f"Long-running summary generated: {new_long_summary[:100]}...")
+
+            # Save BOTH summaries together in a single operation to avoid race condition
+            # Previously, we saved them separately which could cause stale data issues
+            self.state.save_both_summaries(new_recent_summary, new_long_summary)
+            logger.info("Both summaries saved to database")
+
+        except Exception as e:
+            logger.error(f"ERROR in update_after_turn: {e}", exc_info=True)
 
     def get_tools(self) -> List:
         """

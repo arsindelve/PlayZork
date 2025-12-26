@@ -2,7 +2,9 @@ from adventurer.adventurer_service import AdventurerService
 from zork.zork_service import ZorkService
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
+from tools.mapping import MapperToolkit
 from tools.database import DatabaseManager
+from tools.agent_graph import ExplorerAgent
 from langchain_openai import ChatOpenAI
 from display_manager import DisplayManager
 from game_logger import GameLogger
@@ -37,8 +39,16 @@ class GameSession:
         # Create memory toolkit with cheap LLM for de-duplication (write-only strategic issue storage)
         self.memory_toolkit = MemoryToolkit(session_id, self.db, cheap_llm)
 
-        # Pass both toolkits to adventurer service
-        self.adventurer_service = AdventurerService(self.history_toolkit, self.memory_toolkit)
+        # Create mapper toolkit for tracking location transitions
+        self.mapper_toolkit = MapperToolkit(session_id, self.db)
+        self.logger.logger.info("Mapper toolkit initialized")
+
+        # Pass toolkits to adventurer service
+        self.adventurer_service = AdventurerService(
+            self.history_toolkit,
+            self.memory_toolkit,
+            self.mapper_toolkit
+        )
 
         self.turn_number = 0
 
@@ -91,9 +101,16 @@ class GameSession:
                 moves=zork_response.Moves
             )
 
+            # Step 2b: Update mapper to track location transitions
+            self.mapper_toolkit.update_after_turn(
+                current_location=zork_response.LocationName,
+                player_command=input_text,
+                turn_number=self.turn_number
+            )
+
             # Step 3: Process through LangGraph (Research → Decide → Persist)
             # The graph handles: research, decision, and memory persistence
-            player_response, issue_agents = self.adventurer_service.handle_user_input(
+            player_response, issue_agents, explorer_agent = self.adventurer_service.handle_user_input(
                 zork_response,
                 self.turn_number
             )
@@ -113,27 +130,50 @@ class GameSession:
             display.update_summary(recent_summary, long_summary)
             self.logger.log_summary_update(recent_summary)
 
-            # Step 6: Update display with issue agents (puzzles/obstacles with proposals)
-            if issue_agents:
-                issues_text = ""
-                for i, agent in enumerate(issue_agents[:10], 1):  # Show top 10
-                    issues_text += f"{i}. [{agent.importance}/1000] {agent.issue_content}\n"
-                    issues_text += f"   Turn {agent.turn_number} @ {agent.location}\n"
+            # Step 6: Update display with ALL agents (IssueAgents + ExplorerAgent if present)
+            all_agents = issue_agents + ([explorer_agent] if explorer_agent else [])
 
-                    # Show proposal, reason, and confidence
+            if all_agents:
+                # Sort by confidence descending
+                all_agents.sort(key=lambda a: a.confidence if a.confidence else 0, reverse=True)
+
+                agents_text = ""
+                for i, agent in enumerate(all_agents[:10], 1):  # Show top 10
+                    # Determine type and display accordingly
+                    if isinstance(agent, ExplorerAgent):
+                        agents_text += f"{i}. [EXPLORE] {agent.best_direction} from {agent.current_location}\n"
+                        agents_text += f"   Unexplored: {len(agent.unexplored_directions)} total"
+                        if agent.mentioned_directions:
+                            agents_text += f" (Mentioned: {', '.join(agent.mentioned_directions)})"
+                        agents_text += "\n"
+                    else:  # IssueAgent
+                        agents_text += f"{i}. [{agent.importance}/1000] {agent.issue_content}\n"
+                        agents_text += f"   Turn {agent.turn_number} @ {agent.location}\n"
+
+                    # Show proposal (same format for both)
                     if agent.proposed_action and agent.confidence is not None:
-                        issues_text += f"   → Proposal: {agent.proposed_action}\n"
+                        agents_text += f"   > Proposal: {agent.proposed_action}\n"
                         if agent.reason:
-                            issues_text += f"   → Reason: {agent.reason}\n"
-                        issues_text += f"   → Confidence: {agent.confidence}/100\n"
+                            agents_text += f"   > Reason: {agent.reason}\n"
+                        agents_text += f"   > Confidence: {agent.confidence}/100\n"
                     else:
-                        issues_text += f"   → Proposal: (pending)\n"
+                        agents_text += f"   > Proposal: (pending)\n"
 
-                    issues_text += "\n"
+                    agents_text += "\n"
 
-                display.update_memories(issues_text.strip())
+                display.update_memories(agents_text.strip())
             else:
-                display.update_memories("No strategic issues tracked yet.")
+                display.update_memories("No agents active.")
+
+            # Step 7: Update display with map transitions
+            transitions = self.mapper_toolkit.state.get_all_transitions()
+            if transitions:
+                map_text = ""
+                for trans in transitions:
+                    map_text += f"{trans.from_location} --[{trans.direction}]--> {trans.to_location} (T{trans.turn_discovered})\n"
+                display.update_map(map_text.strip())
+            else:
+                display.update_map("No map data yet.")
 
             return player_response.command
 

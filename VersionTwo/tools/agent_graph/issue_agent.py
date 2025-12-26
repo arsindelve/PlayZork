@@ -67,7 +67,9 @@ class IssueAgent:
         decision_llm: ChatOpenAI,
         history_tools: list,
         current_location: str,
-        current_game_response: str
+        current_game_response: str,
+        current_score: int,
+        current_moves: int
     ) -> IssueProposal:
         """
         Execute research cycle and generate a proposal for solving this issue.
@@ -78,22 +80,34 @@ class IssueAgent:
             history_tools: List of available history tools
             current_location: Current game location
             current_game_response: Latest game response text
+            current_score: Current game score
+            current_moves: Current move count
 
         Returns:
             IssueProposal with proposed_action and confidence score
         """
         logger = logging.getLogger(__name__)
 
+        logger.info(f"[IssueAgent] Phase 1: Research for '{self.issue_content}'")
+
         # Phase 1: Research using history tools
+        # Must match the research agent prompt parameters: score, locationName, moves, game_response
         research_input = {
             "input": f"You are investigating this strategic issue: '{self.issue_content}'. Use the available tools to gather relevant history context.",
-            "issue": self.issue_content,
-            "current_location": current_location,
+            "score": current_score,
+            "locationName": current_location,
+            "moves": current_moves,
             "game_response": current_game_response
         }
 
+        logger.info(f"[IssueAgent] Calling research_agent.invoke()...")
         # Call research agent (can call tools)
-        research_response = research_agent.invoke(research_input)
+        try:
+            research_response = research_agent.invoke(research_input)
+            logger.info(f"[IssueAgent] Research agent responded successfully")
+        except Exception as e:
+            logger.error(f"[IssueAgent] Research agent failed: {e}")
+            raise
 
         # Execute tool calls if present
         if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
@@ -113,6 +127,9 @@ class IssueAgent:
             self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
 
         # Phase 2: Generate proposal based on research
+        logger.info(f"[IssueAgent] Phase 2: Generating proposal for '{self.issue_content}'")
+        logger.info(f"[IssueAgent] Research context length: {len(self.research_context)} chars")
+
         proposal_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an IssueAgent focused on solving a specific puzzle/obstacle in Zork.
 
@@ -153,12 +170,18 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
 
         proposal_chain = proposal_prompt | decision_llm.with_structured_output(IssueProposal)
 
-        proposal = proposal_chain.invoke({
-            "issue": self.issue_content,
-            "current_location": current_location,
-            "game_response": current_game_response,
-            "research_context": self.research_context
-        })
+        logger.info(f"[IssueAgent] Calling proposal_chain.invoke()...")
+        try:
+            proposal = proposal_chain.invoke({
+                "issue": self.issue_content,
+                "current_location": current_location,
+                "game_response": current_game_response,
+                "research_context": self.research_context
+            })
+            logger.info(f"[IssueAgent] Proposal generated: {proposal.proposed_action} (confidence: {proposal.confidence})")
+        except Exception as e:
+            logger.error(f"[IssueAgent] Proposal generation failed: {e}")
+            raise
 
         # Store proposal
         self.proposed_action = proposal.proposed_action
@@ -167,7 +190,7 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
 
         # Log the proposal
         logger.info(f"IssueAgent[{self.importance}/1000]: '{self.issue_content}'")
-        logger.info(f"  → Proposed: '{self.proposed_action}' (confidence: {self.confidence}/100)")
-        logger.info(f"  → Reason: {self.reason}")
+        logger.info(f"  > Proposed: '{self.proposed_action}' (confidence: {self.confidence}/100)")
+        logger.info(f"  > Reason: {self.reason}")
 
         return proposal
