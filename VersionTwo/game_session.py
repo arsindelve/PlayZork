@@ -4,10 +4,9 @@ from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
 from tools.database import DatabaseManager
-from langchain_ollama import ChatOllama
 from display_manager import DisplayManager
 from game_logger import GameLogger
-from config import CHEAP_MODEL
+from config import get_cheap_llm
 
 
 class GameSession:
@@ -31,7 +30,7 @@ class GameSession:
         self.zork_service = ZorkService(session_id=session_id)
 
         # Create cheap LLM for summarization and de-duplication
-        cheap_llm = ChatOllama(model=CHEAP_MODEL, temperature=0)
+        cheap_llm = get_cheap_llm(temperature=0)
 
         # Create history toolkit with cheap LLM for summarization
         self.history_toolkit = HistoryToolkit(cheap_llm, session_id, self.db)

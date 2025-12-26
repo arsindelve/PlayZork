@@ -8,7 +8,7 @@ Responsibility: Aggressively close resolved issues to keep memory clean.
 Runs BEFORE ObserverAgent to avoid confusion with stale issues.
 """
 from typing import List
-from langchain_ollama import ChatOllama
+from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from .issue_closed_response import IssueClosedResponse
 from tools.memory import MemoryToolkit
@@ -41,7 +41,7 @@ class IssueClosedAgent:
         location: str,
         score: int,
         moves: int,
-        decision_llm: ChatOllama,
+        decision_llm: BaseChatModel,
         history_toolkit: HistoryToolkit,
         memory_toolkit: MemoryToolkit
     ) -> IssueClosedResponse:

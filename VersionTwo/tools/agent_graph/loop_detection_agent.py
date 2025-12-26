@@ -9,7 +9,7 @@ When a loop is detected, proposes a breaking action with high confidence.
 When no loop, proposes "nothing" with zero confidence.
 """
 from typing import List, Optional
-from langchain_ollama import ChatOllama
+from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_core.prompts import ChatPromptTemplate
 from .loop_detection_response import LoopDetectionResponse
@@ -34,7 +34,7 @@ class LoopDetectionAgent:
     def research_and_propose(
         self,
         research_agent: Runnable,
-        decision_llm: ChatOllama,
+        decision_llm: BaseChatModel,
         history_tools: list,
         mapper_tools: list,
         current_location: str,

@@ -1,7 +1,7 @@
 from .memory_state import MemoryState, Memory
 from .memory_deduplicator import MemoryDeduplicator
 from tools.database import DatabaseManager
-from langchain_ollama import ChatOllama
+from langchain_core.language_models import BaseChatModel
 
 
 class MemoryToolkit:
@@ -14,14 +14,14 @@ class MemoryToolkit:
     Includes LLM-based de-duplication to prevent storing semantically similar issues.
     """
 
-    def __init__(self, session_id: str, db: DatabaseManager, dedup_llm: ChatOllama):
+    def __init__(self, session_id: str, db: DatabaseManager, dedup_llm: BaseChatModel):
         """
         Initialize the memory toolkit with database backend and de-duplication.
 
         Args:
             session_id: Unique identifier for this game session
             db: DatabaseManager instance for persistence
-            dedup_llm: ChatOllama instance for semantic de-duplication (should be cheap model)
+            dedup_llm: LLM instance for semantic de-duplication (should be cheap model)
         """
         self.deduplicator = MemoryDeduplicator(llm=dedup_llm)
         self.state = MemoryState(session_id=session_id, db=db, deduplicator=self.deduplicator)

@@ -3,14 +3,13 @@ from .prompt_library import PromptLibrary
 from .adventurer_response import AdventurerResponse
 
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
-from langchain_ollama import ChatOllama
 from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
 from tools.agent_graph import create_decision_graph, ExplorerAgent, IssueClosedResponse, ObserverResponse
 from game_logger import GameLogger
-from config import CHEAP_MODEL, EXPENSIVE_MODEL
+from config import get_cheap_llm, get_expensive_llm
 from typing import List, Tuple, Optional
 
 
@@ -36,7 +35,7 @@ class AdventurerService:
         self.turn_number_ref = {"current": 0}
 
         # Create LLM for decisions and IssueAgent proposals (using expensive model)
-        self.decision_llm = ChatOllama(model=EXPENSIVE_MODEL, temperature=0)
+        self.decision_llm = get_expensive_llm(temperature=0)
 
         # Create research agent and decision chain
         self.research_agent = self._create_research_agent()
@@ -61,7 +60,7 @@ class AdventurerService:
             Runnable chain configured with tools
         """
         # Use cheap model for reasoning with tools
-        llm = ChatOllama(model=CHEAP_MODEL, temperature=0)
+        llm = get_cheap_llm(temperature=0)
 
         # Combine history and mapper tools
         tools = self.history_toolkit.get_tools() + self.mapper_toolkit.get_tools()

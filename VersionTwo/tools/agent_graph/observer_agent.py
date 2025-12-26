@@ -9,7 +9,7 @@ Responsibility: Single-purpose observer that ONLY identifies what's new.
 Does NOT make decisions about what command to execute.
 """
 from typing import Optional, List
-from langchain_ollama import ChatOllama
+from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from .observer_response import ObserverResponse
 from tools.memory import MemoryToolkit
@@ -41,7 +41,7 @@ class ObserverAgent:
         location: str,
         score: int,
         moves: int,
-        decision_llm: ChatOllama,
+        decision_llm: BaseChatModel,
         research_agent,
         history_tools: List[BaseTool],
         memory_toolkit: MemoryToolkit

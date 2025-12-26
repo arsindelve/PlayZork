@@ -2,7 +2,7 @@
 from typing import Optional, List
 from pydantic import BaseModel
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
+from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 
 
@@ -122,7 +122,7 @@ class ExplorerAgent:
     def research_and_propose(
         self,
         research_agent: Runnable,
-        decision_llm: ChatOllama,
+        decision_llm: BaseChatModel,
         history_tools: list,
         mapper_tools: list,
         current_game_response: str,
