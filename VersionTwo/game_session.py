@@ -93,7 +93,7 @@ class GameSession:
 
             # Step 3: Process through LangGraph (Research → Decide → Persist)
             # The graph handles: research, decision, and memory persistence
-            player_response = self.adventurer_service.handle_user_input(
+            player_response, issue_agents = self.adventurer_service.handle_user_input(
                 zork_response,
                 self.turn_number
             )
@@ -113,16 +113,27 @@ class GameSession:
             display.update_summary(recent_summary, long_summary)
             self.logger.log_summary_update(recent_summary)
 
-            # Step 6: Update display with memories
-            memories = self.memory_toolkit.state.get_top_memories(5)
-            if memories:
-                memories_text = ""
-                for i, mem in enumerate(memories, 1):
-                    memories_text += f"{i}. [{mem.importance}/1000] {mem.content}\n"
-                    memories_text += f"   (Turn {mem.turn_number} @ {mem.location})\n\n"
-                display.update_memories(memories_text.strip())
+            # Step 6: Update display with issue agents (puzzles/obstacles with proposals)
+            if issue_agents:
+                issues_text = ""
+                for i, agent in enumerate(issue_agents[:10], 1):  # Show top 10
+                    issues_text += f"{i}. [{agent.importance}/1000] {agent.issue_content}\n"
+                    issues_text += f"   Turn {agent.turn_number} @ {agent.location}\n"
+
+                    # Show proposal, reason, and confidence
+                    if agent.proposed_action and agent.confidence is not None:
+                        issues_text += f"   → Proposal: {agent.proposed_action}\n"
+                        if agent.reason:
+                            issues_text += f"   → Reason: {agent.reason}\n"
+                        issues_text += f"   → Confidence: {agent.confidence}/100\n"
+                    else:
+                        issues_text += f"   → Proposal: (pending)\n"
+
+                    issues_text += "\n"
+
+                display.update_memories(issues_text.strip())
             else:
-                display.update_memories("No memories recorded yet.")
+                display.update_memories("No strategic issues tracked yet.")
 
             return player_response.command
 

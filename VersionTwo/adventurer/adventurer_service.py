@@ -9,6 +9,7 @@ from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.agent_graph import create_decision_graph
 from game_logger import GameLogger
+from typing import List, Tuple
 
 
 class AdventurerService:
@@ -30,6 +31,9 @@ class AdventurerService:
         # Turn number tracking (mutable reference for persist node)
         self.turn_number_ref = {"current": 0}
 
+        # Create LLM for decisions and IssueAgent proposals
+        self.decision_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
         # Create research agent and decision chain
         self.research_agent = self._create_research_agent()
         self.decision_chain = self._create_decision_chain()
@@ -38,6 +42,7 @@ class AdventurerService:
         self.decision_graph = create_decision_graph(
             research_agent=self.research_agent,
             decision_chain=self.decision_chain,
+            decision_llm=self.decision_llm,
             history_toolkit=self.history_toolkit,
             memory_toolkit=self.memory_toolkit,
             turn_number_ref=self.turn_number_ref
@@ -75,9 +80,6 @@ class AdventurerService:
         Returns:
             Runnable chain that returns AdventurerResponse
         """
-        # Use GPT-4o-mini for decision making with structured output
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
         # Retrieve the predefined system prompt
         system_prompt = PromptLibrary.get_system_prompt()
 
@@ -94,24 +96,25 @@ class AdventurerService:
         chat_prompt_template = ChatPromptTemplate.from_messages(
             [system_message, human_message])
 
-        # Chain with structured output
-        return chat_prompt_template | llm.with_structured_output(AdventurerResponse)
+        # Chain with structured output (using shared decision_llm)
+        return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> AdventurerResponse:
+    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List]:
         """
-        Execute the LangGraph decision flow: Research → Decide → Persist
+        Execute the LangGraph decision flow: SpawnAgents → Research → Decide → Persist
 
         The graph manages the entire flow:
-        1. Research node: Calls history tools to gather context
-        2. Decision node: Generates AdventurerResponse with structured output
-        3. Persist node: Stores strategic issues in memory (if flagged)
+        1. SpawnAgents node: Creates IssueAgent for each tracked strategic issue
+        2. Research node: Calls history tools to gather context
+        3. Decision node: Generates AdventurerResponse with structured output
+        4. Persist node: Stores strategic issues in memory (if flagged)
 
         Args:
             last_game_response: The most recent response from the Zork game
             turn_number: Current turn number for memory persistence
 
         Returns:
-            The AI-generated response for the adventurer
+            Tuple of (AdventurerResponse, List[IssueAgent]) - the decision and the issue agents with proposals
         """
         # Update turn number reference for persist node
         self.turn_number_ref["current"] = turn_number
@@ -119,15 +122,32 @@ class AdventurerService:
         # Initialize graph state
         initial_state = {
             "game_response": last_game_response,
+            "issue_agents": [],  # Will be populated by spawn_agents node
             "research_context": "",
             "decision": None,
             "memory_persisted": False
         }
 
-        # Execute the graph (Research → Decide → Persist)
+        # Execute the graph (SpawnAgents → Research → Decide → Persist)
         self.logger.log_research_start()
         final_state = self.decision_graph.invoke(initial_state)
         self.logger.log_research_complete(final_state["research_context"])
+
+        # Log spawned agents and their proposals
+        num_agents = len(final_state["issue_agents"])
+        if num_agents > 0:
+            self.logger.logger.info(f"SPAWNED {num_agents} IssueAgents - Proposals:")
+            for i, agent in enumerate(final_state["issue_agents"][:10], 1):  # Log first 10
+                self.logger.logger.info(
+                    f"  {i}. [{agent.importance}/1000] {agent.issue_content}"
+                )
+                self.logger.logger.info(
+                    f"     → Proposed: '{agent.proposed_action}' (confidence: {agent.confidence}/100)"
+                )
+                if agent.reason:
+                    self.logger.logger.info(
+                        f"     → Reason: {agent.reason}"
+                    )
 
         # Extract decision from final state
         adventurer_response = final_state["decision"]
@@ -140,4 +160,5 @@ class AdventurerService:
                 f"MEMORY STORED: [{adventurer_response.rememberImportance}/1000] {adventurer_response.remember}"
             )
 
-        return adventurer_response
+        # Return both the decision and the issue agents for display
+        return adventurer_response, final_state["issue_agents"]

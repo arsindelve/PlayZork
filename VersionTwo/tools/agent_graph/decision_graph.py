@@ -1,18 +1,19 @@
 """
 Simple LangGraph for managing the decision-making flow.
 
-Flow: Research → Decide → Persist → END
+Flow: SpawnAgents → Research → Decide → Persist → END
 
 This introduces graph-based control flow while keeping the existing
 research and decision logic intact.
 """
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, END
 from zork.zork_api_response import ZorkApiResponse
 from adventurer.adventurer_response import AdventurerResponse
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from langchain_core.runnables import Runnable
+from .issue_agent import IssueAgent
 
 
 class DecisionState(TypedDict):
@@ -20,6 +21,9 @@ class DecisionState(TypedDict):
 
     # Input
     game_response: ZorkApiResponse
+
+    # Spawn phase output
+    issue_agents: List[IssueAgent]
 
     # Research phase output
     research_context: str
@@ -29,6 +33,90 @@ class DecisionState(TypedDict):
 
     # Persistence tracking
     memory_persisted: bool
+
+
+def create_spawn_agents_node(
+    memory_toolkit: MemoryToolkit,
+    research_agent: Runnable,
+    decision_llm,
+    history_toolkit: HistoryToolkit
+):
+    """
+    Create the spawn agents node that creates IssueAgents for each tracked issue.
+
+    Args:
+        memory_toolkit: MemoryToolkit for accessing stored strategic issues
+        research_agent: Research agent with tools for IssueAgents to use
+        decision_llm: LLM for generating proposals
+        history_toolkit: HistoryToolkit for accessing tools
+
+    Returns:
+        Node function for the graph
+    """
+    def spawn_agents_node(state: DecisionState) -> DecisionState:
+        """
+        Spawn phase: Create one IssueAgent for each tracked strategic issue.
+        Each agent performs its own research and generates a proposal IN PARALLEL.
+        """
+        import logging
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        logger = logging.getLogger(__name__)
+
+        # Get all tracked issues from database (ordered by importance)
+        memories = memory_toolkit.state.get_top_memories(limit=100)
+
+        # Create one IssueAgent for each issue
+        issue_agents = [IssueAgent(memory=mem) for mem in memories]
+
+        logger.info(f"SPAWNED {len(issue_agents)} IssueAgents - starting PARALLEL research...")
+
+        # Extract current game state
+        game_response = state["game_response"]
+        current_location = game_response.LocationName or "Unknown"
+        current_game_text = game_response.Response
+
+        # Get history tools
+        history_tools = history_toolkit.get_tools()
+
+        # Execute all agent research in parallel
+        def research_agent_task(agent):
+            """Execute research and proposal for a single agent"""
+            try:
+                agent.research_and_propose(
+                    research_agent=research_agent,
+                    decision_llm=decision_llm,
+                    history_tools=history_tools,
+                    current_location=current_location,
+                    current_game_response=current_game_text
+                )
+                return agent, None
+            except Exception as e:
+                logger.error(f"Error in IssueAgent research for '{agent.issue_content}': {e}")
+                # Set defaults if research fails
+                agent.proposed_action = "nothing"
+                agent.confidence = 0
+                return agent, e
+
+        # Use ThreadPoolExecutor for parallel execution
+        # Max 10 concurrent threads to avoid overwhelming the API
+        max_workers = min(10, len(issue_agents)) if issue_agents else 1
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            futures = {executor.submit(research_agent_task, agent): agent for agent in issue_agents}
+
+            # Wait for all to complete
+            for future in as_completed(futures):
+                agent, error = future.result()
+                if error:
+                    logger.warning(f"Agent failed: {agent.issue_content}")
+
+        logger.info(f"✓ All {len(issue_agents)} IssueAgents completed research in PARALLEL")
+
+        state["issue_agents"] = issue_agents
+        return state
+
+    return spawn_agents_node
 
 
 def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolkit):
@@ -158,6 +246,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
 def create_decision_graph(
     research_agent: Runnable,
     decision_chain: Runnable,
+    decision_llm,
     history_toolkit: HistoryToolkit,
     memory_toolkit: MemoryToolkit,
     turn_number_ref: dict
@@ -166,13 +255,14 @@ def create_decision_graph(
     Build the decision-making graph.
 
     Flow:
-        Research → Decide → Persist → END
+        SpawnAgents → Research → Decide → Persist → END
 
     Args:
         research_agent: Research agent that calls history tools
         decision_chain: Decision chain with structured output
+        decision_llm: LLM for IssueAgent proposals
         history_toolkit: History toolkit for tool execution
-        memory_toolkit: Memory toolkit for persistence
+        memory_toolkit: Memory toolkit for persistence and issue agent spawning
         turn_number_ref: Mutable reference to current turn number
 
     Returns:
@@ -181,12 +271,19 @@ def create_decision_graph(
     graph = StateGraph(DecisionState)
 
     # Add nodes
+    graph.add_node("spawn_agents", create_spawn_agents_node(
+        memory_toolkit,
+        research_agent,
+        decision_llm,
+        history_toolkit
+    ))
     graph.add_node("research", create_research_node(research_agent, history_toolkit))
     graph.add_node("decide", create_decision_node(decision_chain))
     graph.add_node("persist", create_persist_node(memory_toolkit, turn_number_ref))
 
     # Define flow
-    graph.set_entry_point("research")
+    graph.set_entry_point("spawn_agents")
+    graph.add_edge("spawn_agents", "research")
     graph.add_edge("research", "decide")
     graph.add_edge("decide", "persist")
     graph.add_edge("persist", END)
