@@ -7,7 +7,7 @@ CHANGE PROVIDER HERE TO SWITCH BETWEEN OPENAI AND OLLAMA
 # ═══════════════════════════════════════════════════════════
 # CHANGE THIS ONE LINE TO SWITCH PROVIDERS
 # ═══════════════════════════════════════════════════════════
-LLM_PROVIDER = "ollama"  # Options: "openai" or "ollama"
+LLM_PROVIDER = "openai"  # Options: "openai" or "ollama"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -15,8 +15,8 @@ LLM_PROVIDER = "ollama"  # Options: "openai" or "ollama"
 # ═══════════════════════════════════════════════════════════
 MODELS = {
     "ollama": {
-        "cheap": "llama3.2",      # Research, summarization, deduplication
-        "expensive": "llama3.2",  # Decision making, agent proposals
+        "cheap": "llama3.3",      # Research, summarization, deduplication
+        "expensive": "llama3.3",  # Decision making, agent proposals
     },
     "openai": {
         "cheap": "gpt-5-nano-2025-08-07",

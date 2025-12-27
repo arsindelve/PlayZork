@@ -132,7 +132,7 @@ LOOP TYPES TO DETECT:
 1. **Stuck in Location** (loop_type: "stuck_location")
    - Same location for 5+ turns
    - No score increase during this time
-   - Agent is repeatedly trying similar actions without progress
+   - Agent is repeatedly trying similar failed actions (e.g., GO EAST fails, GO WEST fails)
 
 2. **Oscillating Between Locations** (loop_type: "oscillating")
    - Moving back and forth between 2-3 locations
@@ -144,12 +144,15 @@ WHEN LOOP DETECTED:
 - Set loop_detected = true
 - Set appropriate loop_type
 - Propose a RADICALLY DIFFERENT action to break the loop:
+  * If location description mentions interactive verbs (climbable, openable, takeable), try that verb!
+    Example: "cliff appears climbable" → propose "CLIMB CLIFF" or "CLIMB UP"
+    Example: "door can be opened" → propose "OPEN DOOR"
   * Try an unexplored exit from available_exits
-  * Try opposite/different direction than recent pattern
-  * Try completely different action type (if attacking → examine; if moving → interact)
-  * Try examining surroundings carefully (LOOK, INVENTORY, EXAMINE item)
-- Confidence: 90-100 (high confidence that loop exists)
-- Reason: Explain the loop pattern and why this action breaks it
+  * Try examining objects mentioned in description (EXAMINE item)
+  * Try different action categories: if moving failed → interact with objects, if attacking → examine
+  * Try INVENTORY to check what you have
+- Confidence: 95-100 (very high - loops are bad, must break them!)
+- Reason: Explain the loop pattern clearly and why this action breaks it
 
 WHEN NO LOOP DETECTED:
 - Set loop_detected = false
@@ -158,7 +161,20 @@ WHEN NO LOOP DETECTED:
 - Confidence: 0
 - Reason: "No loop pattern detected in recent history"
 
-CRITICAL: Be aggressive in detecting loops. If there's repetitive behavior without progress, flag it.
+========================================================
+CRITICAL: BE VERY AGGRESSIVE
+========================================================
+
+Loops waste turns and prevent progress. Detect them early!
+
+SIGNS OF LOOPS (detect ANY of these):
++ Same location 5+ turns with no score change
++ Trying different movement commands that all fail
++ Bouncing between 2 locations repeatedly
++ Doing similar actions that don't change the situation
+
+If you see ANY loop pattern, SET loop_detected=true and confidence=95-100.
+Don't wait for 5+ turns - catch loops early at turn 5!
 
 Respond with structured output."""),
             ("human", """CURRENT LOCATION: {current_location}

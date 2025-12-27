@@ -199,11 +199,11 @@ class AdventurerService:
         self.logger.log_decision(adventurer_response.command, adventurer_response.reason)
 
         # Log closed issues from IssueClosedAgent
-        if issue_closed_response and issue_closed_response.closed_issues:
+        if issue_closed_response and issue_closed_response.closed_issue_ids:
             self.logger.logger.info(
-                f"ISSUES CLOSED: {len(issue_closed_response.closed_issues)} issue(s) resolved"
+                f"ISSUES CLOSED: {len(issue_closed_response.closed_issue_ids)} issue(s) resolved"
             )
-            for closed_issue in issue_closed_response.closed_issues:
+            for closed_issue in issue_closed_response.closed_issue_contents:
                 self.logger.logger.info(f"  - CLOSED: '{closed_issue}'")
             if issue_closed_response.reasoning:
                 self.logger.logger.info(f"  Reasoning: {issue_closed_response.reasoning}")

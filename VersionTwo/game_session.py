@@ -121,7 +121,7 @@ class GameSession:
             )
 
             # Extract closed issues and new issue from responses
-            closed_issues = issue_closed_response.closed_issues if issue_closed_response else []
+            closed_issues = issue_closed_response.closed_issue_contents if issue_closed_response else []
             new_issue = observer_response.remember if observer_response and observer_response.remember else None
 
             # Step 4: Update display with the turn

@@ -68,10 +68,10 @@ class IssueClosedAgent:
 
         if not tracked_issues:
             self.logger.info(f"[IssueClosedAgent] No tracked issues to analyze")
-            return IssueClosedResponse(closed_issues=[], reasoning="No issues tracked yet.")
+            return IssueClosedResponse(closed_issue_ids=[], closed_issue_contents=[], reasoning="No issues tracked yet.")
 
         tracked_issues_text = "\n".join([
-            f"- [{mem.importance}/1000] {mem.content}"
+            f"- [ID:{mem.id}, Importance:{mem.importance}/1000] {mem.content}"
             for mem in tracked_issues
         ])
 
@@ -114,22 +114,36 @@ class IssueClosedAgent:
         # Phase 4: Remove closed issues from memory
         self.logger.info(f"[IssueClosedAgent] Phase 4: Removing closed issues from memory...")
 
-        if response.closed_issues:
-            for issue_content in response.closed_issues:
-                # Find the memory with this content
+        closed_contents = []
+        if response.closed_issue_ids:
+            for issue_id in response.closed_issue_ids:
+                self.logger.info(f"[IssueClosedAgent] Attempting to close issue ID: {issue_id}")
+
+                # Find the memory with this ID to get its content for logging/display
+                mem_content = None
+                mem_importance = None
                 for mem in tracked_issues:
-                    if mem.content == issue_content:
-                        success = memory_toolkit.state.remove_memory(mem.id)
-                        if success:
-                            self.logger.info(f"[IssueClosedAgent] CLOSED: '{issue_content}'")
-                        else:
-                            self.logger.warning(f"[IssueClosedAgent] Failed to close: '{issue_content}'")
+                    if mem.id == issue_id:
+                        mem_content = mem.content
+                        mem_importance = mem.importance
                         break
+
+                success = memory_toolkit.state.remove_memory(issue_id)
+                if success:
+                    self.logger.info(f"[IssueClosedAgent] [OK] REMOVED ID {issue_id}: '{mem_content}'")
+                    # Add to closed_contents for display (include ID for debugging)
+                    if mem_content and mem_importance is not None:
+                        closed_contents.append(f"[ID:{issue_id}, {mem_importance}/1000] {mem_content}")
+                else:
+                    self.logger.warning(f"[IssueClosedAgent] [FAIL] Database removal failed for ID {issue_id}: '{mem_content}'")
         else:
             self.logger.info(f"[IssueClosedAgent] No issues closed this turn")
 
+        # Update response with content strings for display
+        response.closed_issue_contents = closed_contents
+
         self.logger.info(f"[IssueClosedAgent] Analysis complete:")
-        self.logger.info(f"  Closed {len(response.closed_issues)} issue(s)")
+        self.logger.info(f"  Closed {len(response.closed_issue_ids)} issue(s)")
         self.logger.info(f"  Reasoning: {response.reasoning}")
 
         return response
@@ -219,23 +233,22 @@ OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Return JSON with:
-- closed_issues: List of issue content strings (EXACT match from tracked issues list) that should be closed
+- closed_issue_ids: List of memory IDs (integers) for issues that should be closed
 - reasoning: Brief explanation of why these issues were closed
 
-CRITICAL: Use the EXACT content string from the tracked issues list above.
+CRITICAL: Return the ID number from each tracked issue.
+Example: If tracked issue is "- [ID:5, Importance:405/1000] Climbable cliff above Rocky Ledge"
+Return in closed_issue_ids: 5
 
 Example output:
 {{
-  "closed_issues": [
-    "Small mailbox at West Of House",
-    "Locked grating at Clearing - need key"
-  ],
-  "reasoning": "Mailbox was opened and leaflet taken. Grating was unlocked and opened."
+  "closed_issue_ids": [5, 12],
+  "reasoning": "Issue ID 5 (mailbox) was opened and leaflet taken. Issue ID 12 (grating) was unlocked and opened."
 }}
 
 If no issues should be closed:
 {{
-  "closed_issues": [],
+  "closed_issue_ids": [],
   "reasoning": "No tracked issues have been resolved in recent history."
 }}
 
