@@ -224,7 +224,7 @@ class DisplayManager:
 
             # Decision Agent reasoning (shown BEFORE command)
             if reasoning:
-                content.append("🤖 Decision: ", style="bold yellow")
+                content.append("[AI] Decision: ", style="bold yellow")
                 content.append(f"{reasoning}\n\n", style="yellow")
 
             # Agent command (what was sent to the game)
@@ -237,18 +237,18 @@ class DisplayManager:
 
             # Closed issues (shown AFTER game response, in red/orange)
             if closed_issues:
-                content.append("\n🔒 Issues Resolved:\n", style="bold red")
+                content.append("\n[RESOLVED] Issues Resolved:\n", style="bold red")
                 for issue in closed_issues:
-                    content.append(f"  ✓ {issue}\n", style="red")
+                    content.append(f"  + {issue}\n", style="red")
 
             # New issue identified (shown AFTER game response, in bright green)
             if new_issue:
-                content.append("\n🔍 New Issue Identified:\n", style="bold bright_green")
-                content.append(f"  → {new_issue}\n", style="bright_green")
+                content.append("\n[NEW] Issue Identified:\n", style="bold bright_green")
+                content.append(f"  -> {new_issue}\n", style="bright_green")
 
             # Separator between turns (except last)
             if i < len(recent_turns) - 1:
-                content.append("─" * 50 + "\n", style="dim")
+                content.append("-" * 50 + "\n", style="dim")
 
         return content
 
@@ -266,7 +266,7 @@ class DisplayManager:
         content.append("\n", style="white")
 
         # Separator
-        content.append("─" * 40 + "\n", style="dim")
+        content.append("-" * 40 + "\n", style="dim")
 
         # Long-Running Summary (everything)
         content.append("Complete:\n", style="bold white")
