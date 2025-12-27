@@ -101,11 +101,16 @@ class IssueAgent:
         }
 
         logger.info(f"[IssueAgent] Calling research_agent.invoke()...")
-        # Call research agent (can call tools) with descriptive LangSmith name
+        # Call research agent (can call tools) with timeout and retry
         try:
-            research_response = research_agent.with_config(
-                run_name=f"IssueAgent Research: {self.issue_content[:60]}"
-            ).invoke(research_input)
+            from config import invoke_with_retry
+            research_response = invoke_with_retry(
+                research_agent.with_config(
+                    run_name=f"IssueAgent Research: {self.issue_content[:60]}"
+                ),
+                research_input,
+                operation_name=f"IssueAgent Research: {self.issue_content[:40]}"
+            )
             logger.info(f"[IssueAgent] Research agent responded successfully")
         except Exception as e:
             logger.error(f"[IssueAgent] Research agent failed: {e}")
@@ -116,16 +121,22 @@ class IssueAgent:
             tool_results = []
             tools_map = {tool.name: tool for tool in history_tools}
 
+            logger.info(f"[IssueAgent] Made {len(research_response.tool_calls)} tool calls:")
+
             for tool_call in research_response.tool_calls:
                 tool_name = tool_call['name']
                 tool_args = tool_call.get('args', {})
 
+                logger.info(f"  -> {tool_name}({tool_args})")
+
                 if tool_name in tools_map:
                     tool_result = tools_map[tool_name].invoke(tool_args)
+                    logger.info(f"     Result: {str(tool_result)[:150]}...")
                     tool_results.append(f"{tool_name} result: {tool_result}")
 
             self.research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
         else:
+            logger.info(f"[IssueAgent] No tool calls made")
             self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
 
         # Phase 2: Generate proposal based on research
@@ -220,14 +231,19 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
 
         logger.info(f"[IssueAgent] Calling proposal_chain.invoke()...")
         try:
-            proposal = proposal_chain.with_config(
-                run_name=f"IssueAgent Proposal: {self.issue_content[:60]}"
-            ).invoke({
-                "issue": self.issue_content,
-                "current_location": current_location,
-                "game_response": current_game_response,
-                "research_context": self.research_context
-            })
+            from config import invoke_with_retry
+            proposal = invoke_with_retry(
+                proposal_chain.with_config(
+                    run_name=f"IssueAgent Proposal: {self.issue_content[:60]}"
+                ),
+                {
+                    "issue": self.issue_content,
+                    "current_location": current_location,
+                    "game_response": current_game_response,
+                    "research_context": self.research_context
+                },
+                operation_name=f"IssueAgent Proposal: {self.issue_content[:40]}"
+            )
             logger.info(f"[IssueAgent] Proposal generated: {proposal.proposed_action} (confidence: {proposal.confidence})")
         except Exception as e:
             logger.error(f"[IssueAgent] Proposal generation failed: {e}")

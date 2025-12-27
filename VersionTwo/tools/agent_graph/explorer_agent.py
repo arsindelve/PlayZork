@@ -145,9 +145,14 @@ class ExplorerAgent:
         }
 
         try:
-            research_response = research_agent.with_config(
-                run_name=f"ExplorerAgent Research: {self.best_direction} from {self.current_location}"
-            ).invoke(research_input)
+            from config import invoke_with_retry
+            research_response = invoke_with_retry(
+                research_agent.with_config(
+                    run_name=f"ExplorerAgent Research: {self.best_direction} from {self.current_location}"
+                ),
+                research_input,
+                operation_name="ExplorerAgent Research"
+            )
 
             # Execute tool calls if present
             if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
@@ -155,16 +160,22 @@ class ExplorerAgent:
                 all_tools = history_tools + mapper_tools
                 tools_map = {tool.name: tool for tool in all_tools}
 
+                logger.info(f"[ExplorerAgent] Made {len(research_response.tool_calls)} tool calls:")
+
                 for tool_call in research_response.tool_calls:
                     tool_name = tool_call['name']
                     tool_args = tool_call.get('args', {})
 
+                    logger.info(f"  -> {tool_name}({tool_args})")
+
                     if tool_name in tools_map:
                         tool_result = tools_map[tool_name].invoke(tool_args)
+                        logger.info(f"     Result: {str(tool_result)[:150]}...")
                         tool_results.append(f"{tool_name} result: {tool_result}")
 
                 self.research_context = "\n\n".join(tool_results) if tool_results else "No tools called"
             else:
+                logger.info(f"[ExplorerAgent] No tool calls made")
                 self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
 
         except Exception as e:
@@ -223,20 +234,25 @@ Propose exploring {best_direction}.""")
         ])
 
         try:
+            from config import invoke_with_retry
             proposal_chain = proposal_prompt | decision_llm.with_structured_output(ExplorerProposal)
 
-            proposal = proposal_chain.with_config(
-                run_name=f"ExplorerAgent Proposal: {self.best_direction} from {self.current_location}"
-            ).invoke({
-                "best_direction": self.best_direction,
-                "current_location": self.current_location,
-                "unexplored_count": len(self.unexplored_directions),
-                "all_unexplored": ", ".join(self.unexplored_directions),
-                "mentioned_dirs": ", ".join(self.mentioned_directions) if self.mentioned_directions else "None",
-                "confidence": self.confidence,
-                "game_response": current_game_response,
-                "research_context": self.research_context
-            })
+            proposal = invoke_with_retry(
+                proposal_chain.with_config(
+                    run_name=f"ExplorerAgent Proposal: {self.best_direction} from {self.current_location}"
+                ),
+                {
+                    "best_direction": self.best_direction,
+                    "current_location": self.current_location,
+                    "unexplored_count": len(self.unexplored_directions),
+                    "all_unexplored": ", ".join(self.unexplored_directions),
+                    "mentioned_dirs": ", ".join(self.mentioned_directions) if self.mentioned_directions else "None",
+                    "confidence": self.confidence,
+                    "game_response": current_game_response,
+                    "research_context": self.research_context
+                },
+                operation_name="ExplorerAgent Proposal"
+            )
 
             self.proposed_action = proposal.proposed_action
             self.reason = proposal.reason

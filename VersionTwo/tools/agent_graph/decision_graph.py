@@ -80,7 +80,9 @@ def create_spawn_agents_node(
         logger = logging.getLogger(__name__)
 
         try:
-            logger.info("========== SPAWN_AGENTS_NODE STARTING ==========")
+            logger.info("\n" + "=" * 80)
+            logger.info("SPAWN AGENTS - Creating specialized agents for this turn")
+            logger.info("=" * 80)
 
             # Get top 5 tracked issues from database (ordered by importance)
             memories = memory_toolkit.state.get_top_memories(limit=5)
@@ -235,7 +237,9 @@ def create_spawn_agents_node(
                     thread.join()
 
             logger.info(f"All {len(all_agents)} agents completed research in PARALLEL")
-            logger.info("========== SPAWN_AGENTS_NODE COMPLETE ==========")
+            logger.info("=" * 80)
+            logger.info("SPAWN AGENTS COMPLETE")
+            logger.info("=" * 80)
 
             state["issue_agents"] = issue_agents
             state["explorer_agent"] = explorer_agent  # Single agent, can be None
@@ -281,42 +285,51 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
             "game_response": zork_response.Response
         }
 
-        logger.info("========== RESEARCH_NODE START ==========")
+        logger.info("\n" + "=" * 80)
+        logger.info("RESEARCH - Gathering historical context")
+        logger.info("=" * 80)
         logger.info(f"Current location: {zork_response.LocationName}")
         logger.info(f"Current game response (first 100): {zork_response.Response[:100]}...")
 
-        # Call research agent
-        response = research_agent.invoke(research_input)
+        # Call research agent with timeout and retry
+        from config import invoke_with_retry
+        response = invoke_with_retry(
+            research_agent,
+            research_input,
+            operation_name="Research Agent"
+        )
 
         # Execute tool calls if present
         if hasattr(response, 'tool_calls') and response.tool_calls:
             tool_results = []
             tools_map = {tool.name: tool for tool in history_toolkit.get_tools()}
 
-            logger.info(f"Research agent made {len(response.tool_calls)} tool calls")
+            logger.info(f"[ResearchAgent] Made {len(response.tool_calls)} tool calls:")
 
             # Execute each tool call
             for tool_call in response.tool_calls:
                 tool_name = tool_call['name']
                 tool_args = tool_call.get('args', {})
 
-                logger.info(f"  Calling tool: {tool_name} with args: {tool_args}")
+                logger.info(f"  -> {tool_name}({tool_args})")
 
                 if tool_name in tools_map:
                     tool_result = tools_map[tool_name].invoke(tool_args)
-                    logger.info(f"  Tool result (first 200 chars): {str(tool_result)[:200]}...")
+                    logger.info(f"     Result: {str(tool_result)[:150]}...")
                     tool_results.append(f"{tool_name} result: {tool_result}")
 
             # Combine tool results into summary
             research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
         else:
             # If no tool calls, use the content directly
+            logger.info("[ResearchAgent] No tool calls made")
             research_context = response.content if hasattr(response, 'content') else str(response)
-            logger.info("No tool calls made by research agent")
 
         logger.info(f"Research context length: {len(research_context)} chars")
         logger.info(f"Research context (first 300): {research_context[:300]}...")
-        logger.info("========== RESEARCH_NODE END ==========")
+        logger.info("=" * 80)
+        logger.info("RESEARCH COMPLETE")
+        logger.info("=" * 80)
 
         state["research_context"] = research_context
         return state
@@ -347,7 +360,9 @@ def create_decision_node(decision_chain: Runnable):
         explorer_agent = state["explorer_agent"]
         loop_detection_agent = state["loop_detection_agent"]
 
-        logger.info("========== DECISION_NODE INPUT ==========")
+        logger.info("\n" + "=" * 80)
+        logger.info("DECISION - Choosing best action from agent proposals")
+        logger.info("=" * 80)
         logger.info(f"Location: {zork_response.LocationName}")
         logger.info(f"Score: {zork_response.Score}, Moves: {zork_response.Moves}")
         logger.info(f"Game Response (first 100): {zork_response.Response[:100]}...")
@@ -356,7 +371,7 @@ def create_decision_node(decision_chain: Runnable):
         # Format agent proposals for Decision Agent
         agent_proposals_text = _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent)
         logger.info(f"Agent Proposals:\n{agent_proposals_text}")
-        logger.info("=========================================")
+        logger.info("=" * 80)
 
         decision_input = {
             "score": zork_response.Score,
@@ -367,10 +382,13 @@ def create_decision_node(decision_chain: Runnable):
             "agent_proposals": agent_proposals_text
         }
 
-        # Invoke decision chain with descriptive LangSmith name
-        decision = decision_chain.with_config(
-            run_name="Decision Agent"
-        ).invoke(decision_input)
+        # Invoke decision chain with timeout and retry
+        from config import invoke_with_retry
+        decision = invoke_with_retry(
+            decision_chain.with_config(run_name="Decision Agent"),
+            decision_input,
+            operation_name="Decision Agent"
+        )
 
         logger.info(f"DECISION MADE: {decision.command}")
         logger.info(f"REASON: {decision.reason}")
@@ -440,7 +458,9 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit, memo
 
         zork_response = state["game_response"]
 
-        logger.info("========== CLOSE_ISSUES_NODE START ==========")
+        logger.info("\n" + "=" * 80)
+        logger.info("CLOSE ISSUES - Identifying resolved issues")
+        logger.info("=" * 80)
         logger.info(f"Analyzing recent history at {zork_response.LocationName}")
 
         # Create IssueClosedAgent to analyze recent history
@@ -459,7 +479,9 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit, memo
 
         state["issue_closed_response"] = issue_closed_response
 
-        logger.info("========== CLOSE_ISSUES_NODE END ==========")
+        logger.info("=" * 80)
+        logger.info("CLOSE ISSUES COMPLETE")
+        logger.info("=" * 80)
         return state
 
     return close_issues_node
@@ -490,7 +512,9 @@ def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit:
 
         zork_response = state["game_response"]
 
-        logger.info("========== OBSERVE_NODE START ==========")
+        logger.info("\n" + "=" * 80)
+        logger.info("OBSERVE - Identifying new strategic issues")
+        logger.info("=" * 80)
         logger.info(f"Analyzing game response at {zork_response.LocationName}")
 
         # Create ObserverAgent to analyze the game response
@@ -513,7 +537,9 @@ def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit:
 
         state["observer_response"] = observer_response
 
-        logger.info("========== OBSERVE_NODE END ==========")
+        logger.info("=" * 80)
+        logger.info("OBSERVE COMPLETE")
+        logger.info("=" * 80)
         return state
 
     return observe_node
@@ -540,7 +566,9 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
         observer_response = state["observer_response"]
         zork_response = state["game_response"]
 
-        logger.info("========== PERSIST_NODE START ==========")
+        logger.info("\n" + "=" * 80)
+        logger.info("PERSIST - Saving new issues to memory and decaying old ones")
+        logger.info("=" * 80)
         logger.info(f"Observer.remember: '{observer_response.remember}'")
         logger.info(f"Observer.rememberImportance: {observer_response.rememberImportance}")
         logger.info(f"Observer.item: '{observer_response.item}'")
@@ -567,7 +595,9 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
         decay_count = memory_toolkit.state.decay_all_importances(decay_factor=0.9)
         logger.info(f"Decayed {decay_count} memories")
 
-        logger.info("========== PERSIST_NODE END ==========")
+        logger.info("=" * 80)
+        logger.info("PERSIST COMPLETE")
+        logger.info("=" * 80)
         return state
 
     return persist_node

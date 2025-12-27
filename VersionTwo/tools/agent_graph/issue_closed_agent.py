@@ -89,7 +89,9 @@ class IssueClosedAgent:
 
         recent_history = ""
         if recent_turns_tool:
+            self.logger.info(f"  -> get_recent_turns(n=5)")
             recent_history = recent_turns_tool.invoke({"n": 5})
+            self.logger.info(f"     Result: {str(recent_history)[:150]}...")
             self.logger.info(f"[IssueClosedAgent] Recent history length: {len(recent_history)} chars")
         else:
             recent_history = "No recent history available."
@@ -106,10 +108,15 @@ class IssueClosedAgent:
         # Use structured output to get IssueClosedResponse
         analysis_chain = decision_llm.with_structured_output(IssueClosedResponse)
 
-        # Invoke with descriptive LangSmith name
-        response = analysis_chain.with_config(
-            run_name=f"IssueClosedAgent: {location}"
-        ).invoke(prompt)
+        # Invoke with timeout and retry
+        from config import invoke_with_retry
+        response = invoke_with_retry(
+            analysis_chain.with_config(
+                run_name=f"IssueClosedAgent: {location}"
+            ),
+            prompt,
+            operation_name="IssueClosedAgent Analysis"
+        )
 
         # Phase 4: Remove closed issues from memory
         self.logger.info(f"[IssueClosedAgent] Phase 4: Removing closed issues from memory...")

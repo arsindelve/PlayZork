@@ -69,9 +69,14 @@ class LoopDetectionAgent:
         }
 
         try:
-            research_response = research_agent.with_config(
-                run_name="LoopDetectionAgent Research"
-            ).invoke(research_input)
+            from config import invoke_with_retry
+            research_response = invoke_with_retry(
+                research_agent.with_config(
+                    run_name="LoopDetectionAgent Research"
+                ),
+                research_input,
+                operation_name="LoopDetectionAgent Research"
+            )
         except Exception as e:
             logger.error(f"[LoopDetectionAgent] Research agent failed: {e}")
             self.proposed_action = "nothing"
@@ -83,6 +88,8 @@ class LoopDetectionAgent:
         if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
             tools_map = {tool.name: tool for tool in history_tools}
 
+            logger.info(f"[LoopDetectionAgent] Made {len(research_response.tool_calls)} tool calls:")
+
             for tool_call in research_response.tool_calls:
                 tool_name = tool_call['name']
                 tool_args = tool_call.get('args', {})
@@ -90,7 +97,9 @@ class LoopDetectionAgent:
                 if tool_name == "get_recent_turns" and tool_name in tools_map:
                     # Force last 10 turns
                     tool_args['n'] = 10
+                    logger.info(f"  -> {tool_name}(n={tool_args['n']})")
                     tool_result = tools_map[tool_name].invoke(tool_args)
+                    logger.info(f"     Result: {str(tool_result)[:150]}...")
                     raw_history = tool_result
                     break
 
@@ -107,7 +116,9 @@ class LoopDetectionAgent:
         tools_map = {tool.name: tool for tool in mapper_tools}
         if "get_exits_from" in tools_map:
             try:
+                logger.info(f"  -> get_exits_from(location='{current_location}')")
                 exits_result = tools_map["get_exits_from"].invoke({"location": current_location})
+                logger.info(f"     Result: {str(exits_result)[:150]}...")
                 # Parse exits (format: "NORTH → Kitchen, SOUTH → Hallway")
                 if exits_result and exits_result.strip():
                     for line in exits_result.split(','):
@@ -192,14 +203,19 @@ Analyze for loops and propose breaking action if needed:""")
         analysis_chain = analysis_prompt | decision_llm.with_structured_output(LoopDetectionResponse)
 
         try:
-            response = analysis_chain.with_config(
-                run_name="LoopDetectionAgent Analysis"
-            ).invoke({
-                "current_location": current_location,
-                "current_score": current_score,
-                "available_exits": ", ".join(available_exits) if available_exits else "None available",
-                "raw_history": raw_history[:3000]  # Truncate if too long
-            })
+            from config import invoke_with_retry
+            response = invoke_with_retry(
+                analysis_chain.with_config(
+                    run_name="LoopDetectionAgent Analysis"
+                ),
+                {
+                    "current_location": current_location,
+                    "current_score": current_score,
+                    "available_exits": ", ".join(available_exits) if available_exits else "None available",
+                    "raw_history": raw_history[:3000]  # Truncate if too long
+                },
+                operation_name="LoopDetectionAgent Analysis"
+            )
 
             # Store results
             self.loop_detected = response.loop_detected

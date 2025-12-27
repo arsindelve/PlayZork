@@ -133,7 +133,7 @@ class DisplayManager:
                         agents_text += f" (Mentioned: {', '.join(agent.mentioned_directions)})"
                     agents_text += "\n"
                 else:  # IssueAgent
-                    agents_text += f"{i}. [{agent.importance}/1000] {agent.issue_content}\n"
+                    agents_text += f"[ID:{agent.memory.id}] [{agent.importance}/1000] {agent.issue_content}\n"
                     agents_text += f"   Turn {agent.turn_number} @ {agent.location}\n"
 
                 # Show proposal (same format for both)

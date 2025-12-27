@@ -36,14 +36,14 @@ class GameLogger:
 
         # Set up ROOT logger so ALL loggers write to file (including decision_graph, etc.)
         root_logger = logging.getLogger()
-        root_logger.setLevel(logging.DEBUG)
+        root_logger.setLevel(logging.INFO)
 
         # Remove any existing handlers from root
         root_logger.handlers = []
 
         # File handler for ALL loggers
         file_handler = logging.FileHandler(self.log_file, mode='a', encoding='utf-8')
-        file_handler.setLevel(logging.DEBUG)
+        file_handler.setLevel(logging.INFO)
 
         # Format: timestamp - level - message
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -53,15 +53,18 @@ class GameLogger:
 
         # Also create a session-specific logger for backwards compatibility
         self.logger = logging.getLogger(f"GameSession_{session_id}")
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
 
         self.logger.info("Logger initialized")
 
     def log_turn_start(self, turn_number: int, command: str):
         """Log the start of a turn"""
-        self.logger.info("=" * 80)
-        self.logger.info(f"TURN {turn_number} START - Command: {command}")
-        self.logger.info("=" * 80)
+        self.logger.info("\n\n")
+        self.logger.info("#" * 80)
+        self.logger.info("#" * 80)
+        self.logger.info(f"###  TURN {turn_number} START - Command: {command}")
+        self.logger.info("#" * 80)
+        self.logger.info("#" * 80)
 
     def log_game_response(self, response: str):
         """Log the game's response"""
@@ -104,9 +107,10 @@ class GameLogger:
 
     def log_session_end(self, final_score: int, final_moves: int):
         """Log session end"""
-        self.logger.info("\n" + "=" * 80)
-        self.logger.info(f"SESSION END - Final Score: {final_score}, Final Moves: {final_moves}")
-        self.logger.info("=" * 80)
+        self.logger.info("\n\n")
+        self.logger.info("#" * 80)
+        self.logger.info(f"###  SESSION END - Final Score: {final_score}, Final Moves: {final_moves}")
+        self.logger.info("#" * 80)
 
     @classmethod
     def get_instance(cls, session_id: str = None):

@@ -84,9 +84,14 @@ class ObserverAgent:
             "game_response": game_response
         }
 
-        research_response = research_agent.with_config(
-            run_name=f"Observer Research: {location}"
-        ).invoke(research_input)
+        from config import invoke_with_retry
+        research_response = invoke_with_retry(
+            research_agent.with_config(
+                run_name=f"Observer Research: {location}"
+            ),
+            research_input,
+            operation_name="Observer Research"
+        )
 
         # Execute tool calls to get historical context
         historical_context = ""
@@ -94,18 +99,22 @@ class ObserverAgent:
             tool_results = []
             tools_map = {tool.name: tool for tool in history_tools}
 
-            self.logger.info(f"[ObserverAgent] Executing {len(research_response.tool_calls)} tool calls")
+            self.logger.info(f"[ObserverAgent] Made {len(research_response.tool_calls)} tool calls:")
 
             for tool_call in research_response.tool_calls:
                 tool_name = tool_call['name']
                 tool_args = tool_call.get('args', {})
 
+                self.logger.info(f"  -> {tool_name}({tool_args})")
+
                 if tool_name in tools_map:
                     tool_result = tools_map[tool_name].invoke(tool_args)
+                    self.logger.info(f"     Result: {str(tool_result)[:150]}...")
                     tool_results.append(f"{tool_name}: {tool_result}")
 
             historical_context = "\n\n".join(tool_results) if tool_results else "No historical context available."
         else:
+            self.logger.info(f"[ObserverAgent] No tool calls made")
             historical_context = "No historical context retrieved."
 
         self.logger.info(f"[ObserverAgent] Historical context length: {len(historical_context)} chars")
@@ -119,10 +128,14 @@ class ObserverAgent:
         # Use structured output to get ObserverResponse
         observation_chain = decision_llm.with_structured_output(ObserverResponse)
 
-        # Invoke with descriptive LangSmith name
-        response = observation_chain.with_config(
-            run_name=f"Observer Agent: {location}"
-        ).invoke(prompt)
+        # Invoke with timeout and retry
+        response = invoke_with_retry(
+            observation_chain.with_config(
+                run_name=f"Observer Agent: {location}"
+            ),
+            prompt,
+            operation_name="Observer Agent Analysis"
+        )
 
         # Store findings
         self.remember = response.remember
