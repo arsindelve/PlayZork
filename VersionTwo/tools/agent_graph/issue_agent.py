@@ -88,7 +88,13 @@ class IssueAgent:
         """
         logger = logging.getLogger(__name__)
 
-        logger.info(f"[IssueAgent] Phase 1: Research for '{self.issue_content}'")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] AGENT: IssueAgent")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] ID: {self.memory.id}")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] ISSUE: {self.issue_content}")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] IMPORTANCE: {self.importance}/1000")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Phase 1: Research for '{self.issue_content}'")
 
         # Phase 1: Research using history tools
         # Must match the research agent prompt parameters: score, locationName, moves, game_response

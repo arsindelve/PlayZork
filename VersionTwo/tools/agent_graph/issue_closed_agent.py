@@ -60,6 +60,11 @@ class IssueClosedAgent:
         Returns:
             IssueClosedResponse with list of closed issues
         """
+        self.logger.info(f"[IssueClosedAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        self.logger.info(f"[IssueClosedAgent] AGENT: IssueClosedAgent")
+        self.logger.info(f"[IssueClosedAgent] PURPOSE: Identify and remove resolved issues from memory")
+        self.logger.info(f"[IssueClosedAgent] LOCATION: {location}")
+        self.logger.info(f"[IssueClosedAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         self.logger.info(f"[IssueClosedAgent] Analyzing recent history at {location}")
 
         # Phase 1: Get tracked issues
@@ -192,11 +197,15 @@ WHAT MAKES AN ISSUE "RESOLVED"?
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ✓ Locked doors/gates → OPENED or UNLOCKED
-✓ Items to collect → TAKEN and in inventory
+✓ Simple item collection → TAKEN and in inventory (ONLY if issue is just about taking it)
 ✓ Obstacles/blockages → REMOVED or BYPASSED
 ✓ Puzzles → SOLVED (evidence of success)
 ✓ Exploration goals → COMPLETED (location fully explored)
 ✓ Containers (mailbox, chest) → OPENED and contents examined/taken
+
+CRITICAL - READ THE ISSUE CAREFULLY:
+If an issue mentions "cannot open", "need tools", "locked", "puzzle", or similar,
+then TAKING the item does NOT resolve it. You must see evidence the puzzle was SOLVED.
 
 EXAMPLES:
 
@@ -218,22 +227,38 @@ Recent history shows: "The door is still locked" or no mention
 
 Tracked: "Sword on table in Living Room"
 Recent history shows: "You take the sword"
-→ CLOSE THIS ISSUE ✓
+→ CLOSE THIS ISSUE ✓ (simple collection)
+
+Tracked: "Jewel-encrusted egg — cannot be opened without tools or expertise"
+Recent history shows: "You take the egg"
+→ DO NOT CLOSE! Taking ≠ Opening. Issue is about OPENING, not taking.
+
+Tracked: "Jewel-encrusted egg — cannot be opened without tools or expertise"
+Recent history shows: "You open the egg with the [tool]" or "The egg opens to reveal..."
+→ CLOSE THIS ISSUE ✓ (puzzle solved)
+
+Tracked: "Small bottle with mysterious liquid"
+Recent history shows: "You take the bottle"
+→ CLOSE THIS ISSUE ✓ (no puzzle mentioned, just collection)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CLOSING STRATEGY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-BE AGGRESSIVE: If there's clear evidence an issue is resolved, CLOSE IT.
-- Better to close and reopen later than keep stale issues
-- If an item was taken, close it
-- If a lock was opened, close it
-- If a puzzle was solved, close it
+BE CAREFUL - Match resolution to the actual issue:
+1. READ the issue description carefully
+2. Identify what the ACTUAL problem is (take? open? unlock? defeat?)
+3. ONLY close if that SPECIFIC problem is solved
+
+If issue says "cannot open" → Evidence must show it was OPENED
+If issue says "locked" → Evidence must show it was UNLOCKED
+If issue says "blocking" → Evidence must show obstacle REMOVED
+If issue is just describing an item → Evidence of TAKING is enough
 
 ONLY KEEP OPEN:
 - Issues with NO evidence of resolution in recent history
 - Ongoing obstacles still blocking progress
-- Partially-solved puzzles (e.g., found key but haven't used it yet)
+- Puzzles where taking an item doesn't solve the puzzle (e.g., locked boxes, cannot-open items)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT

@@ -286,6 +286,11 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
         }
 
         logger.info("\n" + "=" * 80)
+        logger.info("[ResearchAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info("[ResearchAgent] AGENT: ResearchAgent")
+        logger.info("[ResearchAgent] PURPOSE: Gather historical context for decision making")
+        logger.info(f"[ResearchAgent] LOCATION: {zork_response.LocationName}")
+        logger.info("[ResearchAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info("RESEARCH - Gathering historical context")
         logger.info("=" * 80)
         logger.info(f"Current location: {zork_response.LocationName}")
@@ -361,6 +366,12 @@ def create_decision_node(decision_chain: Runnable):
         loop_detection_agent = state["loop_detection_agent"]
 
         logger.info("\n" + "=" * 80)
+        logger.info("[DecisionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info("[DecisionAgent] AGENT: DecisionAgent")
+        logger.info("[DecisionAgent] PURPOSE: Choose best action from all agent proposals")
+        logger.info(f"[DecisionAgent] LOCATION: {zork_response.LocationName}")
+        logger.info(f"[DecisionAgent] SCORE: {zork_response.Score}, MOVES: {zork_response.Moves}")
+        logger.info("[DecisionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info("DECISION - Choosing best action from agent proposals")
         logger.info("=" * 80)
         logger.info(f"Location: {zork_response.LocationName}")

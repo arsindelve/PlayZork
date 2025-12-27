@@ -57,6 +57,11 @@ class LoopDetectionAgent:
         """
         logger = logging.getLogger(__name__)
 
+        logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[LoopDetectionAgent] AGENT: LoopDetectionAgent")
+        logger.info(f"[LoopDetectionAgent] PURPOSE: Detect stuck/oscillating patterns and break loops")
+        logger.info(f"[LoopDetectionAgent] CURRENT LOCATION: {current_location}")
+        logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"[LoopDetectionAgent] Phase 1: Gathering raw history (last 10 turns)")
 
         # Phase 1: Get raw history (last 10 turns) using history tools

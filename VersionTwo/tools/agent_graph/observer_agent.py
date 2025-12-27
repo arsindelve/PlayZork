@@ -62,6 +62,11 @@ class ObserverAgent:
         Returns:
             ObserverResponse with remember, rememberImportance, item
         """
+        self.logger.info(f"[ObserverAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        self.logger.info(f"[ObserverAgent] AGENT: ObserverAgent")
+        self.logger.info(f"[ObserverAgent] PURPOSE: Identify new strategic issues from game responses")
+        self.logger.info(f"[ObserverAgent] LOCATION: {location}")
+        self.logger.info(f"[ObserverAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         self.logger.info(f"[ObserverAgent] Analyzing game response at {location}")
 
         # Phase 0: Get already-tracked issues to avoid duplicates

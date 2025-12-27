@@ -133,6 +133,16 @@ class ExplorerAgent:
         Phase 1: Research using tools (optional - understand map topology)
         Phase 2: Generate exploration proposal for best_direction
         """
+        logger = logging.getLogger(__name__)
+
+        logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[ExplorerAgent] AGENT: ExplorerAgent")
+        logger.info(f"[ExplorerAgent] CURRENT LOCATION: {self.current_location}")
+        logger.info(f"[ExplorerAgent] BEST DIRECTION: {self.best_direction}")
+        logger.info(f"[ExplorerAgent] UNEXPLORED COUNT: {len(self.unexplored_directions)}")
+        logger.info(f"[ExplorerAgent] UNEXPLORED DIRECTIONS: {', '.join(self.unexplored_directions)}")
+        logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
         # Phase 1: Research (call mapper tools to understand geography)
         research_input = {
             "input": f"You are planning exploration from '{self.current_location}'. "
