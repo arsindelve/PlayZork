@@ -4,6 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
+from config import GAME_NAME
 
 
 class DeduplicationResult(BaseModel):
@@ -30,7 +31,7 @@ class MemoryDeduplicator:
         """Create LangChain chain for de-duplication checking"""
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a de-duplication assistant for a Zork game-playing AI.
+            ("system", f"""You are a de-duplication assistant for a {GAME_NAME} game-playing AI.
 
 Your task: Determine if a NEW strategic issue is semantically similar to EXISTING issues.
 

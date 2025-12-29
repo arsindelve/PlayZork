@@ -80,7 +80,8 @@ class MemoryState:
 
         # Check for semantic duplicates using LLM (if deduplicator available)
         if self.deduplicator:
-            existing_memories = self.get_top_memories(limit=50)  # Check against recent memories
+            # IMPORTANT: Include closed memories to prevent re-creating solved issues
+            existing_memories = self.get_top_memories(limit=50, include_closed=True)
             if existing_memories:
                 existing_contents = [mem.content for mem in existing_memories]
                 is_dup, reason = self.deduplicator.is_duplicate(content.strip(), existing_contents)
@@ -113,9 +114,18 @@ class MemoryState:
 
         return memory
 
-    def get_top_memories(self, limit: int = 10) -> List[Memory]:
-        """Get the N most important memories (from database)"""
-        db_memories = self.db.get_top_memories(self.session_id, limit)
+    def get_top_memories(self, limit: int = 10, include_closed: bool = False) -> List[Memory]:
+        """
+        Get the N most important memories (from database).
+
+        Args:
+            limit: Maximum number of memories to return
+            include_closed: If True, include closed issues (default: False)
+
+        Returns:
+            List of Memory objects
+        """
+        db_memories = self.db.get_top_memories(self.session_id, limit, include_closed=include_closed)
         # Convert database tuples to Memory objects
         # db_memories format: (id, content, importance, turn_number, location)
         memories = []

@@ -13,6 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from .observer_response import ObserverResponse
 from tools.memory import MemoryToolkit
+from config import GAME_NAME
 import logging
 
 
@@ -110,11 +111,11 @@ class ObserverAgent:
                 tool_name = tool_call['name']
                 tool_args = tool_call.get('args', {})
 
-                self.logger.info(f"  -> {tool_name}({tool_args})")
+                self.logger.info(f"[ObserverAgent]   -> {tool_name}({tool_args})")
 
                 if tool_name in tools_map:
                     tool_result = tools_map[tool_name].invoke(tool_args)
-                    self.logger.info(f"     Result: {str(tool_result)[:150]}...")
+                    self.logger.info(f"[ObserverAgent]      Result: {str(tool_result)[:150]}...")
                     tool_results.append(f"{tool_name}: {tool_result}")
 
             historical_context = "\n\n".join(tool_results) if tool_results else "No historical context available."
@@ -156,7 +157,7 @@ class ObserverAgent:
 
     def _create_observation_prompt(self, game_response: str, location: str, historical_context: str, tracked_issues: str) -> str:
         """Create the prompt for game response observation"""
-        return f"""You are the Observer Agent in a Zork-playing AI system.
+        return f"""You are the Observer Agent in a {GAME_NAME}-playing AI system.
 
 YOUR SINGLE RESPONSIBILITY:
 Analyze the game response and identify ANY new strategic issues, puzzles, or obstacles to track.
@@ -203,31 +204,58 @@ WHAT TO IDENTIFY (ONLY IF NEW)
   - Movement confirmations
   - Simple location descriptions
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL: INCLUDE ACCEPTANCE CRITERIA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When creating an issue, use this format:
+"[Description] — [ACCEPTANCE CRITERIA]"
+
+The acceptance criteria should clearly state what needs to happen for this issue to be SOLVED.
+
+Format examples:
+- "Locked [item] — unlock/open it"
+- "[Item] that cannot be opened — find tool to open it"
+- "[Obstacle] blocking path — defeat/remove it"
+- "Simple [item] — take it"
+
 EXAMPLES:
 
 Game: "There is a small mailbox here."
 Tracked issues: (empty)
-→ remember: "Small mailbox at West Of House"
+→ remember: "Small mailbox at West Of House — open it and examine contents"
 → rememberImportance: 700
 → item: "mailbox"
 
 Game: "There is a small mailbox here."
-Tracked issues: "Small mailbox at West Of House"
+Tracked issues: "Small mailbox at West Of House — open it and examine contents"
 → remember: ""  ← EMPTY because already tracked!
 → rememberImportance: None
 → item: ""
 
 Game: "In disturbing the pile of leaves, a grating is revealed."
-Tracked issues: "Pile of leaves in Clearing"
-→ remember: "Grating revealed in pile of leaves at Clearing"  ← NEW discovery
+Tracked issues: (empty)
+→ remember: "Grating at Clearing — open or unlock it"
 → rememberImportance: 800
 → item: "grating"
 
 Game: "The grating is locked."
-Tracked issues: "Grating revealed in pile of leaves at Clearing"
-→ remember: "Locked grating at Clearing - need key"  ← NEW information about existing issue
+Tracked issues: "Grating at Clearing — open or unlock it"
+→ remember: "Locked grating at Clearing — find key and unlock it"  ← UPDATE with more specific criteria
 → rememberImportance: 900
 → item: ""
+
+Game: "There is a jewel-encrusted egg in the bird's nest. It cannot be opened."
+Tracked issues: (empty)
+→ remember: "Jewel-encrusted egg in nest — find tool to open it"
+→ rememberImportance: 750
+→ item: "egg"
+
+Game: "There is a brass lantern here."
+Tracked issues: (empty)
+→ remember: "Brass lantern at location — take it"
+→ rememberImportance: 600
+→ item: "lantern"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IMPORTANCE SCORING (1-1000)
@@ -242,12 +270,14 @@ IMPORTANCE SCORING (1-1000)
 CRITICAL RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. Check TRACKED ISSUES first - if already listed, leave 'remember' EMPTY
-2. Only track TRULY NEW discoveries that require puzzle-solving
-3. DO NOT track blocked paths, new exits, or directions (ExplorerAgent handles exploration)
-4. DO NOT track general location descriptions or movement confirmations
-5. ONLY track items, obstacles, or puzzles that need solving
-6. Include location name in 'remember' field for context
+1. ALWAYS use the format: "[Description] — [ACCEPTANCE CRITERIA]"
+2. Check TRACKED ISSUES first - if already listed, leave 'remember' EMPTY
+3. Only track TRULY NEW discoveries that require puzzle-solving
+4. DO NOT track blocked paths, new exits, or directions (ExplorerAgent handles exploration)
+5. DO NOT track general location descriptions or movement confirmations
+6. ONLY track items, obstacles, or puzzles that need solving
+7. Include location name in description for context
+8. Make acceptance criteria SPECIFIC and MEASURABLE (what action resolves it?)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CURRENT ANALYSIS

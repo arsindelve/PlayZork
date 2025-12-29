@@ -105,10 +105,18 @@ class DatabaseManager:
                     location TEXT,
                     score INTEGER DEFAULT 0,
                     moves INTEGER DEFAULT 0,
+                    closed INTEGER DEFAULT 0,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 )
             """)
+
+            # Add closed column to existing tables (migration)
+            try:
+                cursor.execute("ALTER TABLE memories ADD COLUMN closed INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
 
             # Map transitions table
             cursor.execute("""
@@ -142,6 +150,11 @@ class DatabaseManager:
             """)
 
             cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_memories_closed
+                ON memories(session_id, closed)
+            """)
+
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_map_transitions_session
                 ON map_transitions(session_id, from_location)
             """)
@@ -149,11 +162,35 @@ class DatabaseManager:
     # ===== Session Management =====
 
     def create_session(self, session_id: str) -> None:
-        """Create a new game session (deletes old session data if exists)"""
+        """Create a new game session OR resume existing session if it already exists"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if session already exists
+            cursor.execute("SELECT session_id FROM sessions WHERE session_id = ?", (session_id,))
+            existing = cursor.fetchone()
+
+            if existing:
+                # Session exists - RESUME it (don't delete data)
+                # Just ensure status is active
+                cursor.execute(
+                    "UPDATE sessions SET status = ? WHERE session_id = ?",
+                    ("active", session_id)
+                )
+            else:
+                # New session - create it
+                cursor.execute(
+                    "INSERT INTO sessions (session_id, status) VALUES (?, ?)",
+                    (session_id, "active")
+                )
+
+    def reset_session(self, session_id: str) -> None:
+        """Delete all data for a session and create a fresh one"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
             # Delete all old data for this session_id
+            cursor.execute("DELETE FROM map_transitions WHERE session_id = ?", (session_id,))
             cursor.execute("DELETE FROM memories WHERE session_id = ?", (session_id,))
             cursor.execute("DELETE FROM summaries WHERE session_id = ?", (session_id,))
             cursor.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
@@ -328,24 +365,42 @@ class DatabaseManager:
     def get_top_memories(
         self,
         session_id: str,
-        limit: int = 10
+        limit: int = 10,
+        include_closed: bool = False
     ) -> List[Tuple[int, str, int, int, str]]:
         """
         Get top N memories by importance.
+
+        Args:
+            session_id: Game session ID
+            limit: Maximum number of memories to return
+            include_closed: If True, include closed issues (used for duplicate detection)
 
         Returns:
             List of (id, content, importance, turn_number, location)
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """SELECT id, content, importance, turn_number, location
-                   FROM memories
-                   WHERE session_id = ?
-                   ORDER BY importance DESC, turn_number DESC
-                   LIMIT ?""",
-                (session_id, limit)
-            )
+            if include_closed:
+                # Include all memories (open AND closed) - for duplicate checking
+                cursor.execute(
+                    """SELECT id, content, importance, turn_number, location
+                       FROM memories
+                       WHERE session_id = ?
+                       ORDER BY importance DESC, turn_number DESC
+                       LIMIT ?""",
+                    (session_id, limit)
+                )
+            else:
+                # Only open memories - for agent spawning
+                cursor.execute(
+                    """SELECT id, content, importance, turn_number, location
+                       FROM memories
+                       WHERE session_id = ? AND (closed = 0 OR closed IS NULL)
+                       ORDER BY importance DESC, turn_number DESC
+                       LIMIT ?""",
+                    (session_id, limit)
+                )
             return [(row[0], row[1], row[2], row[3], row[4])
                     for row in cursor.fetchall()]
 
@@ -366,7 +421,7 @@ class DatabaseManager:
             cursor.execute(
                 """SELECT content, importance, turn_number
                    FROM memories
-                   WHERE session_id = ? AND location = ?
+                   WHERE session_id = ? AND location = ? AND (closed = 0 OR closed IS NULL)
                    ORDER BY importance DESC, turn_number DESC
                    LIMIT ?""",
                 (session_id, location, limit)
@@ -379,7 +434,12 @@ class DatabaseManager:
         session_id: str,
         content: str
     ) -> bool:
-        """Check if a memory with similar content already exists"""
+        """
+        Check if a memory with similar content already exists.
+
+        IMPORTANT: Checks ALL memories including closed ones to prevent
+        creating duplicates of already-solved issues.
+        """
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -390,26 +450,47 @@ class DatabaseManager:
             count = cursor.fetchone()[0]
             return count > 0
 
+    def close_memory(
+        self,
+        session_id: str,
+        memory_id: int
+    ) -> bool:
+        """
+        Close a memory by setting closed=1 (soft delete).
+
+        Closed memories are:
+        - NOT returned when fetching issues for agent spawning
+        - Still checked for duplicates (prevent re-creating solved issues)
+
+        Returns:
+            True if memory was closed, False otherwise
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE memories
+                   SET closed = 1
+                   WHERE session_id = ? AND id = ? AND (closed = 0 OR closed IS NULL)""",
+                (session_id, memory_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def remove_memory(
         self,
         session_id: str,
         memory_id: int
     ) -> bool:
         """
-        Remove a memory by ID.
+        DEPRECATED: Use close_memory() instead.
+
+        Close a memory by setting closed=1 (soft delete).
+        Kept for backwards compatibility.
 
         Returns:
-            True if memory was removed, False otherwise
+            True if memory was closed, False otherwise
         """
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """DELETE FROM memories
-                   WHERE session_id = ? AND id = ?""",
-                (session_id, memory_id)
-            )
-            conn.commit()
-            return cursor.rowcount > 0
+        return self.close_memory(session_id, memory_id)
 
     def decay_all_importances(
         self,
@@ -417,7 +498,10 @@ class DatabaseManager:
         decay_factor: float = 0.9
     ) -> int:
         """
-        Decay all memory importance scores by a factor (default 10% reduction).
+        Decay all OPEN memory importance scores by a factor (default 10% reduction).
+
+        Only decays open memories (closed=0). Closed memories keep their importance
+        for historical purposes.
 
         Args:
             session_id: Session ID
@@ -431,7 +515,7 @@ class DatabaseManager:
             cursor.execute(
                 """UPDATE memories
                    SET importance = CAST(importance * ? AS INTEGER)
-                   WHERE session_id = ? AND importance > 0""",
+                   WHERE session_id = ? AND importance > 0 AND (closed = 0 OR closed IS NULL)""",
                 (decay_factor, session_id)
             )
             conn.commit()

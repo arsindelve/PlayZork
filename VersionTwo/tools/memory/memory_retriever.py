@@ -2,6 +2,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from typing import List
 from .memory_state import Memory
+from config import GAME_NAME
 
 
 class MemoryRetriever:
@@ -41,7 +42,7 @@ class MemoryRetriever:
         ])
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are helping someone play Zork by searching their memory notes.
+            ("system", f"""You are helping someone play {GAME_NAME} by searching their memory notes.
 
 You will be given:
 1. A list of memories (things they flagged as important)
@@ -94,7 +95,7 @@ Which memories are relevant and what's the answer?""")
         ])
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are summarizing memories about a specific location in Zork. Be concise."),
+            ("system", f"You are summarizing memories about a specific location in {GAME_NAME}. Be concise."),
             ("human", """Location: {location}
 
 Memories from this location:

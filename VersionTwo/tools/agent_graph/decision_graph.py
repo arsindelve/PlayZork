@@ -88,8 +88,11 @@ def create_spawn_agents_node(
             memories = memory_toolkit.state.get_top_memories(limit=5)
             logger.info(f"Retrieved {len(memories)} memories from database")
 
+            # Sort by location name for cleaner console display
+            memories_sorted = sorted(memories, key=lambda m: m.location if m.location else "")
+
             # Create one IssueAgent for each issue (max 5)
-            issue_agents = [IssueAgent(memory=mem) for mem in memories]
+            issue_agents = [IssueAgent(memory=mem) for mem in memories_sorted]
 
             logger.info(f"SPAWNED {len(issue_agents)} IssueAgents (top 5 by importance)")
 
@@ -316,11 +319,11 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
                 tool_name = tool_call['name']
                 tool_args = tool_call.get('args', {})
 
-                logger.info(f"  -> {tool_name}({tool_args})")
+                logger.info(f"[ResearchAgent]   -> {tool_name}({tool_args})")
 
                 if tool_name in tools_map:
                     tool_result = tools_map[tool_name].invoke(tool_args)
-                    logger.info(f"     Result: {str(tool_result)[:150]}...")
+                    logger.info(f"[ResearchAgent]      Result: {str(tool_result)[:150]}...")
                     tool_results.append(f"{tool_name} result: {tool_result}")
 
             # Combine tool results into summary
@@ -595,7 +598,14 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
                 moves=zork_response.Moves
             )
             state["memory_persisted"] = was_added
-            logger.info(f"Memory added: {was_added}")
+
+            # Log summary
+            logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            if was_added:
+                logger.info(f"MEMORY STORED: [{observer_response.rememberImportance}/1000] {observer_response.remember}")
+            else:
+                logger.info(f"MEMORY STORAGE FAILED (duplicate?): [{observer_response.rememberImportance}/1000] {observer_response.remember}")
+            logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         else:
             logger.info("NO MEMORY TO STORE (remember field empty or whitespace)")
             state["memory_persisted"] = False

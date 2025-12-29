@@ -115,7 +115,7 @@ class GameSession:
 
             # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)
             # The graph handles: research, decision, issue closing, observation, and memory persistence
-            player_response, issue_agents, explorer_agent, issue_closed_response, observer_response = self.adventurer_service.handle_user_input(
+            player_response, issue_agents, explorer_agent, loop_detection_agent, issue_closed_response, observer_response = self.adventurer_service.handle_user_input(
                 zork_response,
                 self.turn_number
             )
@@ -147,7 +147,7 @@ class GameSession:
             self.logger.log_summary_update(recent_summary)
 
             # Step 6: Update display with agents (formatting handled by DisplayManager)
-            display.update_agents(issue_agents, explorer_agent)
+            display.update_agents(issue_agents, explorer_agent, loop_detection_agent)
 
             # Step 7: Update display with map (formatting handled by DisplayManager)
             transitions = self.mapper_toolkit.state.get_all_transitions()

@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from .issue_closed_response import IssueClosedResponse
 from tools.memory import MemoryToolkit
 from tools.history import HistoryToolkit
+from config import GAME_NAME
 import logging
 
 
@@ -94,9 +95,9 @@ class IssueClosedAgent:
 
         recent_history = ""
         if recent_turns_tool:
-            self.logger.info(f"  -> get_recent_turns(n=5)")
+            self.logger.info(f"[IssueClosedAgent]   -> get_recent_turns(n=5)")
             recent_history = recent_turns_tool.invoke({"n": 5})
-            self.logger.info(f"     Result: {str(recent_history)[:150]}...")
+            self.logger.info(f"[IssueClosedAgent]      Result: {str(recent_history)[:150]}...")
             self.logger.info(f"[IssueClosedAgent] Recent history length: {len(recent_history)} chars")
         else:
             recent_history = "No recent history available."
@@ -154,9 +155,18 @@ class IssueClosedAgent:
         # Update response with content strings for display
         response.closed_issue_contents = closed_contents
 
-        self.logger.info(f"[IssueClosedAgent] Analysis complete:")
-        self.logger.info(f"  Closed {len(response.closed_issue_ids)} issue(s)")
-        self.logger.info(f"  Reasoning: {response.reasoning}")
+        # Log summary
+        self.logger.info(f"[IssueClosedAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        self.logger.info(f"[IssueClosedAgent] SUMMARY")
+        if response.closed_issue_ids:
+            self.logger.info(f"[IssueClosedAgent] ISSUES CLOSED: {len(response.closed_issue_ids)} issue(s) resolved")
+            for closed_issue in response.closed_issue_contents:
+                self.logger.info(f"[IssueClosedAgent]   - CLOSED: '{closed_issue}'")
+            if response.reasoning:
+                self.logger.info(f"[IssueClosedAgent]   Reasoning: {response.reasoning}")
+        else:
+            self.logger.info(f"[IssueClosedAgent] No issues closed this turn")
+        self.logger.info(f"[IssueClosedAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         return response
 
@@ -164,7 +174,7 @@ class IssueClosedAgent:
         self, game_response: str, location: str, recent_history: str, tracked_issues: str
     ) -> str:
         """Create the prompt for analyzing resolved issues"""
-        return f"""You are the IssueClosedAgent in a Zork-playing AI system.
+        return f"""You are the IssueClosedAgent in a {GAME_NAME}-playing AI system.
 
 YOUR SINGLE RESPONSIBILITY:
 Analyze recent game history and identify which tracked issues have been SOLVED/RESOLVED.
@@ -193,72 +203,118 @@ Location: {location}
 Game Response: {game_response}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHAT MAKES AN ISSUE "RESOLVED"?
+HOW TO DETERMINE IF AN ISSUE IS RESOLVED
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✓ Locked doors/gates → OPENED or UNLOCKED
-✓ Simple item collection → TAKEN and in inventory (ONLY if issue is just about taking it)
-✓ Obstacles/blockages → REMOVED or BYPASSED
-✓ Puzzles → SOLVED (evidence of success)
-✓ Exploration goals → COMPLETED (location fully explored)
-✓ Containers (mailbox, chest) → OPENED and contents examined/taken
+Each tracked issue has this format:
+"[Description] — [ACCEPTANCE CRITERIA]"
 
-CRITICAL - READ THE ISSUE CAREFULLY:
-If an issue mentions "cannot open", "need tools", "locked", "puzzle", or similar,
-then TAKING the item does NOT resolve it. You must see evidence the puzzle was SOLVED.
+EXAMPLE: "Grating at Clearing — open or unlock it"
+  - Description: "Grating at Clearing"
+  - Acceptance Criteria: "open or unlock it"
+
+YOUR JOB:
+1. Extract the ACCEPTANCE CRITERIA (everything after the "—")
+2. Check if that SPECIFIC criteria is met in recent history
+3. ONLY close if the acceptance criteria is SATISFIED
+
+The acceptance criteria is the ONLY thing that matters for closing.
+Ignore the description part - focus solely on whether the criteria is met.
+
+CRITICAL RULES:
+- "open it" → Only close if history shows it was OPENED
+- "unlock it" → Only close if history shows it was UNLOCKED
+- "take it" → Only close if history shows it was TAKEN
+- "find key and unlock" → Only close if BOTH key found AND unlocked
+- "find tool to open" → Only close if tool found AND item opened
+- "defeat/remove it" → Only close if defeated or removed
+
+DO NOT close if:
+- Only part of the criteria is met
+- The description event happened, but not the acceptance criteria
+- Similar but not exact criteria was met
 
 EXAMPLES:
 
-Tracked: "Locked grating at Clearing - need key"
-Recent history shows: "You unlock the grating with the key" or "The grating is now open"
-→ CLOSE THIS ISSUE ✓
+Tracked: "Grating at Clearing — open or unlock it"
+Acceptance Criteria: "open or unlock it"
+Recent history shows: "a grating is revealed"
+→ DO NOT CLOSE! Criteria is "open or unlock", not "reveal". Not met.
 
-Tracked: "Small mailbox at West Of House"
+Tracked: "Grating at Clearing — open or unlock it"
+Acceptance Criteria: "open or unlock it"
+Recent history shows: "You open the grating" or "You unlock the grating"
+→ CLOSE THIS ISSUE ✓ (criteria met: it was opened/unlocked)
+
+Tracked: "Locked grating at Clearing — find key and unlock it"
+Acceptance Criteria: "find key and unlock it"
+Recent history shows: "You unlock the grating with the key"
+→ CLOSE THIS ISSUE ✓ (both parts met: key found AND grating unlocked)
+
+Tracked: "Locked grating at Clearing — find key and unlock it"
+Acceptance Criteria: "find key and unlock it"
+Recent history shows: "You take the brass key"
+→ DO NOT CLOSE! Only found key, haven't unlocked grating yet.
+
+Tracked: "Small mailbox at West Of House — open it and examine contents"
+Acceptance Criteria: "open it and examine contents"
 Recent history shows: "You open the mailbox" AND "You take the leaflet"
-→ CLOSE THIS ISSUE ✓
+→ CLOSE THIS ISSUE ✓ (opened and contents handled)
 
-Tracked: "Troll blocking path at Troll Room"
-Recent history shows: "The troll is defeated" or "The troll has left"
-→ CLOSE THIS ISSUE ✓
+Tracked: "Troll blocking path — defeat or remove it"
+Acceptance Criteria: "defeat or remove it"
+Recent history shows: "The troll is defeated"
+→ CLOSE THIS ISSUE ✓ (criteria met: defeated)
 
-Tracked: "Locked door in Living Room"
-Recent history shows: "The door is still locked" or no mention
-→ DO NOT CLOSE (still unresolved)
+Tracked: "Brass lantern on table — take it"
+Acceptance Criteria: "take it"
+Recent history shows: "You take the brass lantern"
+→ CLOSE THIS ISSUE ✓ (simple criteria met)
 
-Tracked: "Sword on table in Living Room"
-Recent history shows: "You take the sword"
-→ CLOSE THIS ISSUE ✓ (simple collection)
-
-Tracked: "Jewel-encrusted egg — cannot be opened without tools or expertise"
+Tracked: "Jewel-encrusted egg in nest — find tool to open it"
+Acceptance Criteria: "find tool to open it"
 Recent history shows: "You take the egg"
-→ DO NOT CLOSE! Taking ≠ Opening. Issue is about OPENING, not taking.
+→ DO NOT CLOSE! Criteria is "find tool AND open", not just "take". Not met.
 
-Tracked: "Jewel-encrusted egg — cannot be opened without tools or expertise"
-Recent history shows: "You open the egg with the [tool]" or "The egg opens to reveal..."
-→ CLOSE THIS ISSUE ✓ (puzzle solved)
-
-Tracked: "Small bottle with mysterious liquid"
-Recent history shows: "You take the bottle"
-→ CLOSE THIS ISSUE ✓ (no puzzle mentioned, just collection)
+Tracked: "Jewel-encrusted egg in nest — find tool to open it"
+Acceptance Criteria: "find tool to open it"
+Recent history shows: "You open the egg with the wrench"
+→ CLOSE THIS ISSUE ✓ (tool found and egg opened)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CLOSING STRATEGY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-BE CAREFUL - Match resolution to the actual issue:
-1. READ the issue description carefully
-2. Identify what the ACTUAL problem is (take? open? unlock? defeat?)
-3. ONLY close if that SPECIFIC problem is solved
+STEP-BY-STEP PROCESS:
 
-If issue says "cannot open" → Evidence must show it was OPENED
-If issue says "locked" → Evidence must show it was UNLOCKED
-If issue says "blocking" → Evidence must show obstacle REMOVED
-If issue is just describing an item → Evidence of TAKING is enough
+For each tracked issue:
+1. FIND the "—" separator in the issue text
+2. EXTRACT everything after "—" as the acceptance criteria
+3. CHECK if recent history shows that SPECIFIC criteria being met
+4. CLOSE only if criteria is FULLY satisfied
+
+COMMON ACCEPTANCE CRITERIA PATTERNS:
+
+"open it" → Look for: "opened", "open", "opening"
+"unlock it" → Look for: "unlocked", "unlock", "unlocking"
+"take it" → Look for: "taken", "take", "taking", "you have the"
+"find key and unlock" → Look for BOTH actions
+"find tool to open" → Look for tool acquisition AND opening
+"defeat it" → Look for: "defeated", "dead", "killed", "gone"
+"examine contents" → Look for: "examined", "contains", "inside is"
+
+IGNORE THE DESCRIPTION - FOCUS ON CRITERIA:
+
+The text before "—" is just context. What matters is after "—".
+
+Example: "Ancient mysterious grating covered in runes — unlock it"
+- Ignore: "Ancient mysterious grating covered in runes" (just flavor text)
+- Focus: "unlock it" (this is what needs to happen)
 
 ONLY KEEP OPEN:
-- Issues with NO evidence of resolution in recent history
-- Ongoing obstacles still blocking progress
-- Puzzles where taking an item doesn't solve the puzzle (e.g., locked boxes, cannot-open items)
+- Acceptance criteria NOT met in recent history
+- Partial progress (e.g., "find X and do Y" but only X done)
+- No evidence of the specific criteria being satisfied
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT

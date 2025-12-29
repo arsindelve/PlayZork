@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
+from config import GAME_NAME
+import logging
 
 
 class ExplorerProposal(BaseModel):
@@ -50,7 +52,7 @@ class ExplorerAgent:
         self.confidence: Optional[int] = None
         self.research_context: Optional[str] = None
 
-        # Pick best direction and calculate confidence
+        # Pick the best direction and calculate confidence
         self.best_direction = self._pick_best_direction()
 
     def _pick_best_direction(self) -> str:
@@ -170,26 +172,27 @@ class ExplorerAgent:
                 all_tools = history_tools + mapper_tools
                 tools_map = {tool.name: tool for tool in all_tools}
 
-                logger.info(f"[ExplorerAgent] Made {len(research_response.tool_calls)} tool calls:")
+                logger.info(f"[ExplorerAgent:{self.best_direction}] Made {len(research_response.tool_calls)} tool calls:")
 
                 for tool_call in research_response.tool_calls:
                     tool_name = tool_call['name']
                     tool_args = tool_call.get('args', {})
 
-                    logger.info(f"  -> {tool_name}({tool_args})")
+                    logger.info(f"[ExplorerAgent:{self.best_direction}]   -> {tool_name}({tool_args})")
 
                     if tool_name in tools_map:
                         tool_result = tools_map[tool_name].invoke(tool_args)
-                        logger.info(f"     Result: {str(tool_result)[:150]}...")
+                        logger.info(f"[ExplorerAgent:{self.best_direction}]      Result: {str(tool_result)[:150]}...")
                         tool_results.append(f"{tool_name} result: {tool_result}")
 
                 self.research_context = "\n\n".join(tool_results) if tool_results else "No tools called"
             else:
-                logger.info(f"[ExplorerAgent] No tool calls made")
+                logger.info(f"[ExplorerAgent:{self.best_direction}] No tool calls made")
                 self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
 
         except Exception as e:
-            self.research_context = f"Research failed: {str(e)}"
+            logger.error(f"[ExplorerAgent] Research failed: {e}")
+            raise
 
         # Calculate confidence for the chosen direction
         self.confidence = self._calculate_confidence(self.best_direction)
@@ -202,7 +205,7 @@ class ExplorerAgent:
             why_chosen = "It is a cardinal direction to try systematically"
 
         proposal_prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are an ExplorerAgent focused on systematic exploration in Zork.
+            ("system", f"""You are an ExplorerAgent focused on systematic exploration in {GAME_NAME}.
 
 Your task: Advocate for exploring the {{best_direction}} direction from the current location.
 
@@ -212,7 +215,7 @@ This direction was chosen as the best option from {{unexplored_count}} unexplore
 
 Rules for proposed_action:
 - Propose exploring {{best_direction}} (e.g., "GO {{best_direction}}" or just "{{best_direction}}")
-- Use standard Zork command format
+- Use standard command format for {GAME_NAME}
 
 Rules for reason:
 - Explain why exploring this direction makes sense now
@@ -269,6 +272,14 @@ Propose exploring {best_direction}.""")
             # Confidence already calculated
 
         except Exception as e:
-            self.proposed_action = self.best_direction
-            self.reason = f"Explore {self.best_direction} (unexplored direction, {len(self.unexplored_directions)} total remaining)"
-            # Keep calculated confidence
+            logger.error(f"[ExplorerAgent] Proposal generation failed: {e}")
+            raise
+
+        # Log proposal summary
+        logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[ExplorerAgent] PROPOSAL SUMMARY")
+        logger.info(f"[ExplorerAgent] Direction: {self.best_direction} from {self.current_location}")
+        logger.info(f"[ExplorerAgent] Proposed Action: '{self.proposed_action}' (confidence: {self.confidence}/100)")
+        if self.reason:
+            logger.info(f"[ExplorerAgent] Reason: {self.reason}")
+        logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

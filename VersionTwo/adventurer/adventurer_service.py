@@ -7,7 +7,7 @@ from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
-from tools.agent_graph import create_decision_graph, ExplorerAgent, IssueClosedResponse, ObserverResponse
+from tools.agent_graph import create_decision_graph, ExplorerAgent, LoopDetectionAgent, IssueClosedResponse, ObserverResponse
 from game_logger import GameLogger
 from config import get_cheap_llm, get_expensive_llm
 from typing import List, Tuple, Optional
@@ -104,12 +104,12 @@ class AdventurerService:
         # Chain with structured output (using shared decision_llm)
         return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[IssueClosedResponse], Optional[ObserverResponse]]:
+    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse]]:
         """
         Execute the LangGraph decision flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
 
         The graph manages the entire flow:
-        1. SpawnAgents node: Creates IssueAgents + ExplorerAgent
+        1. SpawnAgents node: Creates IssueAgents + ExplorerAgent + LoopDetectionAgent
         2. Research node: Calls history tools to gather context
         3. Decision node: Generates AdventurerResponse with structured output
         4. CloseIssues node: Identifies and removes resolved issues from memory
@@ -121,7 +121,7 @@ class AdventurerService:
             turn_number: Current turn number for memory persistence
 
         Returns:
-            Tuple of (AdventurerResponse, List[IssueAgent], Optional[ExplorerAgent], Optional[IssueClosedResponse], Optional[ObserverResponse]) - the decision, issue agents, explorer agent, closed issues, and observer response
+            Tuple of (AdventurerResponse, List[IssueAgent], Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse]) - the decision, issue agents, explorer agent, loop detection agent, closed issues, and observer response
         """
         # Update turn number reference for persist node
         self.turn_number_ref["current"] = turn_number
@@ -140,57 +140,13 @@ class AdventurerService:
         }
 
         # Execute the graph (SpawnAgents → Research → Decide → CloseIssues → Observe → Persist)
+        # Each agent logs its own activities and summaries
         self.logger.log_research_start()
         final_state = self.decision_graph.invoke(initial_state)
         self.logger.log_research_complete(final_state["research_context"])
 
-        # Log spawned agents and their proposals
-        num_agents = len(final_state["issue_agents"])
-        if num_agents > 0:
-            self.logger.logger.info(f"SPAWNED {num_agents} IssueAgents - Proposals:")
-            for i, agent in enumerate(final_state["issue_agents"][:10], 1):  # Log first 10
-                self.logger.logger.info(
-                    f"  {i}. [{agent.importance}/1000] {agent.issue_content}"
-                )
-                self.logger.logger.info(
-                    f"     > Proposed: '{agent.proposed_action}' (confidence: {agent.confidence}/100)"
-                )
-                if agent.reason:
-                    self.logger.logger.info(
-                        f"     > Reason: {agent.reason}"
-                    )
-
-        # Log explorer agent if present
-        explorer_agent = final_state["explorer_agent"]
-        if explorer_agent:
-            self.logger.logger.info(f"SPAWNED 1 ExplorerAgent - Proposal:")
-            self.logger.logger.info(
-                f"  [EXPLORE] {explorer_agent.best_direction} from {explorer_agent.current_location}"
-            )
-            self.logger.logger.info(
-                f"  > Proposed: '{explorer_agent.proposed_action}' (confidence: {explorer_agent.confidence}/100)"
-            )
-            if explorer_agent.reason:
-                self.logger.logger.info(
-                    f"  > Reason: {explorer_agent.reason}"
-                )
-
-        # Log loop detection agent if loop detected
-        loop_detection_agent = final_state["loop_detection_agent"]
-        if loop_detection_agent and loop_detection_agent.loop_detected:
-            self.logger.logger.info(f"SPAWNED 1 LoopDetectionAgent - ⚠️ LOOP DETECTED:")
-            self.logger.logger.info(
-                f"  [LOOP: {loop_detection_agent.loop_type}]"
-            )
-            self.logger.logger.info(
-                f"  > Proposed: '{loop_detection_agent.proposed_action}' (confidence: {loop_detection_agent.confidence}/100)"
-            )
-            if loop_detection_agent.reason:
-                self.logger.logger.info(
-                    f"  > Reason: {loop_detection_agent.reason}"
-                )
-
-        # Extract decision, closed issues, and observation from final state
+        # Extract decision from final state
+        # (All agents log their own summaries following SRP)
         adventurer_response = final_state["decision"]
         issue_closed_response = final_state["issue_closed_response"]
         observer_response = final_state["observer_response"]
@@ -198,21 +154,5 @@ class AdventurerService:
         # Log the final decision
         self.logger.log_decision(adventurer_response.command, adventurer_response.reason)
 
-        # Log closed issues from IssueClosedAgent
-        if issue_closed_response and issue_closed_response.closed_issue_ids:
-            self.logger.logger.info(
-                f"ISSUES CLOSED: {len(issue_closed_response.closed_issue_ids)} issue(s) resolved"
-            )
-            for closed_issue in issue_closed_response.closed_issue_contents:
-                self.logger.logger.info(f"  - CLOSED: '{closed_issue}'")
-            if issue_closed_response.reasoning:
-                self.logger.logger.info(f"  Reasoning: {issue_closed_response.reasoning}")
-
-        # Log memory persistence from Observer Agent
-        if final_state["memory_persisted"]:
-            self.logger.logger.info(
-                f"MEMORY STORED: [{observer_response.rememberImportance}/1000] {observer_response.remember}"
-            )
-
-        # Return the decision, issue agents, explorer agent, closed issues, and observer response for display
-        return adventurer_response, final_state["issue_agents"], final_state["explorer_agent"], issue_closed_response, observer_response
+        # Return the decision, issue agents, explorer agent, loop detection agent, closed issues, and observer response for display
+        return adventurer_response, final_state["issue_agents"], final_state["explorer_agent"], final_state["loop_detection_agent"], issue_closed_response, observer_response

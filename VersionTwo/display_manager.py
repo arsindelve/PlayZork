@@ -107,45 +107,78 @@ class DisplayManager:
         self.current_map = map_text
         self._update_display()
 
-    def update_agents(self, issue_agents: list, explorer_agent):
+    def update_agents(self, issue_agents: list, explorer_agent, loop_detection_agent=None):
         """
         Update the agents display (formats internally)
 
         Args:
             issue_agents: List of IssueAgent objects
             explorer_agent: ExplorerAgent object or None
+            loop_detection_agent: LoopDetectionAgent object or None
         """
         from tools.agent_graph import ExplorerAgent
+        from tools.agent_graph import LoopDetectionAgent
 
         all_agents = issue_agents + ([explorer_agent] if explorer_agent else [])
 
-        if all_agents:
-            # Sort by confidence descending
-            all_agents.sort(key=lambda a: a.confidence if a.confidence else 0, reverse=True)
-
+        if all_agents or loop_detection_agent:
             agents_text = ""
+            item_num = 1
+
+            # Show LoopDetectionAgent status (FIRST - highest priority)
+            if loop_detection_agent:
+                if loop_detection_agent.loop_detected:
+                    # LOOP DETECTED - show warning
+                    agents_text += f"{item_num}. ⚠️ [LOOP DETECTED] {loop_detection_agent.loop_type.upper()}\n"
+                    agents_text += f"   Confidence: {loop_detection_agent.confidence}/100\n"
+                    agents_text += f"   > Breaking Action: {loop_detection_agent.proposed_action}\n"
+
+                    # Show reason (truncate if very long for console display)
+                    if loop_detection_agent.reason:
+                        reason_lines = loop_detection_agent.reason.split('\n')
+                        # Show first 10 lines of detailed reason
+                        truncated_reason = '\n'.join(reason_lines[:10])
+                        if len(reason_lines) > 10:
+                            truncated_reason += f"\n   ... ({len(reason_lines) - 10} more lines in logs)"
+                        agents_text += f"   > Reason:\n{truncated_reason}\n"
+
+                    agents_text += "\n"
+                    item_num += 1
+                else:
+                    # No loop detected - show status
+                    agents_text += f"[LoopDetection] ✓ No loop detected (monitoring)\n\n"
+
+            # Sort by location name (for cleaner display), then by importance within each location
+            all_agents.sort(key=lambda a: (
+                getattr(a, 'location', getattr(a, 'current_location', 'zzz')),  # Location first (zzz puts ExplorerAgent last)
+                -getattr(a, 'importance', 0)  # Then by importance descending within location
+            ))
+
             for i, agent in enumerate(all_agents[:10], 1):  # Show top 10
                 # Determine type and display accordingly
                 if isinstance(agent, ExplorerAgent):
-                    agents_text += f"{i}. [EXPLORE] {agent.best_direction} from {agent.current_location}\n"
+                    agents_text += f"{item_num}. [EXPLORE] {agent.best_direction} from {agent.current_location}\n"
                     agents_text += f"   Unexplored: {len(agent.unexplored_directions)} total"
                     if agent.mentioned_directions:
                         agents_text += f" (Mentioned: {', '.join(agent.mentioned_directions)})"
                     agents_text += "\n"
                 else:  # IssueAgent
-                    agents_text += f"[ID:{agent.memory.id}] [{agent.importance}/1000] {agent.issue_content}\n"
+                    agents_text += f"{item_num}. [ID:{agent.memory.id}] [{agent.importance}/1000] {agent.issue_content}\n"
                     agents_text += f"   Turn {agent.turn_number} @ {agent.location}\n"
 
                 # Show proposal (same format for both)
                 if agent.proposed_action and agent.confidence is not None:
                     agents_text += f"   > Proposal: {agent.proposed_action}\n"
                     if agent.reason:
-                        agents_text += f"   > Reason: {agent.reason}\n"
+                        # Truncate reason for console (show first 200 chars)
+                        reason_preview = agent.reason[:200] + "..." if len(agent.reason) > 200 else agent.reason
+                        agents_text += f"   > Reason: {reason_preview}\n"
                     agents_text += f"   > Confidence: {agent.confidence}/100\n"
                 else:
                     agents_text += f"   > Proposal: (pending)\n"
 
                 agents_text += "\n"
+                item_num += 1
 
             self.current_memories = agents_text.strip()
         else:
@@ -161,8 +194,11 @@ class DisplayManager:
             transitions: List of LocationTransition objects
         """
         if transitions:
+            # Sort by from_location first, then by direction
+            sorted_transitions = sorted(transitions, key=lambda t: (t.from_location, t.direction))
+
             map_text = ""
-            for trans in transitions:
+            for trans in sorted_transitions:
                 map_text += f"{trans.from_location} --[{trans.direction}]--> {trans.to_location} (T{trans.turn_discovered})\n"
             self.current_map = map_text.strip()
         else:

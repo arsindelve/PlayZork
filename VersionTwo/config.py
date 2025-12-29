@@ -9,6 +9,13 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 import time
 
 # ═══════════════════════════════════════════════════════════
+# GAME CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+GAME_NAME = "Zork I"
+GAME_OBJECTIVE = "Reach a score of 350 points"
+GAME_OBJECTIVE_SCORE = 350  # Numeric value for scoring logic
+
+# ═══════════════════════════════════════════════════════════
 # CHANGE THIS ONE LINE TO SWITCH PROVIDERS
 # ═══════════════════════════════════════════════════════════
 LLM_PROVIDER = "openai"  # Options: "openai" or "ollama"

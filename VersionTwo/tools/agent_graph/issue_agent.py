@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_core.language_models import BaseChatModel
+from config import GAME_NAME
 import logging
 
 
@@ -117,9 +118,9 @@ class IssueAgent:
                 research_input,
                 operation_name=f"IssueAgent Research: {self.issue_content[:40]}"
             )
-            logger.info(f"[IssueAgent] Research agent responded successfully")
+            logger.info(f"[IssueAgent ID:{self.memory.id}] Research agent responded successfully")
         except Exception as e:
-            logger.error(f"[IssueAgent] Research agent failed: {e}")
+            logger.error(f"[IssueAgent ID:{self.memory.id}] Research agent failed: {e}")
             raise
 
         # Execute tool calls if present
@@ -127,30 +128,30 @@ class IssueAgent:
             tool_results = []
             tools_map = {tool.name: tool for tool in history_tools}
 
-            logger.info(f"[IssueAgent] Made {len(research_response.tool_calls)} tool calls:")
+            logger.info(f"[IssueAgent ID:{self.memory.id}] Made {len(research_response.tool_calls)} tool calls:")
 
             for tool_call in research_response.tool_calls:
                 tool_name = tool_call['name']
                 tool_args = tool_call.get('args', {})
 
-                logger.info(f"  -> {tool_name}({tool_args})")
+                logger.info(f"[IssueAgent ID:{self.memory.id}]   -> {tool_name}({tool_args})")
 
                 if tool_name in tools_map:
                     tool_result = tools_map[tool_name].invoke(tool_args)
-                    logger.info(f"     Result: {str(tool_result)[:150]}...")
+                    logger.info(f"[IssueAgent ID:{self.memory.id}]      Result: {str(tool_result)[:150]}...")
                     tool_results.append(f"{tool_name} result: {tool_result}")
 
             self.research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
         else:
-            logger.info(f"[IssueAgent] No tool calls made")
+            logger.info(f"[IssueAgent ID:{self.memory.id}] No tool calls made")
             self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
 
         # Phase 2: Generate proposal based on research
-        logger.info(f"[IssueAgent] Phase 2: Generating proposal for '{self.issue_content}'")
-        logger.info(f"[IssueAgent] Research context length: {len(self.research_context)} chars")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Phase 2: Generating proposal for '{self.issue_content}'")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Research context length: {len(self.research_context)} chars")
 
         proposal_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an IssueAgent tasked with solving ONE SPECIFIC puzzle/obstacle in Zork.
+            ("system", f"""You are an IssueAgent tasked with solving ONE SPECIFIC puzzle/obstacle in {GAME_NAME}.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CRITICAL QUESTION YOU MUST ANSWER
@@ -183,6 +184,30 @@ Action: "GO EAST" → Confidence 0 ✗ (doesn't solve YOUR issue)
 Your Issue: "Small mailbox at West of House"
 Action: "OPEN MAILBOX" → Confidence 80 ✓ (solves YOUR issue)
 Action: "GO WEST" → Confidence 0 ✗ (doesn't solve YOUR issue)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LOCATION AWARENESS - CRITICAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+VALID PROPOSALS FROM DIFFERENT LOCATIONS:
+✓ Issue: "Locked door at Kitchen" / Current: "Garden"
+  → "TAKE KEY" (if key is here) - Confidence 90 ✓
+
+✓ Issue: "Need light source" / Current: "Cellar"
+  → "TAKE LAMP" (if lamp is here) - Confidence 85 ✓
+
+INVALID PROPOSALS FROM DIFFERENT LOCATIONS:
+✗ Issue: "Window at Behind House" / Current: "Forest"
+  → "OPEN WINDOW" - Confidence 0 ✗ (window not in current location!)
+
+✗ Issue: "Grating at Clearing" / Current: "Forest Path"
+  → "OPEN GRATING" - Confidence 0 ✗ (grating not in current location!)
+
+RULE: If your action directly interacts with an object (OPEN, PUSH, EXAMINE, etc.)
+      and that object is NOT in the current location, confidence MUST be 0.
+
+      You can only propose taking items, finding clues, or gathering tools
+      that exist in the CURRENT location to solve issues elsewhere.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RULES FOR PROPOSED_ACTION
@@ -221,8 +246,14 @@ Respond with structured output."""),
             ("human", """ISSUE YOU ARE SOLVING:
 {issue}
 
-CURRENT LOCATION:
+ISSUE LOCATION:
+{issue_location}
+
+YOUR CURRENT LOCATION:
 {current_location}
+
+LOCATION STATUS:
+{location_status}
 
 CURRENT GAME STATE:
 {game_response}
@@ -230,12 +261,26 @@ CURRENT GAME STATE:
 RESEARCH CONTEXT:
 {research_context}
 
+CRITICAL: Consider whether your proposed action can be performed from your CURRENT location.
+- Direct object interaction (OPEN, TAKE, PUSH, EXAMINE, etc.) usually requires being AT the object's location
+- Finding items/clues that solve the issue CAN happen in other locations
+- If you need to interact with the object but are in the wrong location, confidence should be 0
+
 What should the adventurer do THIS TURN to make progress on YOUR issue?""")
         ])
 
         proposal_chain = proposal_prompt | decision_llm.with_structured_output(IssueProposal)
 
-        logger.info(f"[IssueAgent] Calling proposal_chain.invoke()...")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Calling proposal_chain.invoke()...")
+
+        # Calculate location status for spatial reasoning
+        if self.location and current_location:
+            issue_loc_normalized = self.location.strip().lower()
+            current_loc_normalized = current_location.strip().lower()
+            location_status = "SAME LOCATION" if issue_loc_normalized == current_loc_normalized else "DIFFERENT LOCATION"
+        else:
+            location_status = "UNKNOWN"
+
         try:
             from config import invoke_with_retry
             proposal = invoke_with_retry(
@@ -244,15 +289,17 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
                 ),
                 {
                     "issue": self.issue_content,
+                    "issue_location": self.location or "Unknown",
                     "current_location": current_location,
+                    "location_status": location_status,
                     "game_response": current_game_response,
                     "research_context": self.research_context
                 },
                 operation_name=f"IssueAgent Proposal: {self.issue_content[:40]}"
             )
-            logger.info(f"[IssueAgent] Proposal generated: {proposal.proposed_action} (confidence: {proposal.confidence})")
+            logger.info(f"[IssueAgent ID:{self.memory.id}] Proposal generated: {proposal.proposed_action} (confidence: {proposal.confidence})")
         except Exception as e:
-            logger.error(f"[IssueAgent] Proposal generation failed: {e}")
+            logger.error(f"[IssueAgent ID:{self.memory.id}] Proposal generation failed: {e}")
             raise
 
         # Store proposal
@@ -260,9 +307,13 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
         self.reason = proposal.reason
         self.confidence = proposal.confidence
 
-        # Log the proposal
-        logger.info(f"IssueAgent[{self.importance}/1000]: '{self.issue_content}'")
-        logger.info(f"  > Proposed: '{self.proposed_action}' (confidence: {self.confidence}/100)")
-        logger.info(f"  > Reason: {self.reason}")
+        # Log proposal summary
+        logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] PROPOSAL SUMMARY")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Issue: [{self.importance}/1000] {self.issue_content}")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Proposed Action: '{self.proposed_action}' (confidence: {self.confidence}/100)")
+        if self.reason:
+            logger.info(f"[IssueAgent ID:{self.memory.id}] Reason: {self.reason}")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         return proposal

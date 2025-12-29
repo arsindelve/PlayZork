@@ -1,3 +1,6 @@
+from config import GAME_NAME, GAME_OBJECTIVE, GAME_OBJECTIVE_SCORE
+
+
 class PromptLibrary:
   """
   A static class to store and manage prompts.
@@ -18,11 +21,11 @@ class PromptLibrary:
 
   @staticmethod
   def get_history_processor_system_prompt():
-    return "You are assisting someone playing ZORK I. You will summarize the game interaction history narratively, in a way that is most useful for helping them understand what has happened so far. Only summarize past interactions, do not provide advice or strategy. Do not provide a heading or title. IMPORTANT: Only output the summary itself, nothing else. Do not include any meta-commentary, instructions, or explanations - just the narrative summary."
+    return f"You are assisting someone playing {GAME_NAME}. You will summarize the game interaction history narratively, in a way that is most useful for helping them understand what has happened so far. Only summarize past interactions, do not provide advice or strategy. Do not provide a heading or title. IMPORTANT: Only output the summary itself, nothing else. Do not include any meta-commentary, instructions, or explanations - just the narrative summary."
 
   @staticmethod
   def get_decision_agent_evaluation_prompt():
-    return """You are the Decision Agent in a Zork-playing AI system.
+    return f"""You are the Decision Agent in a {GAME_NAME}-playing AI system.
 
 YOUR SINGLE RESPONSIBILITY: Choose the best action from specialist agent proposals.
 
@@ -37,9 +40,14 @@ SPECIALIST AGENTS
 DECISION CRITERIA (in priority order)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+0. FILTER NON-ACTIONABLE PROPOSALS FIRST
+   - IGNORE any agent with confidence = 0 (they have NO solution)
+   - IGNORE any agent with proposed_action = "NOTHING" or "nothing" or empty
+   - These agents determined they CANNOT help right now - skip them completely
+
 1. HIGH-VALUE PUZZLES FIRST
    - IssueAgent with importance 800-1000 + confidence 80+ = TOP PRIORITY
-   - Solving major puzzles = points = winning (goal: 350 points)
+   - Solving major puzzles = points = winning (goal: {GAME_OBJECTIVE})
 
 2. AVOID LOOPS (check research context)
    - Never repeat actions that just failed
@@ -55,7 +63,8 @@ DECISION CRITERIA (in priority order)
 5. CONFIDENCE LEVELS
    - 80-100: Strong, likely to succeed
    - 50-79: Worth trying if important
-   - <50: Last resort only
+   - 1-49: Last resort only
+   - 0: IGNORE COMPLETELY (see rule 0)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EXPECTED VALUE CALCULATION
@@ -79,16 +88,16 @@ Note: You do NOT identify new issues - that's handled by a separate Observer Age
 
   @staticmethod
   def get_decision_agent_human_prompt():
-    return """=== GAME STATE ===
-Location: {locationName}
-Score: {score} | Moves: {moves}
-Game Response: {game_response}
+    return f"""=== GAME STATE ===
+Location: {{locationName}}
+Score: {{score}} | Moves: {{moves}}
+Game Response: {{game_response}}
 
 === RESEARCH CONTEXT ===
-{research_context}
+{{research_context}}
 
 === AGENT PROPOSALS ===
-{agent_proposals}
+{{agent_proposals}}
 
 === YOUR TASK ===
 Evaluate the proposals above and choose the best action.
@@ -103,27 +112,27 @@ Choose the best proposal and explain your reasoning clearly in the 'reason' fiel
 
 Instructions: Provide a JSON output without backticks:
 
-{{
+{{{{
     "command": "The command from the chosen proposal (or LOOK if uncertain)",
     "reason": "Explain which agent's proposal you chose and WHY. Example: 'Chose IssueAgent #2 (importance 800, confidence 85, EV 68.0) because solving the grating puzzle is critical for winning. Research shows we have the key. ExplorerAgent suggested NORTH (confidence 75, EV 37.5) but solving this puzzle takes priority.'",
     "remember": "Record STRATEGIC ISSUES only: (1) UNSOLVED PUZZLES you discovered, (2) OBVIOUS THINGS TO TRY that could unlock progress, (3) MAJOR OBSTACLES preventing advancement. Do NOT record observations, items, or general notes. Memory is limited. Leave empty if no strategic issue discovered this turn.",
-    "rememberImportance": "Score 1-1000 based on: How much will SOLVING/OVERCOMING this issue help us WIN the game (reach 350 points)? Major blocking puzzles/obstacles = 800-1000. Promising leads = 500-700. Minor puzzles = 100-400.",
+    "rememberImportance": "Score 1-1000 based on: How much will SOLVING/OVERCOMING this issue help us WIN the game ({GAME_OBJECTIVE})? Major blocking puzzles/obstacles = 800-1000. Promising leads = 500-700. Minor puzzles = 100-400.",
     "item": "any new, interesting items you have found in this location, along with their locations. For example 'there is a box and a light bulb in the maintenance room'. Omit if there is nothing here.",
     "moved": "if you chose a movement command, list the direction you tried to go. Otherwise, leave this empty."
-}}
+}}}}
 """
 
   @staticmethod
   def get_adventurer_prompt():
-    return """
-    You have played {moves} moves and have a score of {score}.
+    return f"""
+    You have played {{moves}} moves and have a score of {{score}}.
 
-    You are currently in this location: {locationName}
+    You are currently in this location: {{locationName}}
 
-    The game just responded: {game_response}
+    The game just responded: {{game_response}}
 
     === RESEARCH ANALYSIS ===
-    {research_context}
+    {{research_context}}
     === END RESEARCH ANALYSIS ===
 
     CRITICAL DECISION-MAKING RULES:
@@ -137,23 +146,23 @@ Instructions: Provide a JSON output without backticks:
 
     Instructions: Provide a JSON output without backticks:
 
-    {{
+    {{{{
         "command": "Your NEXT command. Must NOT be a failed action from research analysis. If stuck, try directional movement.",
         "reason": "brief explanation based on research analysis and game state",
         "remember": "Record STRATEGIC ISSUES only: (1) UNSOLVED PUZZLES you discovered (e.g., 'locked grating blocks path east', 'need to cross the river somehow'), (2) OBVIOUS THINGS TO TRY that could unlock progress (e.g., 'get inside the white house', 'find a light source for dark areas'), (3) MAJOR OBSTACLES preventing advancement (e.g., 'troll demands payment to pass', 'cyclops is hostile and blocking path'). Do NOT record observations, items, or general notes. Memory is limited. Leave empty if no strategic issue discovered this turn.",
-        "rememberImportance": "Score 1-1000 based on: How much will SOLVING/OVERCOMING this issue help us WIN the game (reach 350 points)? Major blocking puzzles/obstacles = 800-1000. Promising leads = 500-700. Minor puzzles = 100-400. This score determines priority when making decisions.",
+        "rememberImportance": "Score 1-1000 based on: How much will SOLVING/OVERCOMING this issue help us WIN the game ({GAME_OBJECTIVE})? Major blocking puzzles/obstacles = 800-1000. Promising leads = 500-700. Minor puzzles = 100-400. This score determines priority when making decisions.",
         "item": "any new, interesting items you have found in this location, along with their locations, which are not already mentioned above. For example 'there is a box and a light bulb in the maintenance room'. Omit if there is nothing here.",
         "moved": "if you attempted to move in a certain direction, list the direction you tried to go. Otherwise, leave this empty."
-    }}
+    }}}}
     """
 
   @staticmethod
   def get_system_prompt():
-    return """
-    You are playing Zork One with the goal of winning the game by achieving a score of 350 points.
-    Play as if for the first time, without relying on any prior knowledge of the Zork games.
+    return f"""
+    You are playing {GAME_NAME} with the goal of winning the game by achieving {GAME_OBJECTIVE}.
+    Play as if for the first time, without relying on any prior knowledge of the game.
 
-    Objective: Reach a score of 350 points.
+    Objective: {GAME_OBJECTIVE}.
     Input Style: Use simple commands with one verb and one or two nouns, such as 'OPEN DOOR' or 'TURN SCREW WITH SCREWDRIVER.'
     Type "INVENTORY" to check items you're carrying and "SCORE" to view your current score (so you know if you're winning).
     Type "LOOK" to see where you are, and what is in the current location. Use this liberally.
@@ -163,7 +172,7 @@ Instructions: Provide a JSON output without backticks:
 
   @staticmethod
   def get_research_agent_prompt():
-    return """You are an assistant helping someone play Zork I.
+    return f"""You are an assistant helping someone play {GAME_NAME}.
 
     You have access to tools that let you query game history:
 
@@ -172,10 +181,10 @@ Instructions: Provide a JSON output without backticks:
     - get_full_summary(): Get a complete narrative summary of all game history
 
     Current game state:
-    - Score: {score}
-    - Location: {locationName}
-    - Moves: {moves}
-    - Game Response: {game_response}
+    - Score: {{score}}
+    - Location: {{locationName}}
+    - Moves: {{moves}}
+    - Game Response: {{game_response}}
 
     CRITICAL INSTRUCTIONS:
     1. ALWAYS call get_full_summary() to understand the overall game state
