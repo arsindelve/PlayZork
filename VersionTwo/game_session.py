@@ -42,11 +42,17 @@ class GameSession:
         self.mapper_toolkit = MapperToolkit(session_id, self.db)
         self.logger.logger.info("Mapper toolkit initialized")
 
+        # Create inventory toolkit for tracking items
+        from tools.inventory import InventoryToolkit
+        self.inventory_toolkit = InventoryToolkit(session_id, self.db)
+        self.logger.logger.info("Inventory toolkit initialized")
+
         # Pass toolkits to adventurer service
         self.adventurer_service = AdventurerService(
             self.history_toolkit,
             self.memory_toolkit,
-            self.mapper_toolkit
+            self.mapper_toolkit,
+            self.inventory_toolkit
         )
 
         # Resume turn numbering from where this session left off
@@ -67,6 +73,10 @@ class GameSession:
         try:
             # Initialize the game state.
             await self.zork_service.play_turn("verbose")
+
+            # Bootstrap inventory from game INVENTORY command
+            await self._bootstrap_inventory()
+
             adventurer_response = await self.__play_turn("look", display)
 
             # Run indefinitely until user interrupts
@@ -115,7 +125,7 @@ class GameSession:
 
             # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)
             # The graph handles: research, decision, issue closing, observation, and memory persistence
-            player_response, issue_agents, explorer_agent, loop_detection_agent, issue_closed_response, observer_response = self.adventurer_service.handle_user_input(
+            player_response, issue_agents, explorer_agent, loop_detection_agent, issue_closed_response, observer_response, decision_prompt = self.adventurer_service.handle_user_input(
                 zork_response,
                 self.turn_number
             )
@@ -153,9 +163,87 @@ class GameSession:
             transitions = self.mapper_toolkit.state.get_all_transitions()
             display.update_map_from_transitions(transitions)
 
+            # Step 8: Write turn report for analysis and debugging
+            from tools.reporting import TurnReportWriter
+            report_writer = TurnReportWriter()
+            report_writer.write_turn_report(
+                session_id=self.session_id,
+                turn_number=self.turn_number,
+                location=zork_response.LocationName,
+                score=zork_response.Score,
+                moves=zork_response.Moves,
+                game_response=zork_response.Response,
+                player_command=player_response.command,
+                player_reasoning=player_response.reason,
+                issue_agents=issue_agents,
+                explorer_agent=explorer_agent,
+                loop_detection_agent=loop_detection_agent,
+                decision_prompt=decision_prompt,
+                decision=player_response
+            )
+
             return player_response.command
 
         except Exception as e:
             self.logger.log_error(str(e))
             print(f"\nAn error occurred while processing turn: {e}")
             raise  # Re-raise to be caught by play() method
+
+    async def _bootstrap_inventory(self):
+        """
+        Send INVENTORY command to sync our tracking with game state.
+        This doesn't count as a game turn.
+        """
+        self.logger.logger.info("Bootstrapping inventory from game...")
+
+        # Send INVENTORY command to game
+        inventory_response = await self.zork_service.play_turn("INVENTORY")
+        game_inventory_text = inventory_response.Response
+
+        self.logger.logger.info(f"Game inventory response: {game_inventory_text}")
+
+        # Parse inventory from game response using LLM
+        items = self._parse_inventory_response(game_inventory_text)
+
+        self.logger.logger.info(f"Parsed items: {items}")
+
+        # Sync with our tracking (turn 0 = bootstrap)
+        self.inventory_toolkit.state.sync_with_game(items, turn_number=0)
+
+        self.logger.logger.info("Inventory bootstrap complete")
+
+    def _parse_inventory_response(self, response: str) -> list:
+        """
+        Parse game's INVENTORY response into list of items using LLM.
+
+        Args:
+            response: Raw INVENTORY command response from game
+
+        Returns:
+            List of item names
+        """
+        from config import get_cheap_llm
+        import json
+
+        llm = get_cheap_llm(temperature=0)
+
+        prompt = f"""Parse this Zork game inventory response into a simple list of items.
+
+INVENTORY RESPONSE:
+{response}
+
+Return ONLY a JSON array of item names (lowercase, full names as game provides them).
+Examples:
+- "You are carrying: a brass lantern and a leaflet." → ["brass lantern", "leaflet"]
+- "You are empty-handed." → []
+- "Your inventory is empty." → []
+
+Output ONLY the JSON array, nothing else."""
+
+        try:
+            result = llm.invoke(prompt)
+            items = json.loads(result.content)
+            return items if isinstance(items, list) else []
+        except Exception as e:
+            self.logger.logger.error(f"Failed to parse inventory: {e}")
+            return []

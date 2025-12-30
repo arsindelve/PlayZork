@@ -15,7 +15,7 @@ from typing import List, Tuple, Optional
 
 class AdventurerService:
 
-    def __init__(self, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit, mapper_toolkit: MapperToolkit):
+    def __init__(self, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit, mapper_toolkit: MapperToolkit, inventory_toolkit):
         """
         Initializes the AdventurerService with LangGraph-managed flow.
 
@@ -25,10 +25,12 @@ class AdventurerService:
             history_toolkit: The HistoryToolkit instance for accessing game history
             memory_toolkit: The MemoryToolkit instance for storing strategic issues
             mapper_toolkit: The MapperToolkit instance for tracking the map
+            inventory_toolkit: The InventoryToolkit instance for tracking inventory
         """
         self.history_toolkit = history_toolkit
         self.memory_toolkit = memory_toolkit
         self.mapper_toolkit = mapper_toolkit
+        self.inventory_toolkit = inventory_toolkit
         self.logger = GameLogger.get_instance()
 
         # Turn number tracking (mutable reference for persist node)
@@ -49,6 +51,7 @@ class AdventurerService:
             history_toolkit=self.history_toolkit,
             memory_toolkit=self.memory_toolkit,
             mapper_toolkit=self.mapper_toolkit,
+            inventory_toolkit=self.inventory_toolkit,
             turn_number_ref=self.turn_number_ref
         )
 
@@ -104,7 +107,7 @@ class AdventurerService:
         # Chain with structured output (using shared decision_llm)
         return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse]]:
+    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str]:
         """
         Execute the LangGraph decision flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
 
@@ -134,6 +137,7 @@ class AdventurerService:
             "loop_detection_agent": None,  # Will be populated by spawn_agents node (always)
             "research_context": "",
             "decision": None,
+            "decision_prompt": "",  # Will be populated by decision node
             "issue_closed_response": None,  # Will be populated by close_issues node
             "observer_response": None,  # Will be populated by observe node
             "memory_persisted": False
@@ -154,5 +158,5 @@ class AdventurerService:
         # Log the final decision
         self.logger.log_decision(adventurer_response.command, adventurer_response.reason)
 
-        # Return the decision, issue agents, explorer agent, loop detection agent, closed issues, and observer response for display
-        return adventurer_response, final_state["issue_agents"], final_state["explorer_agent"], final_state["loop_detection_agent"], issue_closed_response, observer_response
+        # Return the decision, issue agents, explorer agent, loop detection agent, closed issues, observer response, and decision prompt for display/reporting
+        return adventurer_response, final_state["issue_agents"], final_state["explorer_agent"], final_state["loop_detection_agent"], issue_closed_response, observer_response, final_state.get("decision_prompt", "")

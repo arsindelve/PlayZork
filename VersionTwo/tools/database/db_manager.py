@@ -133,6 +133,19 @@ class DatabaseManager:
                 )
             """)
 
+            # Inventory table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS inventory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    item_name TEXT NOT NULL,
+                    acquired_turn INTEGER NOT NULL,
+                    dropped_turn INTEGER DEFAULT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
+
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_turns_session
@@ -152,6 +165,11 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_memories_closed
                 ON memories(session_id, closed)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_inventory_session
+                ON inventory(session_id, dropped_turn)
             """)
 
             cursor.execute("""
@@ -592,3 +610,61 @@ class DatabaseManager:
                 (session_id, location)
             )
             return [(row[0], row[1]) for row in cursor.fetchall()]
+
+    # ===== Inventory Management =====
+
+    def get_current_inventory(self, session_id: str) -> List[str]:
+        """
+        Get all items currently in inventory (not dropped).
+
+        Returns:
+            List of item names
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT item_name
+                   FROM inventory
+                   WHERE session_id = ? AND dropped_turn IS NULL
+                   ORDER BY acquired_turn ASC""",
+                (session_id,)
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def add_inventory_item(self, session_id: str, item_name: str, turn_number: int) -> None:
+        """Add an item to inventory."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO inventory (session_id, item_name, acquired_turn)
+                   VALUES (?, ?, ?)""",
+                (session_id, item_name, turn_number)
+            )
+
+    def remove_inventory_item(self, session_id: str, item_name: str, turn_number: int) -> bool:
+        """
+        Remove an item from inventory (mark as dropped).
+
+        Returns:
+            True if item was found and removed, False otherwise
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE inventory
+                   SET dropped_turn = ?
+                   WHERE session_id = ? AND item_name = ? AND dropped_turn IS NULL""",
+                (turn_number, session_id, item_name)
+            )
+            return cursor.rowcount > 0
+
+    def clear_inventory(self, session_id: str, turn_number: int) -> None:
+        """Mark all items as dropped (for sync operations)."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE inventory
+                   SET dropped_turn = ?
+                   WHERE session_id = ? AND dropped_turn IS NULL""",
+                (turn_number, session_id)
+            )

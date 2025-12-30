@@ -31,6 +31,10 @@ class LoopDetectionAgent:
         self.confidence: int = 0
         self.loop_detected: bool = False
         self.loop_type: str = ""
+        self.current_location: str = ""
+
+        # Tool call history (for reporting)
+        self.tool_calls_history: list = []
 
     def research_and_propose(
         self,
@@ -57,6 +61,9 @@ class LoopDetectionAgent:
             current_moves: Current move count
         """
         logger = logging.getLogger(__name__)
+
+        # Store current location for reporting
+        self.current_location = current_location
 
         logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"[LoopDetectionAgent] AGENT: LoopDetectionAgent")
@@ -105,6 +112,13 @@ class LoopDetectionAgent:
                     tool_result = tools_map[tool_name].invoke(tool_args)
                     logger.info(f"[LoopDetectionAgent]      Result: {str(tool_result)[:150]}...")
                     raw_history = tool_result
+
+                    # Store tool call history for reporting
+                    self.tool_calls_history.append({
+                        "tool_name": tool_name,
+                        "input": str(tool_args),
+                        "output": str(tool_result)
+                    })
                     break
 
         if not raw_history:
@@ -123,6 +137,13 @@ class LoopDetectionAgent:
                 logger.info(f"[LoopDetectionAgent]   -> get_exits_from(location='{current_location}')")
                 exits_result = tools_map["get_exits_from"].invoke({"location": current_location})
                 logger.info(f"[LoopDetectionAgent]      Result: {str(exits_result)[:150]}...")
+
+                # Store tool call history for reporting
+                self.tool_calls_history.append({
+                    "tool_name": "get_exits_from",
+                    "input": str({"location": current_location}),
+                    "output": str(exits_result)
+                })
                 # Parse exits (format: "NORTH → Kitchen, SOUTH → Hallway")
                 if exits_result and exits_result.strip():
                     for line in exits_result.split(','):
@@ -359,9 +380,13 @@ Analyze for loops and propose breaking action if needed:""")
                 location_visits[loc] = []
             location_visits[loc].append(turn['turn_number'])
 
-        # Trigger: Any location visited 3+ times in last 10 turns
+        # Trigger: Location visited 3+ times in last 10 turns AND we're currently there
         for location, visit_turns in location_visits.items():
             if len(visit_turns) >= 3:
+                # CRITICAL: Only flag if we're CURRENTLY at this location
+                # If we've left, the loop is already broken - don't re-detect it
+                if location != current_location:
+                    continue  # We've escaped this location - loop already broken
                 # Gather evidence
                 actions_at_location = [
                     turn['command'] for turn in parsed_turns

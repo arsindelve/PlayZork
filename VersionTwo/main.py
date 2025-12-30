@@ -7,8 +7,9 @@ from game_session import GameSession
 load_dotenv()
 
 async def main():
+
     # Initialize the GameSession with a session ID
-    session = GameSession(session_id="v21")
+    session = GameSession(session_id="v22")
 
     # Example turn: player provides input
     await session.play()

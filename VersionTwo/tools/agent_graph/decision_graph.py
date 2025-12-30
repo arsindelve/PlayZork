@@ -39,6 +39,7 @@ class DecisionState(TypedDict):
 
     # Decision phase output
     decision: Optional[AdventurerResponse]
+    decision_prompt: str  # Formatted prompt for reporting
 
     # Issue closing phase output
     issue_closed_response: Optional[IssueClosedResponse]
@@ -53,6 +54,7 @@ class DecisionState(TypedDict):
 def create_spawn_agents_node(
     memory_toolkit: MemoryToolkit,
     mapper_toolkit: MapperToolkit,
+    inventory_toolkit,
     research_agent: Runnable,
     decision_llm,
     history_toolkit: HistoryToolkit
@@ -62,7 +64,8 @@ def create_spawn_agents_node(
 
     Args:
         memory_toolkit: MemoryToolkit for accessing stored strategic issues
-        mapper_toolkit: MapperToolkit for accessing map state (NEW)
+        mapper_toolkit: MapperToolkit for accessing map state
+        inventory_toolkit: InventoryToolkit for accessing inventory
         research_agent: Research agent with tools for IssueAgents and ExplorerAgent to use
         decision_llm: LLM for generating proposals
         history_toolkit: HistoryToolkit for accessing tools
@@ -167,9 +170,13 @@ def create_spawn_agents_node(
             num_special_agents = (1 if explorer_agent else 0) + 1  # +1 for LoopDetectionAgent
             logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {num_special_agents} special agents...")
 
-            # Get tools
+            # Get tools (include inventory for agents to query)
             history_tools = history_toolkit.get_tools()
             mapper_tools = mapper_toolkit.get_tools()
+            inventory_tools = inventory_toolkit.get_tools()
+
+            # Combine all tools for IssueAgents (they use combined tools)
+            all_tools = history_tools + mapper_tools + inventory_tools
 
             # Execute all agent research in parallel using threads
             def research_agent_sync(agent):
@@ -205,7 +212,7 @@ def create_spawn_agents_node(
                         agent.research_and_propose(
                             research_agent=research_agent,
                             decision_llm=decision_llm,
-                            history_tools=history_tools,
+                            history_tools=all_tools,  # IssueAgents get all tools including inventory
                             current_location=current_location,
                             current_game_response=current_game_text,
                             current_score=current_score,
@@ -396,6 +403,24 @@ def create_decision_node(decision_chain: Runnable):
             "agent_proposals": agent_proposals_text
         }
 
+        # Format the full prompt for reporting (from prompt_library.py)
+        from adventurer.prompt_library import PromptLibrary
+        system_prompt = PromptLibrary.get_decision_agent_evaluation_prompt()
+        human_prompt = PromptLibrary.get_decision_agent_human_prompt()
+
+        # Format human prompt with actual values
+        formatted_human = human_prompt.format(
+            locationName=zork_response.LocationName,
+            score=zork_response.Score,
+            moves=zork_response.Moves,
+            game_response=zork_response.Response,
+            research_context=research_context,
+            agent_proposals=agent_proposals_text
+        )
+
+        # Combine system + human for full prompt
+        full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[HUMAN]\n{formatted_human}"
+
         # Invoke decision chain with timeout and retry
         from config import invoke_with_retry
         decision = invoke_with_retry(
@@ -408,6 +433,7 @@ def create_decision_node(decision_chain: Runnable):
         logger.info(f"REASON: {decision.reason}")
 
         state["decision"] = decision
+        state["decision_prompt"] = full_prompt
         return state
 
     return decision_node
@@ -559,12 +585,13 @@ def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit:
     return observe_node
 
 
-def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
+def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_number_ref: dict):
     """
-    Create the persistence node that stores strategic issues.
+    Create the persistence node that stores strategic issues and updates inventory.
 
     Args:
         memory_toolkit: MemoryToolkit for storing strategic issues
+        inventory_toolkit: InventoryToolkit for tracking inventory
         turn_number_ref: Mutable dict with current turn number
 
     Returns:
@@ -616,6 +643,43 @@ def create_persist_node(memory_toolkit: MemoryToolkit, turn_number_ref: dict):
         decay_count = memory_toolkit.state.decay_all_importances(decay_factor=0.9)
         logger.info(f"Decayed {decay_count} memories")
 
+        # Update inventory based on this turn
+        logger.info("\n" + "-" * 80)
+        logger.info("UPDATING INVENTORY")
+        logger.info("-" * 80)
+
+        decision = state["decision"]
+        if decision and decision.command:
+            from tools.inventory import InventoryAnalyzer
+            from config import get_cheap_llm
+
+            # Use cheap LLM for inventory analysis
+            analyzer = InventoryAnalyzer(get_cheap_llm(temperature=0))
+
+            # Analyze turn for inventory changes
+            changes = analyzer.analyze_turn(
+                player_command=decision.command,
+                game_response=zork_response.Response
+            )
+
+            logger.info(f"Items added: {changes.items_added}")
+            logger.info(f"Items removed: {changes.items_removed}")
+            logger.info(f"Reasoning: {changes.reasoning}")
+
+            # Apply changes to inventory state
+            for item in changes.items_added:
+                inventory_toolkit.state.add_item(item, turn_number_ref["current"])
+
+            for item in changes.items_removed:
+                inventory_toolkit.state.remove_item(item, turn_number_ref["current"])
+
+            current_inventory = inventory_toolkit.state.get_items()
+            logger.info(f"Current inventory ({len(current_inventory)} items): {current_inventory}")
+        else:
+            logger.info("No command to analyze (decision was None)")
+
+        logger.info("-" * 80)
+
         logger.info("=" * 80)
         logger.info("PERSIST COMPLETE")
         logger.info("=" * 80)
@@ -631,6 +695,7 @@ def create_decision_graph(
     history_toolkit: HistoryToolkit,
     memory_toolkit: MemoryToolkit,
     mapper_toolkit: MapperToolkit,
+    inventory_toolkit,
     turn_number_ref: dict
 ):
     """
@@ -657,6 +722,7 @@ def create_decision_graph(
     graph.add_node("spawn_agents", create_spawn_agents_node(
         memory_toolkit,
         mapper_toolkit,
+        inventory_toolkit,
         research_agent,
         decision_llm,
         history_toolkit
@@ -665,7 +731,7 @@ def create_decision_graph(
     graph.add_node("decide", create_decision_node(decision_chain))
     graph.add_node("close_issues", create_close_issues_node(decision_llm, history_toolkit, memory_toolkit))
     graph.add_node("observe", create_observe_node(decision_llm, research_agent, history_toolkit, memory_toolkit))
-    graph.add_node("persist", create_persist_node(memory_toolkit, turn_number_ref))
+    graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit, turn_number_ref))
 
     # Define flow
     graph.set_entry_point("spawn_agents")

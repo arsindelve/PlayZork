@@ -35,6 +35,7 @@ SPECIALIST AGENTS
 
 - IssueAgents: Each solves a specific tracked puzzle (importance = value for winning)
 - ExplorerAgent: Discovers new areas/items through systematic exploration
+- LoopDetectionAgent: Detects stuck/oscillating patterns and proposes actions to break loops
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DECISION CRITERIA (in priority order)
@@ -82,8 +83,6 @@ Output JSON with:
 - command: The action to execute (from chosen agent proposal)
 - reason: Which agent you chose and WHY (explain your decision)
 - moved: Direction if movement command (or empty string)
-
-Note: You do NOT identify new issues - that's handled by a separate Observer Agent.
 """
 
   @staticmethod
@@ -115,9 +114,6 @@ Instructions: Provide a JSON output without backticks:
 {{{{
     "command": "The command from the chosen proposal (or LOOK if uncertain)",
     "reason": "Explain which agent's proposal you chose and WHY. Example: 'Chose IssueAgent #2 (importance 800, confidence 85, EV 68.0) because solving the grating puzzle is critical for winning. Research shows we have the key. ExplorerAgent suggested NORTH (confidence 75, EV 37.5) but solving this puzzle takes priority.'",
-    "remember": "Record STRATEGIC ISSUES only: (1) UNSOLVED PUZZLES you discovered, (2) OBVIOUS THINGS TO TRY that could unlock progress, (3) MAJOR OBSTACLES preventing advancement. Do NOT record observations, items, or general notes. Memory is limited. Leave empty if no strategic issue discovered this turn.",
-    "rememberImportance": "Score 1-1000 based on: How much will SOLVING/OVERCOMING this issue help us WIN the game ({GAME_OBJECTIVE})? Major blocking puzzles/obstacles = 800-1000. Promising leads = 500-700. Minor puzzles = 100-400.",
-    "item": "any new, interesting items you have found in this location, along with their locations. For example 'there is a box and a light bulb in the maintenance room'. Omit if there is nothing here.",
     "moved": "if you chose a movement command, list the direction you tried to go. Otherwise, leave this empty."
 }}}}
 """

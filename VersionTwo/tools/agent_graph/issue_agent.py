@@ -47,6 +47,9 @@ class IssueAgent:
         self.confidence: Optional[int] = None
         self.research_context: Optional[str] = None
 
+        # Tool call history (for reporting)
+        self.tool_calls_history: list = []
+
     def __str__(self) -> str:
         return f"IssueAgent[{self.importance}/1000] tracking: '{self.issue_content}' (from turn {self.turn_number})"
 
@@ -140,6 +143,13 @@ class IssueAgent:
                     tool_result = tools_map[tool_name].invoke(tool_args)
                     logger.info(f"[IssueAgent ID:{self.memory.id}]      Result: {str(tool_result)[:150]}...")
                     tool_results.append(f"{tool_name} result: {tool_result}")
+
+                    # Store tool call history for reporting
+                    self.tool_calls_history.append({
+                        "tool_name": tool_name,
+                        "input": str(tool_args),
+                        "output": str(tool_result)
+                    })
 
             self.research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
         else:

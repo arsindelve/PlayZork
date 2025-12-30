@@ -52,6 +52,9 @@ class ExplorerAgent:
         self.confidence: Optional[int] = None
         self.research_context: Optional[str] = None
 
+        # Tool call history (for reporting)
+        self.tool_calls_history: list = []
+
         # Pick the best direction and calculate confidence
         self.best_direction = self._pick_best_direction()
 
@@ -184,6 +187,13 @@ class ExplorerAgent:
                         tool_result = tools_map[tool_name].invoke(tool_args)
                         logger.info(f"[ExplorerAgent:{self.best_direction}]      Result: {str(tool_result)[:150]}...")
                         tool_results.append(f"{tool_name} result: {tool_result}")
+
+                        # Store tool call history for reporting
+                        self.tool_calls_history.append({
+                            "tool_name": tool_name,
+                            "input": str(tool_args),
+                            "output": str(tool_result)
+                        })
 
                 self.research_context = "\n\n".join(tool_results) if tool_results else "No tools called"
             else:
