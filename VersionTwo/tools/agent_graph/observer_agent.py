@@ -90,7 +90,7 @@ class ObserverAgent:
             "game_response": game_response
         }
 
-        from config import invoke_with_retry
+        from llm_utils import invoke_with_retry
         research_response = invoke_with_retry(
             research_agent.with_config(
                 run_name=f"Observer Research: {location}"

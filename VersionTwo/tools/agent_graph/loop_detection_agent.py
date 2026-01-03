@@ -33,6 +33,10 @@ class LoopDetectionAgent:
         self.loop_type: str = ""
         self.current_location: str = ""
 
+        # Location-change invalidation tracking
+        self.last_detection_location: str = ""
+        self.last_detection_turn: int = 0
+
         # Tool call history (for reporting)
         self.tool_calls_history: list = []
 
@@ -65,6 +69,16 @@ class LoopDetectionAgent:
         # Store current location for reporting
         self.current_location = current_location
 
+        # If we've moved since last detection, reset loop state
+        if self.last_detection_location and self.last_detection_location != current_location:
+            logger.info(f"[LoopDetectionAgent] Location changed from '{self.last_detection_location}' to '{current_location}' - previous loop detection invalidated")
+            # Reset detection state
+            self.loop_detected = False
+            self.confidence = 0
+            self.proposed_action = "nothing"
+            self.loop_type = ""
+            self.reason = ""
+
         logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"[LoopDetectionAgent] AGENT: LoopDetectionAgent")
         logger.info(f"[LoopDetectionAgent] PURPOSE: Detect stuck/oscillating patterns and break loops")
@@ -82,7 +96,7 @@ class LoopDetectionAgent:
         }
 
         try:
-            from config import invoke_with_retry
+            from llm_utils import invoke_with_retry
             research_response = invoke_with_retry(
                 research_agent.with_config(
                     run_name="LoopDetectionAgent Research"
@@ -145,14 +159,24 @@ class LoopDetectionAgent:
                     "output": str(exits_result)
                 })
                 # Parse exits (format: "NORTH → Kitchen, SOUTH → Hallway")
+                # CRITICAL: Only include exits that DON'T lead to 'BLOCKED'
                 if exits_result and exits_result.strip():
                     for line in exits_result.split(','):
                         parts = line.strip().split('→')
-                        if len(parts) >= 1:
+                        if len(parts) >= 2:
+                            direction = parts[0].strip()
+                            destination = parts[1].strip().strip("'\"")
+                            # Only add if destination is NOT blocked
+                            if destination.upper() != "BLOCKED":
+                                available_exits.append(direction)
+                        elif len(parts) == 1:
+                            # Fallback: no destination specified, include it
                             direction = parts[0].strip()
                             available_exits.append(direction)
             except Exception as e:
                 logger.warning(f"[LoopDetectionAgent] Failed to get exits: {e}")
+
+        logger.info(f"[LoopDetectionAgent] Available exits (excluding BLOCKED): {available_exits}")
 
         # Phase 2.5: DETERMINISTIC loop detection (check before LLM)
         logger.info(f"[LoopDetectionAgent] Phase 2.5: Running deterministic loop detection checks")
@@ -177,6 +201,10 @@ class LoopDetectionAgent:
             self.proposed_action = deterministic_result['proposed_action']
             self.reason = deterministic_result['reason']
             self.confidence = 98  # Very high confidence for deterministic detection
+
+            # Store location and turn for invalidation tracking
+            self.last_detection_location = current_location
+            self.last_detection_turn = current_moves
 
             # Log proposal summary
             logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -203,15 +231,25 @@ Analyze raw game history to detect unproductive loops and propose actions to bre
 LOOP TYPES TO DETECT:
 
 1. **Stuck in Location** (loop_type: "stuck_location")
-   - Same location for 5+ turns
+   - Same location for 5+ CONSECUTIVE turns (not scattered visits!)
+   - Example STUCK: [Turn 5: Kitchen, 6: Kitchen, 7: Kitchen, 8: Kitchen, 9: Kitchen]
+   - Example NOT STUCK: [Turn 1: Kitchen, 8: Kitchen, 10: Kitchen] = normal exploration
    - No score increase during this time
-   - Agent is repeatedly trying similar failed actions (e.g., GO EAST fails, GO WEST fails)
+   - Agent is repeatedly trying different actions at same location, all failing
+   - IMPORTANT: Must be CONSECUTIVE - visiting a location multiple times during exploration is NORMAL
 
 2. **Oscillating Between Locations** (loop_type: "oscillating")
    - Moving back and forth between 2-3 locations
    - Example: NORTH → SOUTH → NORTH → SOUTH
    - Example: Kitchen → Hallway → Kitchen → Hallway
    - No meaningful progress being made
+
+3. **Repeated Action at Same Location** (loop_type: "repeated_action")
+   - Same command attempted 3+ times AT THE SAME LOCATION
+   - Example: "NORTH" failed 3 times while AT "Kitchen"
+   - IMPORTANT: "NORTH at Kitchen" is different from "NORTH at Hallway"
+   - IMPORTANT: If we've moved to a new location, old repetitions don't count
+   - This loop is about context-specific failures, not global command frequency
 
 WHEN LOOP DETECTED:
 - Set loop_detected = true
@@ -235,19 +273,22 @@ WHEN NO LOOP DETECTED:
 - Reason: "No loop pattern detected in recent history"
 
 ========================================================
-CRITICAL: BE VERY AGGRESSIVE
+CRITICAL: BE PRECISE, NOT AGGRESSIVE
 ========================================================
 
-Loops waste turns and prevent progress. Detect them early!
+TRUE LOOPS waste turns and prevent progress. But normal exploration is NOT a loop!
 
-SIGNS OF LOOPS (detect ANY of these):
-+ Same location 5+ turns with no score change
-+ Trying different movement commands that all fail
-+ Bouncing between 2 locations repeatedly
-+ Doing similar actions that don't change the situation
+REAL LOOP SIGNS (detect these):
++ Same location for 5+ CONSECUTIVE turns (stuck, can't escape)
++ Alternating between just 2 locations repeatedly (A→B→A→B→A)
++ Same action at same location 3+ times with no progress
 
-If you see ANY loop pattern, SET loop_detected=true and confidence=95-100.
-Don't wait for 5+ turns - catch loops early at turn 5!
+NOT A LOOP (do NOT flag these):
++ Visiting Kitchen on turns [1, 8, 10] = normal exploration
++ Trying different directions from same hub location
++ Returning to previous locations as part of mapping
+
+Only flag if genuinely STUCK. Scattered visits during exploration are NORMAL.
 
 Respond with structured output."""),
             ("human", """CURRENT LOCATION: {current_location}
@@ -265,7 +306,7 @@ Analyze for loops and propose breaking action if needed:""")
         analysis_chain = analysis_prompt | decision_llm.with_structured_output(LoopDetectionResponse)
 
         try:
-            from config import invoke_with_retry
+            from llm_utils import invoke_with_retry
             response = invoke_with_retry(
                 analysis_chain.with_config(
                     run_name="LoopDetectionAgent Analysis"
@@ -285,6 +326,11 @@ Analyze for loops and propose breaking action if needed:""")
             self.proposed_action = response.proposed_action
             self.reason = response.reason
             self.confidence = response.confidence
+
+            # Store location and turn for invalidation tracking (if loop detected)
+            if self.loop_detected:
+                self.last_detection_location = current_location
+                self.last_detection_turn = current_moves
 
             # Log proposal summary
             logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -372,67 +418,74 @@ Analyze for loops and propose breaking action if needed:""")
         if not parsed_turns:
             return None
 
-        # Check 1: Same Location Repetition
-        location_visits = {}
-        for turn in parsed_turns:
-            loc = turn['location']
-            if loc not in location_visits:
-                location_visits[loc] = []
-            location_visits[loc].append(turn['turn_number'])
+        # Check 1: Stuck at Location (Consecutive Turns)
+        # CRITICAL: Only detect if stuck for CONSECUTIVE turns, not scattered visits during exploration
+        # Example: [1: Kitchen, 8: Kitchen, 10: Kitchen] = normal exploration, NOT stuck
+        # Example: [5: Kitchen, 6: Kitchen, 7: Kitchen, 8: Kitchen] = STUCK!
 
-        # Trigger: Location visited 3+ times in last 10 turns AND we're currently there
-        for location, visit_turns in location_visits.items():
-            if len(visit_turns) >= 3:
-                # CRITICAL: Only flag if we're CURRENTLY at this location
-                # If we've left, the loop is already broken - don't re-detect it
-                if location != current_location:
-                    continue  # We've escaped this location - loop already broken
-                # Gather evidence
-                actions_at_location = [
-                    turn['command'] for turn in parsed_turns
-                    if turn['location'] == location
-                ]
+        # Count consecutive turns at current location (from most recent backwards)
+        consecutive_at_current = 0
+        for turn in reversed(parsed_turns):
+            if turn['location'] == current_location:
+                consecutive_at_current += 1
+            else:
+                break  # Hit a different location, stop counting
 
-                # Check score stagnation
-                scores = [turn.get('score') for turn in parsed_turns if turn.get('score') is not None]
-                if not scores:
-                    scores = [current_score] * len(parsed_turns)
-                score_unchanged_turns = 0
-                if scores:
-                    for i in range(len(scores) - 1, 0, -1):
-                        if scores[i] == scores[i-1]:
-                            score_unchanged_turns += 1
-                        else:
-                            break
+        # Only flag if stuck at current location for 5+ consecutive turns
+        if consecutive_at_current >= 5:
+            # Gather evidence for this stuck location
+            actions_at_location = [
+                turn['command'] for turn in parsed_turns[-consecutive_at_current:]
+                if turn['location'] == current_location
+            ]
 
-                # Generate breaking action
-                breaking_action = self._generate_breaking_action(
-                    loop_type="stuck_location",
-                    stuck_location=location,
-                    available_exits=available_exits,
-                    recent_commands=[turn['command'] for turn in parsed_turns[-5:]]
-                )
+            # Get turn numbers for the consecutive stuck period
+            stuck_turn_numbers = [
+                turn['turn_number'] for turn in parsed_turns[-consecutive_at_current:]
+                if turn['location'] == current_location
+            ]
 
-                # Generate explicit reason
-                reason = self._generate_explicit_reason(
-                    loop_type="stuck_location",
-                    evidence={
-                        'location': location,
-                        'visit_turns': visit_turns,
-                        'actions_attempted': list(set(actions_at_location)),  # unique actions
-                        'score_unchanged_turns': score_unchanged_turns,
-                        'current_score': current_score
-                    },
-                    proposed_action=breaking_action
-                )
+            # Check score stagnation
+            scores = [turn.get('score') for turn in parsed_turns if turn.get('score') is not None]
+            if not scores:
+                scores = [current_score] * len(parsed_turns)
+            score_unchanged_turns = 0
+            if scores:
+                for i in range(len(scores) - 1, 0, -1):
+                    if scores[i] == scores[i-1]:
+                        score_unchanged_turns += 1
+                    else:
+                        break
 
-                return {
-                    'loop_detected': True,
-                    'loop_type': 'stuck_location',
-                    'evidence': {'location': location, 'visits': len(visit_turns)},
-                    'proposed_action': breaking_action,
-                    'reason': reason
-                }
+            # Generate breaking action
+            breaking_action = self._generate_breaking_action(
+                loop_type="stuck_location",
+                stuck_location=current_location,
+                available_exits=available_exits,
+                recent_commands=actions_at_location
+            )
+
+            # Generate explicit reason
+            reason = self._generate_explicit_reason(
+                loop_type="stuck_location",
+                evidence={
+                    'location': current_location,
+                    'visit_turns': stuck_turn_numbers,
+                    'actions_attempted': list(set(actions_at_location)),  # unique actions
+                    'score_unchanged_turns': score_unchanged_turns,
+                    'current_score': current_score,
+                    'consecutive_turns': consecutive_at_current
+                },
+                proposed_action=breaking_action
+            )
+
+            return {
+                'loop_detected': True,
+                'loop_type': 'stuck_location',
+                'evidence': {'location': current_location, 'consecutive_turns': consecutive_at_current},
+                'proposed_action': breaking_action,
+                'reason': reason
+            }
 
         # Check 2: Two-Location Oscillation
         if len(parsed_turns) >= 6:
@@ -476,68 +529,81 @@ Analyze for loops and propose breaking action if needed:""")
                         'reason': reason
                     }
 
-        # Check 3: Repeated Failed Action
+        # Check 3: Repeated Failed Action (Location-Aware)
         if len(parsed_turns) >= 3:
-            recent_commands = [turn['command'] for turn in parsed_turns[-5:]]
-            command_counts = {}
-            for cmd in recent_commands:
-                command_counts[cmd] = command_counts.get(cmd, 0) + 1
+            # Track (location, command) pairs - only flag if SAME action at SAME location
+            location_command_pairs = {}
+            for turn in parsed_turns[-5:]:
+                key = (turn['location'], turn['command'])
+                if key not in location_command_pairs:
+                    location_command_pairs[key] = []
+                location_command_pairs[key].append(turn['turn_number'])
 
-            # Any command repeated 2+ times in last 5 turns
-            for command, count in command_counts.items():
-                if count >= 2 and command.strip():
-                    # Check if score increased (if so, action is working)
-                    scores = [current_score]  # Default if no score data
-                    if len(parsed_turns) >= 2:
-                        recent_turns = parsed_turns[-5:]
-                        turn_nums_with_cmd = [t['turn_number'] for t in recent_turns if t['command'] == command]
+            # Only flag if:
+            # 1. Same action attempted 3+ times (increased from 2 to reduce false positives)
+            # 2. At SAME location (context-aware)
+            # 3. We're CURRENTLY at that location (still relevant)
+            for (location, command), turn_numbers in location_command_pairs.items():
+                if len(turn_numbers) >= 3:  # Increased threshold from 2 to 3
+                    # CRITICAL: Only flag if we're CURRENTLY at this location
+                    # If we've moved, the loop is already broken - don't re-detect it
+                    if location != current_location:
+                        continue  # We've escaped this location - loop already broken
 
-                        breaking_action = self._generate_breaking_action(
-                            loop_type="repeated_action",
-                            repeated_command=command,
-                            available_exits=available_exits,
-                            recent_commands=recent_commands
-                        )
+                    # Additional validation: ensure command is not empty
+                    if not command or not command.strip():
+                        continue
 
-                        reason = self._generate_explicit_reason(
-                            loop_type="repeated_action",
-                            evidence={
-                                'command': command,
-                                'repeat_count': count,
-                                'turn_numbers': turn_nums_with_cmd,
-                                'current_score': current_score
-                            },
-                            proposed_action=breaking_action
-                        )
+                    # Generate breaking action
+                    recent_commands = [turn['command'] for turn in parsed_turns[-5:]]
+                    breaking_action = self._generate_breaking_action(
+                        loop_type="repeated_action",
+                        repeated_command=command,
+                        available_exits=available_exits,
+                        recent_commands=recent_commands
+                    )
 
-                        return {
-                            'loop_detected': True,
-                            'loop_type': 'repeated_action',
-                            'evidence': {'command': command, 'count': count},
-                            'proposed_action': breaking_action,
-                            'reason': reason
-                        }
+                    # Generate explicit reason
+                    reason = self._generate_explicit_reason(
+                        loop_type="repeated_action",
+                        evidence={
+                            'command': command,
+                            'location': location,
+                            'repeat_count': len(turn_numbers),
+                            'turn_numbers': turn_numbers,
+                            'current_score': current_score
+                        },
+                        proposed_action=breaking_action
+                    )
 
-        # Check 4: Score Stagnation
-        if len(parsed_turns) >= 5:
+                    return {
+                        'loop_detected': True,
+                        'loop_type': 'repeated_action',
+                        'evidence': {'command': command, 'location': location, 'count': len(turn_numbers)},
+                        'proposed_action': breaking_action,
+                        'reason': reason
+                    }
+
+        # Check 4: Score Stagnation (Reduced aggressiveness - increased thresholds)
+        if len(parsed_turns) >= 8:  # Increased from 5 to 8 turns
             # Check if score hasn't changed (use current_score for all if no score data)
             scores = [current_score] * len(parsed_turns)  # Assume same score
-            if all(s == current_score for s in scores[-5:]):
-                unique_locations = list(set(turn['location'] for turn in parsed_turns[-8:]))
+            if all(s == current_score for s in scores[-8:]):  # Check last 8, not 5
+                unique_locations = list(set(turn['location'] for turn in parsed_turns[-12:]))  # Wider window (12 vs 8)
 
-                # Only 3 or fewer locations in last 8 turns = limited exploration
-                if len(unique_locations) <= 3:
+                # Only 2 or fewer locations in last 12 turns = REALLY limited exploration (more strict)
+                if len(unique_locations) <= 2:  # More strict: only 2 locations, not 3
                     breaking_action = self._generate_breaking_action(
                         loop_type="score_stagnation",
                         available_exits=available_exits,
-                        recent_commands=[turn['command'] for turn in parsed_turns[-5:]],
+                        recent_commands=[turn['command'] for turn in parsed_turns[-8:]],  # Use last 8 commands
                         visited_locations=unique_locations
                     )
 
                     reason = self._generate_explicit_reason(
                         loop_type="score_stagnation",
                         evidence={
-                            'stagnant_turns': 5,
+                            'stagnant_turns': 8,  # Updated from 5 to 8
                             'locations_visited': unique_locations,
                             'current_score': current_score,
                             'total_turns': len(parsed_turns)
@@ -548,7 +614,7 @@ Analyze for loops and propose breaking action if needed:""")
                     return {
                         'loop_detected': True,
                         'loop_type': 'score_stagnation',
-                        'evidence': {'stagnant_turns': 5, 'locations': unique_locations},
+                        'evidence': {'stagnant_turns': 8, 'locations': unique_locations},  # Updated from 5 to 8
                         'proposed_action': breaking_action,
                         'reason': reason
                     }
@@ -575,58 +641,48 @@ Analyze for loops and propose breaking action if needed:""")
 
         if loop_type == "stuck_location":
             # Try to move away from stuck location
-            # Prefer unexplored exits
+            # Prefer available exits (these exclude BLOCKED directions)
             for exit_dir in available_exits:
-                if exit_dir:
-                    return f"GO {exit_dir}"
-            # Fallback: try cardinal directions
-            for direction in ["NORTH", "SOUTH", "EAST", "WEST", "UP", "DOWN"]:
-                if f"GO {direction}" not in recent_commands:
-                    return direction
-            return "LOOK"
+                if exit_dir and exit_dir.upper() not in recent_commands:
+                    return exit_dir.upper()
+            # If no available exits, try INVENTORY
+            return "INVENTORY"
 
         elif loop_type == "oscillating":
             # Try to escape to a third location
-            # Avoid the two oscillating locations
+            # Use available exits (these exclude BLOCKED directions)
             for exit_dir in available_exits:
-                if exit_dir:
-                    return f"GO {exit_dir}"
-            # Try a different action category
-            for direction in ["EAST", "WEST", "NORTHEAST", "NORTHWEST"]:
-                if direction not in recent_commands:
-                    return direction
+                if exit_dir and exit_dir.upper() not in recent_commands:
+                    return exit_dir.upper()
+            # If no available exits, try INVENTORY
             return "INVENTORY"
 
         elif loop_type == "repeated_action":
             # Do something completely different from repeated command
+            # Use available exits (these exclude BLOCKED directions)
             if repeated_command:
-                # If repeated command was movement, try interaction
-                movement_keywords = ["GO", "NORTH", "SOUTH", "EAST", "WEST", "UP", "DOWN", "CLIMB"]
-                is_movement = any(keyword in repeated_command.upper() for keyword in movement_keywords)
+                # Try available exits that haven't been tried recently
+                for exit_dir in available_exits:
+                    if exit_dir and exit_dir.upper() not in recent_commands:
+                        return exit_dir.upper()
 
-                if is_movement:
-                    # Try interaction instead
-                    return "EXAMINE SURROUNDINGS"
-                else:
-                    # Try movement instead
-                    for exit_dir in available_exits:
-                        if exit_dir:
-                            return f"GO {exit_dir}"
-                    return "NORTH"
-            return "LOOK"
+                # Last resort: INVENTORY provides information
+                return "INVENTORY"
+            return "INVENTORY"
 
         elif loop_type == "score_stagnation":
             # Need to explore new areas
-            # Try completely new direction
-            all_directions = ["NORTH", "SOUTH", "EAST", "WEST", "NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST", "UP", "DOWN"]
-            for direction in all_directions:
-                if direction not in recent_commands and direction not in str(recent_commands):
-                    return direction
-            # Fallback: try an available exit
-            for exit_dir in available_exits:
-                if exit_dir:
-                    return f"GO {exit_dir}"
-            return "NORTH"
+            # CRITICAL: Don't recommend directions that are already known to be BLOCKED
+            # Use available_exits from mapper which excludes blocked directions
+
+            # Try available exits first (these are from mapper, so they exclude BLOCKED)
+            if available_exits:
+                for exit_dir in available_exits:
+                    if exit_dir and exit_dir.upper() not in recent_commands:
+                        return exit_dir.upper()
+
+            # If no available exits, try INVENTORY to gather info
+            return "INVENTORY"
 
         return "LOOK"
 
@@ -652,29 +708,31 @@ Analyze for loops and propose breaking action if needed:""")
             actions = evidence['actions_attempted']
             score_unchanged = evidence['score_unchanged_turns']
             current_score = evidence['current_score']
+            consecutive_turns = evidence.get('consecutive_turns', len(visit_turns))
 
-            reason = f"""CRITICAL LOOP DETECTED: Same location repetition
+            reason = f"""CRITICAL LOOP DETECTED: Stuck at same location
 
 Evidence:
-- Location '{location}' visited on turns: {', '.join(map(str, visit_turns))} ({len(visit_turns)} visits in last 10 turns)
-- Actions attempted at this location: {', '.join(actions[:5])}{'...' if len(actions) > 5 else ''}
+- Stuck at '{location}' for {consecutive_turns} CONSECUTIVE turns
+- Turn numbers: {', '.join(map(str, visit_turns))}
+- Actions attempted: {', '.join(actions[:5])}{'...' if len(actions) > 5 else ''}
 - Score: {current_score} (unchanged for {score_unchanged} consecutive turns)
-- We keep returning to '{location}' expecting different results
+- Unable to leave '{location}' or make progress
 
 Pattern Analysis:
-- We're stuck in a cycle involving '{location}'
+- We've been trapped at '{location}' for {consecutive_turns} turns in a row
+- Multiple different actions tried, all failing to advance the game
 - This location has been thoroughly examined with no progress
-- Every return to this location wastes a turn without advancing the game
 - No score increase indicates we're not solving puzzles here
-- Definition of insanity: repeating the same location visits expecting different outcomes
+- We're genuinely STUCK, not just passing through during exploration
 
 Proposed Breaking Action: {proposed_action}
-- Abandons '{location}' completely and moves to a NEW area
-- Changes strategy from "revisit familiar location" to "explore new territory"
+- Forces movement to a DIFFERENT location
+- Breaks the stuck pattern by trying unexplored directions
 - Opens up opportunities for new items, puzzles, and score increases
-- Gets us OUT of the stuck pattern
+- Gets us OUT of the deadlock
 
-URGENCY: CRITICAL - We've wasted {len(visit_turns)} turns on this location. Must break out NOW before more turns are lost. This is blocking all forward progress."""
+URGENCY: CRITICAL - Stuck for {consecutive_turns} consecutive turns. Must escape NOW before more turns are wasted. This is blocking all forward progress."""
 
         elif loop_type == "oscillating":
             locations = evidence['locations']
@@ -707,32 +765,33 @@ URGENCY: CRITICAL - {oscillations} back-and-forth cycles wasted with ZERO progre
 
         elif loop_type == "repeated_action":
             command = evidence['command']
+            location = evidence.get('location', 'Unknown')  # Get location if available
             repeat_count = evidence['repeat_count']
             turn_numbers = evidence['turn_numbers']
             current_score = evidence['current_score']
 
-            reason = f"""CRITICAL LOOP DETECTED: Repeated failed action
+            reason = f"""CRITICAL LOOP DETECTED: Repeated failed action at same location
 
 Evidence:
-- Command "{command}" attempted {repeat_count} times in last 5 turns
+- Command "{command}" attempted {repeat_count} times AT LOCATION '{location}'
 - Repeated on turns: {', '.join(map(str, turn_numbers[:5]))}
 - Score: {current_score} (no increase from repeated attempts)
-- Same command = same result = no progress
+- Same command at same location = same result = no progress
 
 Pattern Analysis:
-- We keep trying "{command}" expecting it to work this time
+- We keep trying "{command}" at '{location}' expecting it to work this time
 - The game response is clearly the same each time (or action fails)
-- Repeating the same failed action is the definition of a loop
-- We haven't found what's needed to make this action succeed
+- Repeating the same failed action at the same location is the definition of a loop
+- We haven't found what's needed to make this action succeed here
 - Need to do something DIFFERENT to make progress
 
 Proposed Breaking Action: {proposed_action}
-- Completely different action category from "{command}"
-- Stops the futile repetition of a failed command
+- Completely different approach from "{command}"
+- Breaks the repetition pattern at '{location}'
 - Changes strategy to find what's actually needed
 - Productive use of turn instead of repeating failure
 
-URGENCY: HIGH - We've confirmed {repeat_count} times that "{command}" doesn't work right now. Need to try something else, not keep bashing our head against the same wall."""
+URGENCY: HIGH - We've confirmed {repeat_count} times that "{command}" doesn't work at '{location}'. Need to try something else, not keep bashing our head against the same wall."""
 
         elif loop_type == "score_stagnation":
             stagnant_turns = evidence['stagnant_turns']

@@ -30,8 +30,12 @@ class TurnReportWriter:
         issue_agents: List,
         explorer_agent,
         loop_detection_agent,
+        interaction_agent,
         decision_prompt: str,
-        decision
+        decision,
+        recent_history: Optional[str] = None,
+        complete_history: Optional[str] = None,
+        current_inventory: Optional[List[str]] = None
     ):
         """
         Write a detailed markdown report for a single turn.
@@ -48,8 +52,12 @@ class TurnReportWriter:
             issue_agents: List of IssueAgent objects
             explorer_agent: ExplorerAgent object or None
             loop_detection_agent: LoopDetectionAgent object or None
+            interaction_agent: InteractionAgent object or None
             decision_prompt: Formatted decision prompt
             decision: AdventurerResponse object
+            recent_history: Recent history summary from tools
+            complete_history: Complete history summary from tools
+            current_inventory: List of items currently in inventory
         """
         # Create session directory
         session_dir = Path(self.logs_base_path) / session_id
@@ -70,6 +78,37 @@ class TurnReportWriter:
                 f.write(f"- **Moves**: {moves}\n")
                 f.write(f"- **Game Output**:\n")
                 f.write(f"  > {game_response}\n\n")
+                f.write("---\n\n")
+
+                # Context Section
+                f.write("## Context\n\n")
+
+                # Recent History
+                if recent_history:
+                    f.write("### Recent History\n")
+                    f.write(f"{recent_history}\n\n")
+                else:
+                    f.write("### Recent History\n")
+                    f.write("*No recent history available*\n\n")
+
+                # Complete History
+                if complete_history:
+                    f.write("### Complete History\n")
+                    f.write(f"{complete_history}\n\n")
+                else:
+                    f.write("### Complete History\n")
+                    f.write("*No complete history available*\n\n")
+
+                # Current Inventory
+                f.write("### Current Inventory\n")
+                if current_inventory:
+                    f.write("**Items**:\n")
+                    for item in current_inventory:
+                        f.write(f"- {item}\n")
+                    f.write("\n")
+                else:
+                    f.write("*Inventory is empty*\n\n")
+
                 f.write("---\n\n")
 
                 # Agent Analysis
@@ -156,6 +195,37 @@ class TurnReportWriter:
                 else:
                     f.write("### LoopDetectionAgent\n")
                     f.write("*No LoopDetectionAgent active this turn*\n\n")
+                    f.write("---\n\n")
+
+                # InteractionAgent
+                if interaction_agent:
+                    f.write("### InteractionAgent\n")
+                    f.write(f"**Status**: {'Interaction Detected' if interaction_agent.confidence > 0 else 'No Interactions'}\n")
+                    f.write(f"**Current Location**: {interaction_agent.current_location}\n\n")
+
+                    # Tool calls
+                    if hasattr(interaction_agent, 'tool_calls_history') and interaction_agent.tool_calls_history:
+                        f.write("**Research (Tool Calls)**:\n")
+                        for tool_call in interaction_agent.tool_calls_history:
+                            f.write(f"- `{tool_call['tool_name']}({tool_call['input']})`\n")
+                            f.write(f"```\n{tool_call['output']}\n```\n\n")
+                    else:
+                        f.write("**Research (Tool Calls)**: None\n\n")
+
+                    # Analysis
+                    f.write("**Analysis**:\n")
+                    f.write(f"- **Confidence**: {interaction_agent.confidence or 0}/100\n")
+                    if interaction_agent.confidence > 0:
+                        f.write(f"- **Proposed Action**: {interaction_agent.proposed_action}\n")
+                        if interaction_agent.detected_objects:
+                            f.write(f"- **Detected Objects**: {', '.join(interaction_agent.detected_objects)}\n")
+                        if interaction_agent.inventory_items:
+                            f.write(f"- **Using Items**: {', '.join(interaction_agent.inventory_items)}\n")
+                        f.write(f"- **Reason**: {interaction_agent.reason}\n")
+                    f.write("\n---\n\n")
+                else:
+                    f.write("### InteractionAgent\n")
+                    f.write("*No InteractionAgent active this turn*\n\n")
                     f.write("---\n\n")
 
                 # Decision Agent

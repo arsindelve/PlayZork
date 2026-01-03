@@ -17,6 +17,7 @@ from langchain_core.runnables import Runnable
 from .issue_agent import IssueAgent
 from .explorer_agent import ExplorerAgent
 from .loop_detection_agent import LoopDetectionAgent
+from .interaction_agent import InteractionAgent
 from .issue_closed_agent import IssueClosedAgent
 from .issue_closed_response import IssueClosedResponse
 from .observer_agent import ObserverAgent
@@ -33,6 +34,7 @@ class DecisionState(TypedDict):
     issue_agents: List[IssueAgent]
     explorer_agent: Optional[ExplorerAgent]  # Single agent, can be None
     loop_detection_agent: Optional[LoopDetectionAgent]  # Single agent, always spawned
+    interaction_agent: Optional[InteractionAgent]  # Single agent, always spawned
 
     # Research phase output
     research_context: str
@@ -166,8 +168,12 @@ def create_spawn_agents_node(
             loop_detection_agent = LoopDetectionAgent()
             logger.info("SPAWNED 1 LoopDetectionAgent - monitors for stuck/oscillating patterns")
 
-            # ========== PARALLEL RESEARCH: IssueAgents + ExplorerAgent + LoopDetectionAgent ==========
-            num_special_agents = (1 if explorer_agent else 0) + 1  # +1 for LoopDetectionAgent
+            # ========== NEW: Spawn ONE InteractionAgent (ALWAYS) ==========
+            interaction_agent = InteractionAgent()
+            logger.info("SPAWNED 1 InteractionAgent - identifies local object interactions")
+
+            # ========== PARALLEL RESEARCH: IssueAgents + ExplorerAgent + LoopDetectionAgent + InteractionAgent ==========
+            num_special_agents = (1 if explorer_agent else 0) + 2  # +1 for Loop, +1 for Interaction
             logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {num_special_agents} special agents...")
 
             # Get tools (include inventory for agents to query)
@@ -207,6 +213,20 @@ def create_spawn_agents_node(
                             current_moves=current_moves
                         )
                         logger.info(f"Research complete for LoopDetectionAgent -> {agent.proposed_action} (conf: {agent.confidence})")
+                    elif isinstance(agent, InteractionAgent):
+                        logger.info(f"Starting research for InteractionAgent")
+                        agent.research_and_propose(
+                            research_agent=research_agent,
+                            decision_llm=decision_llm,
+                            history_tools=history_tools,
+                            mapper_tools=mapper_tools,
+                            current_location=current_location,
+                            current_game_response=current_game_text,
+                            current_score=current_score,
+                            current_moves=current_moves,
+                            inventory_tools=inventory_tools  # InteractionAgent needs inventory tools
+                        )
+                        logger.info(f"Research complete for InteractionAgent -> {agent.proposed_action} (conf: {agent.confidence})")
                     else:  # IssueAgent
                         logger.info(f"Starting research for IssueAgent: '{agent.issue_content}'")
                         agent.research_and_propose(
@@ -230,8 +250,8 @@ def create_spawn_agents_node(
                     agent.confidence = 0
                     agent.reason = f"Research failed: {str(e)}"
 
-            # Combine all agents (IssueAgents + ExplorerAgent + LoopDetectionAgent)
-            all_agents = issue_agents + ([explorer_agent] if explorer_agent else []) + [loop_detection_agent]
+            # Combine all agents (IssueAgents + ExplorerAgent + LoopDetectionAgent + InteractionAgent)
+            all_agents = issue_agents + ([explorer_agent] if explorer_agent else []) + [loop_detection_agent, interaction_agent]
 
             # Run all agents in parallel using threads
             if all_agents:
@@ -254,6 +274,7 @@ def create_spawn_agents_node(
             state["issue_agents"] = issue_agents
             state["explorer_agent"] = explorer_agent  # Single agent, can be None
             state["loop_detection_agent"] = loop_detection_agent  # Always present
+            state["interaction_agent"] = interaction_agent  # Always present
             return state
 
         except Exception as e:
@@ -262,6 +283,7 @@ def create_spawn_agents_node(
             state["issue_agents"] = []
             state["explorer_agent"] = None
             state["loop_detection_agent"] = None
+            state["interaction_agent"] = None
             return state
 
     return spawn_agents_node
@@ -307,7 +329,7 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
         logger.info(f"Current game response (first 100): {zork_response.Response[:100]}...")
 
         # Call research agent with timeout and retry
-        from config import invoke_with_retry
+        from llm_utils import invoke_with_retry
         response = invoke_with_retry(
             research_agent,
             research_input,
@@ -374,6 +396,7 @@ def create_decision_node(decision_chain: Runnable):
         issue_agents = state["issue_agents"]
         explorer_agent = state["explorer_agent"]
         loop_detection_agent = state["loop_detection_agent"]
+        interaction_agent = state["interaction_agent"]
 
         logger.info("\n" + "=" * 80)
         logger.info("[DecisionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -390,7 +413,7 @@ def create_decision_node(decision_chain: Runnable):
         logger.info(f"Research Context (first 500):\n{research_context[:500]}...")
 
         # Format agent proposals for Decision Agent
-        agent_proposals_text = _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent)
+        agent_proposals_text = _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, interaction_agent)
         logger.info(f"Agent Proposals:\n{agent_proposals_text}")
         logger.info("=" * 80)
 
@@ -422,7 +445,7 @@ def create_decision_node(decision_chain: Runnable):
         full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[HUMAN]\n{formatted_human}"
 
         # Invoke decision chain with timeout and retry
-        from config import invoke_with_retry
+        from llm_utils import invoke_with_retry
         decision = invoke_with_retry(
             decision_chain.with_config(run_name="Decision Agent"),
             decision_input,
@@ -439,7 +462,7 @@ def create_decision_node(decision_chain: Runnable):
     return decision_node
 
 
-def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent):
+def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, interaction_agent):
     """Format agent proposals for Decision Agent evaluation"""
     lines = []
 
@@ -461,7 +484,18 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent):
             lines.append(f"  Reason: {agent.reason}")
             lines.append("")
 
-    # ExplorerAgent
+    # InteractionAgent (AFTER IssueAgents, BEFORE ExplorerAgent)
+    if interaction_agent and interaction_agent.confidence > 0:
+        lines.append(f"InteractionAgent: [Confidence: {interaction_agent.confidence}/100]")
+        if interaction_agent.detected_objects:
+            lines.append(f"  Detected Objects: {', '.join(interaction_agent.detected_objects)}")
+        lines.append(f"  Proposed Action: {interaction_agent.proposed_action}")
+        lines.append(f"  Reason: {interaction_agent.reason}")
+        if interaction_agent.inventory_items:
+            lines.append(f"  Using Items: {', '.join(interaction_agent.inventory_items)}")
+        lines.append("")
+
+    # ExplorerAgent (LAST)
     if explorer_agent and explorer_agent.proposed_action and explorer_agent.confidence is not None:
         ev = (len(explorer_agent.unexplored_directions)/10) * (explorer_agent.confidence/100) * 50
         lines.append(f"ExplorerAgent: [Confidence: {explorer_agent.confidence}/100, EV: {ev:.1f}]")

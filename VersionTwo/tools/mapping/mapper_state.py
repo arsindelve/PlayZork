@@ -131,11 +131,17 @@ class MapperState:
         command_upper = command.upper().strip()
 
         # Direct direction commands
+        # IMPORTANT: Order matters! Longer compound directions must come BEFORE simple directions
+        # to avoid substring matching (e.g., "SOUTH" would match in "SOUTHEAST" if checked first)
         directions = [
-            "NORTH", "SOUTH", "EAST", "WEST",
+            # Compound directions FIRST
             "NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST",
+            # Simple directions SECOND
+            "NORTH", "SOUTH", "EAST", "WEST",
             "UP", "DOWN",
-            "N", "S", "E", "W", "NE", "NW", "SE", "SW", "U", "D"
+            # Abbreviations LAST (after checking full names)
+            "NE", "NW", "SE", "SW",  # Compound abbreviations first
+            "N", "S", "E", "W", "U", "D"  # Simple abbreviations last
         ]
 
         for direction in directions:

@@ -107,7 +107,7 @@ class DisplayManager:
         self.current_map = map_text
         self._update_display()
 
-    def update_agents(self, issue_agents: list, explorer_agent, loop_detection_agent=None):
+    def update_agents(self, issue_agents: list, explorer_agent, loop_detection_agent=None, interaction_agent=None):
         """
         Update the agents display (formats internally)
 
@@ -115,13 +115,15 @@ class DisplayManager:
             issue_agents: List of IssueAgent objects
             explorer_agent: ExplorerAgent object or None
             loop_detection_agent: LoopDetectionAgent object or None
+            interaction_agent: InteractionAgent object or None
         """
         from tools.agent_graph import ExplorerAgent
         from tools.agent_graph import LoopDetectionAgent
+        from tools.agent_graph import InteractionAgent
 
         all_agents = issue_agents + ([explorer_agent] if explorer_agent else [])
 
-        if all_agents or loop_detection_agent:
+        if all_agents or loop_detection_agent or interaction_agent:
             agents_text = ""
             item_num = 1
 
@@ -147,6 +149,21 @@ class DisplayManager:
                 else:
                     # No loop detected - show status
                     agents_text += f"[LoopDetection] ✓ No loop detected (monitoring)\n\n"
+
+            # Show InteractionAgent status (AFTER LoopDetection, BEFORE IssueAgents)
+            if interaction_agent and interaction_agent.confidence > 0:
+                agents_text += f"{item_num}. [INTERACT] {interaction_agent.proposed_action}\n"
+                agents_text += f"   Confidence: {interaction_agent.confidence}/100\n"
+                if interaction_agent.detected_objects:
+                    agents_text += f"   Objects: {', '.join(interaction_agent.detected_objects)}\n"
+                if interaction_agent.inventory_items:
+                    agents_text += f"   Using: {', '.join(interaction_agent.inventory_items)}\n"
+                if interaction_agent.reason:
+                    # Truncate reason for console
+                    reason_preview = interaction_agent.reason[:200] + "..." if len(interaction_agent.reason) > 200 else interaction_agent.reason
+                    agents_text += f"   > Reason: {reason_preview}\n"
+                agents_text += "\n"
+                item_num += 1
 
             # Sort by location name (for cleaner display), then by importance within each location
             all_agents.sort(key=lambda a: (

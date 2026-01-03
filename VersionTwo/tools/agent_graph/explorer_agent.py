@@ -160,7 +160,7 @@ class ExplorerAgent:
         }
 
         try:
-            from config import invoke_with_retry
+            from llm_utils import invoke_with_retry
             research_response = invoke_with_retry(
                 research_agent.with_config(
                     run_name=f"ExplorerAgent Research: {self.best_direction} from {self.current_location}"
@@ -257,7 +257,7 @@ Propose exploring {best_direction}.""")
         ])
 
         try:
-            from config import invoke_with_retry
+            from llm_utils import invoke_with_retry
             proposal_chain = proposal_prompt | decision_llm.with_structured_output(ExplorerProposal)
 
             proposal = invoke_with_retry(

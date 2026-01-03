@@ -34,6 +34,7 @@ SPECIALIST AGENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 - IssueAgents: Each solves a specific tracked puzzle (importance = value for winning)
+- InteractionAgent: Identifies and proposes interactions with objects in current location
 - ExplorerAgent: Discovers new areas/items through systematic exploration
 - LoopDetectionAgent: Detects stuck/oscillating patterns and proposes actions to break loops
 

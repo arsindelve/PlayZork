@@ -125,7 +125,7 @@ class GameSession:
 
             # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)
             # The graph handles: research, decision, issue closing, observation, and memory persistence
-            player_response, issue_agents, explorer_agent, loop_detection_agent, issue_closed_response, observer_response, decision_prompt = self.adventurer_service.handle_user_input(
+            player_response, issue_agents, explorer_agent, loop_detection_agent, interaction_agent, issue_closed_response, observer_response, decision_prompt = self.adventurer_service.handle_user_input(
                 zork_response,
                 self.turn_number
             )
@@ -157,7 +157,7 @@ class GameSession:
             self.logger.log_summary_update(recent_summary)
 
             # Step 6: Update display with agents (formatting handled by DisplayManager)
-            display.update_agents(issue_agents, explorer_agent, loop_detection_agent)
+            display.update_agents(issue_agents, explorer_agent, loop_detection_agent, interaction_agent)
 
             # Step 7: Update display with map (formatting handled by DisplayManager)
             transitions = self.mapper_toolkit.state.get_all_transitions()
@@ -166,6 +166,10 @@ class GameSession:
             # Step 8: Write turn report for analysis and debugging
             from tools.reporting import TurnReportWriter
             report_writer = TurnReportWriter()
+
+            # Get current inventory for report
+            current_inventory = self.inventory_toolkit.state.get_items()
+
             report_writer.write_turn_report(
                 session_id=self.session_id,
                 turn_number=self.turn_number,
@@ -178,8 +182,12 @@ class GameSession:
                 issue_agents=issue_agents,
                 explorer_agent=explorer_agent,
                 loop_detection_agent=loop_detection_agent,
+                interaction_agent=interaction_agent,
                 decision_prompt=decision_prompt,
-                decision=player_response
+                decision=player_response,
+                recent_history=recent_summary,
+                complete_history=long_summary,
+                current_inventory=current_inventory
             )
 
             return player_response.command

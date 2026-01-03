@@ -113,7 +113,7 @@ class IssueAgent:
         logger.info(f"[IssueAgent] Calling research_agent.invoke()...")
         # Call research agent (can call tools) with timeout and retry
         try:
-            from config import invoke_with_retry
+            from llm_utils import invoke_with_retry
             research_response = invoke_with_retry(
                 research_agent.with_config(
                     run_name=f"IssueAgent Research: {self.issue_content[:60]}"
@@ -292,7 +292,7 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
             location_status = "UNKNOWN"
 
         try:
-            from config import invoke_with_retry
+            from llm_utils import invoke_with_retry
             proposal = invoke_with_retry(
                 proposal_chain.with_config(
                     run_name=f"IssueAgent Proposal: {self.issue_content[:60]}"

@@ -115,7 +115,7 @@ class IssueClosedAgent:
         analysis_chain = decision_llm.with_structured_output(IssueClosedResponse)
 
         # Invoke with timeout and retry
-        from config import invoke_with_retry
+        from llm_utils import invoke_with_retry
         response = invoke_with_retry(
             analysis_chain.with_config(
                 run_name=f"IssueClosedAgent: {location}"
