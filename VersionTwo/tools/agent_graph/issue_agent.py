@@ -229,6 +229,16 @@ RULES FOR PROPOSED_ACTION
 4. NEVER propose movement commands unless movement DIRECTLY solves YOUR issue
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL COMMAND RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- NEVER use semicolons (;) in your proposed action
+- NEVER combine multiple commands - propose ONE simple command only
+- Use the SIMPLEST possible version of each command
+- Examples: 'OPEN DOOR', 'TAKE KEY', 'UNLOCK DOOR WITH KEY'
+- NOT allowed: 'OPEN DOOR; TAKE KEY', 'OPEN KIT; TAKE ROPE'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CONFIDENCE SCORING (BE BRUTALLY HONEST)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

@@ -190,6 +190,17 @@ class GameSession:
                 current_inventory=current_inventory
             )
 
+            # Update master session index
+            report_writer.update_session_index(
+                session_id=self.session_id,
+                turn_number=self.turn_number,
+                location=zork_response.LocationName,
+                score=zork_response.Score,
+                moves=zork_response.Moves,
+                player_command=player_response.command,
+                game_response=zork_response.Response
+            )
+
             return player_response.command
 
         except Exception as e:

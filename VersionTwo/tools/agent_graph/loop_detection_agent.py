@@ -265,6 +265,13 @@ WHEN LOOP DETECTED:
 - Confidence: 95-100 (very high - loops are bad, must break them!)
 - Reason: Explain the loop pattern clearly and why this action breaks it
 
+CRITICAL COMMAND RULES:
+- NEVER use semicolons (;) in your proposed action
+- NEVER combine multiple commands - propose ONE simple command only
+- Use the SIMPLEST possible version of each command
+- Examples: 'NORTH', 'EXAMINE DOOR', 'INVENTORY', 'CLIMB CLIFF'
+- NOT allowed: 'GO NORTH; EXAMINE ROOM', 'TAKE ITEM AND EXAMINE IT'
+
 WHEN NO LOOP DETECTED:
 - Set loop_detected = false
 - Set loop_type = ""

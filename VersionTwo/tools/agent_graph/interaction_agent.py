@@ -233,6 +233,13 @@ CRITICAL RULES:
 - Focus ONLY on interacting with objects mentioned in current location
 - ALWAYS check inventory first - many interactions require items
 
+CRITICAL COMMAND RULES:
+- NEVER use semicolons (;) in your proposed action
+- NEVER combine multiple commands - propose ONE simple command only
+- Use the SIMPLEST possible version of each command
+- Examples: 'TAKE LAMP', 'OPEN DOOR', 'PRESS BUTTON'
+- NOT allowed: 'OPEN KIT; TAKE ROPE', 'TAKE LAMP AND EXAMINE IT'
+
 Respond with structured output."""),
             ("human", """CURRENT LOCATION: {current_location}
 CURRENT SCORE: {current_score}

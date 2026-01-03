@@ -80,8 +80,15 @@ EXPECTED VALUE CALCULATION
 OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+CRITICAL COMMAND RULES:
+- NEVER use semicolons (;) in commands
+- NEVER combine multiple commands - only ONE command at a time
+- Use the SIMPLEST possible version of each command
+- Examples: 'OPEN DOOR', 'TAKE LAMP', 'NORTH', 'EXAMINE KEY'
+- NOT allowed: 'OPEN DOOR; TAKE KEY', 'OPEN SURVIVAL KIT; TAKE ROPE'
+
 Output JSON with:
-- command: The action to execute (from chosen agent proposal)
+- command: The action to execute (from chosen agent proposal) - MUST be a single simple command
 - reason: Which agent you chose and WHY (explain your decision)
 - moved: Direction if movement command (or empty string)
 """
@@ -110,10 +117,18 @@ Consider:
 
 Choose the best proposal and explain your reasoning clearly in the 'reason' field.
 
+CRITICAL COMMAND RULES:
+- NEVER use semicolons (;) in commands
+- NEVER combine multiple commands - only ONE command at a time
+- Use the SIMPLEST possible version of each command
+- If an agent proposes a multi-command (e.g., 'OPEN KIT; TAKE ROPE'), choose ONLY the first part ('OPEN KIT')
+- Examples of valid commands: 'OPEN DOOR', 'TAKE LAMP', 'NORTH', 'EXAMINE KEY'
+- Examples of INVALID commands: 'OPEN DOOR; TAKE KEY', 'OPEN SURVIVAL KIT; TAKE ROPE'
+
 Instructions: Provide a JSON output without backticks:
 
 {{{{
-    "command": "The command from the chosen proposal (or LOOK if uncertain)",
+    "command": "The command from the chosen proposal (or LOOK if uncertain) - MUST be a single simple command with NO semicolons",
     "reason": "Explain which agent's proposal you chose and WHY. Example: 'Chose IssueAgent #2 (importance 800, confidence 85, EV 68.0) because solving the grating puzzle is critical for winning. Research shows we have the key. ExplorerAgent suggested NORTH (confidence 75, EV 37.5) but solving this puzzle takes priority.'",
     "moved": "if you chose a movement command, list the direction you tried to go. Otherwise, leave this empty."
 }}}}
@@ -141,10 +156,17 @@ Instructions: Provide a JSON output without backticks:
     6. Inventory management: Use INVENTORY to check what you have, DROP items if needed
     7. Every command must be NEW and PRODUCTIVE - no wasted turns
 
+    CRITICAL COMMAND RULES:
+    - NEVER use semicolons (;) in commands - they are FORBIDDEN
+    - NEVER combine multiple commands - only ONE command at a time
+    - Use the SIMPLEST possible version of each command
+    - Examples: 'OPEN DOOR', 'TAKE LAMP', 'NORTH', 'EXAMINE KEY'
+    - NOT allowed: 'OPEN DOOR; TAKE KEY', 'OPEN SURVIVAL KIT; TAKE ROPE', 'TAKE LAMP AND EXAMINE IT'
+
     Instructions: Provide a JSON output without backticks:
 
     {{{{
-        "command": "Your NEXT command. Must NOT be a failed action from research analysis. If stuck, try directional movement.",
+        "command": "Your NEXT command. Must be a SINGLE SIMPLE command with NO semicolons. Must NOT be a failed action from research analysis. If stuck, try directional movement.",
         "reason": "brief explanation based on research analysis and game state",
         "remember": "Record STRATEGIC ISSUES only: (1) UNSOLVED PUZZLES you discovered (e.g., 'locked grating blocks path east', 'need to cross the river somehow'), (2) OBVIOUS THINGS TO TRY that could unlock progress (e.g., 'get inside the white house', 'find a light source for dark areas'), (3) MAJOR OBSTACLES preventing advancement (e.g., 'troll demands payment to pass', 'cyclops is hostile and blocking path'). Do NOT record observations, items, or general notes. Memory is limited. Leave empty if no strategic issue discovered this turn.",
         "rememberImportance": "Score 1-1000 based on: How much will SOLVING/OVERCOMING this issue help us WIN the game ({GAME_OBJECTIVE})? Major blocking puzzles/obstacles = 800-1000. Promising leads = 500-700. Minor puzzles = 100-400. This score determines priority when making decisions.",
@@ -160,6 +182,14 @@ Instructions: Provide a JSON output without backticks:
     Play as if for the first time, without relying on any prior knowledge of the game.
 
     Objective: {GAME_OBJECTIVE}.
+
+    CRITICAL COMMAND RULES:
+    - NEVER use semicolons (;) - they are forbidden
+    - NEVER combine multiple commands - one command at a time ONLY
+    - Use the SIMPLEST possible version of each command
+    - Examples: 'OPEN DOOR', 'TAKE LAMP', 'GO NORTH', 'READ BOOK'
+    - NOT allowed: 'OPEN DOOR; GO NORTH', 'TAKE LAMP AND EXAMINE IT'
+
     Input Style: Use simple commands with one verb and one or two nouns, such as 'OPEN DOOR' or 'TURN SCREW WITH SCREWDRIVER.'
     Type "INVENTORY" to check items you're carrying and "SCORE" to view your current score (so you know if you're winning).
     Type "LOOK" to see where you are, and what is in the current location. Use this liberally.

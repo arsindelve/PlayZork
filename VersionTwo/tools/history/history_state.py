@@ -30,7 +30,12 @@ class HistoryState:
         self.session_id = session_id
         self.db = db
         self.previous_command: str = "LOOK"
-        self._turn_counter: int = 0
+
+        # CRITICAL: Resume from database if session already has turns
+        # Without this, restarting a session resets turn_counter to 0,
+        # causing new turns to overwrite old ones in the database!
+        latest_turn = db.get_latest_turn_number(session_id)
+        self._turn_counter: int = latest_turn if latest_turn is not None else 0
 
     def add_turn(self, game_response: str, player_command: str,
                  location: Optional[str] = None, score: int = 0,

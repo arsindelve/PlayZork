@@ -226,6 +226,9 @@ This direction was chosen as the best option from {{unexplored_count}} unexplore
 Rules for proposed_action:
 - Propose exploring {{best_direction}} (e.g., "GO {{best_direction}}" or just "{{best_direction}}")
 - Use standard command format for {GAME_NAME}
+- NEVER use semicolons (;) in your proposed action
+- NEVER combine multiple commands - propose ONE simple direction command only
+- Use the SIMPLEST form: just the direction (e.g., "NORTH") or "GO NORTH"
 
 Rules for reason:
 - Explain why exploring this direction makes sense now
