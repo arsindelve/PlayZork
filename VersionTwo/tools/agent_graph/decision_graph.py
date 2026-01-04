@@ -164,16 +164,18 @@ def create_spawn_agents_node(
             else:
                 logger.info("NO ExplorerAgent spawned - all directions explored from this location")
 
-            # ========== NEW: Spawn ONE LoopDetectionAgent (ALWAYS) ==========
-            loop_detection_agent = LoopDetectionAgent()
-            logger.info("SPAWNED 1 LoopDetectionAgent - monitors for stuck/oscillating patterns")
+            # ========== DISABLED: LoopDetectionAgent ==========
+            # loop_detection_agent = LoopDetectionAgent()
+            # logger.info("SPAWNED 1 LoopDetectionAgent - monitors for stuck/oscillating patterns")
+            loop_detection_agent = None  # DISABLED - not useful in practice
+            logger.info("LoopDetectionAgent DISABLED")
 
             # ========== NEW: Spawn ONE InteractionAgent (ALWAYS) ==========
             interaction_agent = InteractionAgent()
             logger.info("SPAWNED 1 InteractionAgent - identifies local object interactions")
 
-            # ========== PARALLEL RESEARCH: IssueAgents + ExplorerAgent + LoopDetectionAgent + InteractionAgent ==========
-            num_special_agents = (1 if explorer_agent else 0) + 2  # +1 for Loop, +1 for Interaction
+            # ========== PARALLEL RESEARCH: IssueAgents + ExplorerAgent + InteractionAgent ==========
+            num_special_agents = (1 if explorer_agent else 0) + 1  # +1 for Interaction (Loop disabled)
             logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {num_special_agents} special agents...")
 
             # Get tools (include inventory for agents to query)

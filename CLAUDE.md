@@ -97,8 +97,19 @@ The AdventurerResponse schema (VersionTwo/adventurer/adventurer_response.py:5) e
 
 ### LLM Usage Strategy
 
-- **GPT-3.5-turbo**: History summarization (cheap, frequent)
-- **GPT-4**: Decision making (expensive, needs reasoning power)
+The system supports two LLM providers configured in `VersionTwo/config.py`:
+
+**Provider Selection** (change `LLM_PROVIDER` in config.py):
+- `"openai"`: Uses OpenAI API (GPT models)
+- `"ollama"`: Uses local Ollama instance (open-source models)
+
+**Model Tiers**:
+- **Cheap models**: History summarization, research, deduplication
+  - OpenAI: gpt-5-nano-2025-08-07
+  - Ollama: llama3.3
+- **Expensive models**: Decision making, agent proposals, observation
+  - OpenAI: gpt-5-mini-2025-08-07
+  - Ollama: llama3.3
 - Temperature: 0 (deterministic behavior)
 
 ### Dependencies
@@ -110,21 +121,47 @@ The AdventurerResponse schema (VersionTwo/adventurer/adventurer_response.py:5) e
 
 ## Environment Setup
 
-The project requires OpenAI API credentials. Create a `.env` file in the project root:
+The project requires API credentials based on your LLM provider choice. Create a `.env` file in the project root:
 ```bash
 cp .env.example .env
 ```
 
-Then edit `.env` and add your OpenAI API key:
+### OpenAI Configuration
+
+If using OpenAI (default), add your API key to `.env`:
 ```
 OPENAI_API_KEY=your-actual-api-key
 ```
+
+### Ollama Configuration
+
+If using Ollama, ensure the Ollama service is running and accessible. Add to `.env`:
+```
+OLLAMA_HOST=http://localhost:11434
+```
+
+**For VM/Remote Setup**: If Ollama runs on a different host (e.g., macOS host from VM):
+1. Start Ollama with network binding:
+   ```bash
+   OLLAMA_HOST=0.0.0.0:11434 OLLAMA_ORIGINS="*" ollama serve
+   ```
+2. Use IPv6 address in `.env` (IPv6 often works when IPv4 fails):
+   ```
+   OLLAMA_HOST=http://[fd9e:f32d:415e:4a47:1037:abbc:765d:3da2]:11434
+   ```
+   (Replace with your host's actual IPv6 address from `ifconfig`)
+
+**Common Issues**:
+- If Ollama connection fails, verify it's listening: `lsof -i :11434` on the host
+- IPv6 format requires brackets: `http://[ipv6-address]:11434`
+- Test connectivity: `curl -g "http://[your-ipv6]:11434/api/tags"`
 
 ## Dependencies
 
 Managed via `pyproject.toml`:
 - **langchain** - LLM orchestration and prompt management
 - **langchain-openai** - OpenAI integration for LangChain
+- **langchain-ollama** - Ollama integration for LangChain (local models)
 - **httpx** - Async HTTP client for Zork API calls
 - **pydantic** - Data validation and structured outputs
 - **python-dotenv** - Environment variable management from .env files
