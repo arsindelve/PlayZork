@@ -1,5 +1,7 @@
 # Multi-Agent Deliberation for Long-Horizon Sequential Decision Making
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18224702.svg)](https://doi.org/10.5281/zenodo.18224702)
+
 > **Status:** Working research draft. Architecture and motivation are stable; results are preliminary.
 
 ---
@@ -305,13 +307,18 @@ NOTES.md
 
 ## Citation
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18224702.svg)](https://doi.org/10.5281/zenodo.18224702)
+
 If you use this work, please cite:
 
 ```
 @misc{playzork2025,
   title={Multi-Agent Deliberation for Long-Horizon Sequential Decision Making},
   author={Michael Lane},
+  orcid={0009-0006-5381-6080},
   year={2025},
+  doi={10.5281/zenodo.18224702},
+  url={https://zenodo.org/records/18224702},
   howpublished={\url{https://github.com/arsindelve/PlayZork}},
   note={v0.1-arxiv}
 }
