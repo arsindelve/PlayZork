@@ -1,3 +1,6 @@
+from dataclasses import dataclass, field
+from typing import Optional, List, Any
+
 from adventurer.adventurer_service import AdventurerService
 from zork.zork_service import ZorkService
 from tools.history import HistoryToolkit
@@ -7,6 +10,25 @@ from tools.database import DatabaseManager
 from display_manager import DisplayManager
 from game_logger import GameLogger
 from config import get_cheap_llm
+
+
+@dataclass
+class PendingDecision:
+    """Stores all decision data from the previous turn for report synchronization.
+
+    The HTML report should show the agents/decision that LED to the current command,
+    not the agents/decision planning the NEXT command. This dataclass holds all that
+    state so it can be used when writing the report for the NEXT turn.
+    """
+    reasoning: Optional[str] = None
+    issue_agents: List[Any] = field(default_factory=list)
+    explorer_agent: Any = None
+    loop_detection_agent: Any = None
+    interaction_agent: Any = None
+    decision_prompt: str = ""
+    decision: Any = None
+    research_tool_calls: List[dict] = field(default_factory=list)
+    decision_tool_calls: List[dict] = field(default_factory=list)
 
 
 class GameSession:
@@ -65,8 +87,9 @@ class GameSession:
         self.turn_number = last_turn if last_turn is not None else 0
         self.logger.logger.info(f"Resuming from turn {self.turn_number}")
 
-        # Track reasoning from previous turn (to display with correct command)
-        self.pending_reasoning = None
+        # Track decision data from previous turn (to display with correct command in report)
+        # The report should show agents/decision that LED to the current command
+        self.pending_decision = PendingDecision()
 
     async def play(self):
         """
@@ -142,22 +165,32 @@ class GameSession:
             new_issue = observer_response.remember if observer_response and observer_response.remember else None
 
             # Step 4: Update display with the turn
-            # Use pending_reasoning from PREVIOUS turn (reasoning for the command that just executed)
+            # Use pending_decision from PREVIOUS turn (agents/reasoning that led to this command)
             # Capture it before updating so we can use it in the report later
-            reasoning_for_this_command = self.pending_reasoning
+            decision_for_this_command = self.pending_decision
             display.add_turn(
                 location=zork_response.LocationName,
                 game_text=zork_response.Response,
                 command=input_text,  # The command that was just executed
                 score=zork_response.Score,
                 moves=zork_response.Moves,
-                reasoning=reasoning_for_this_command,  # Reasoning for THIS command (from previous turn)
+                reasoning=decision_for_this_command.reasoning,  # Reasoning for THIS command (from previous turn)
                 closed_issues=closed_issues,  # Issues that were resolved this turn
                 new_issue=new_issue  # New issue identified this turn
             )
 
-            # Store reasoning for the NEXT turn
-            self.pending_reasoning = player_response.reason
+            # Store decision data for the NEXT turn's report
+            self.pending_decision = PendingDecision(
+                reasoning=player_response.reason,
+                issue_agents=issue_agents,
+                explorer_agent=explorer_agent,
+                loop_detection_agent=loop_detection_agent,
+                interaction_agent=interaction_agent,
+                decision_prompt=decision_prompt,
+                decision=player_response,
+                research_tool_calls=research_tool_calls or [],
+                decision_tool_calls=decision_tool_calls or []
+            )
 
             # Step 5: Update display with current summaries
             recent_summary = self.history_toolkit.state.get_full_summary()
@@ -174,10 +207,14 @@ class GameSession:
 
             # Step 7b: Generate big picture analysis (saved to database for future use)
             from tools.analysis import BigPictureAnalyzer, DeathAnalyzer
+            # Get current inventory for the analyzer to know current state
+            current_inventory = self.inventory_toolkit.state.get_items()
             big_picture_analyzer = BigPictureAnalyzer(
                 self.history_toolkit,
                 self.session_id,
-                self.db
+                self.db,
+                current_inventory=current_inventory,
+                current_location=zork_response.LocationName
             )
             big_picture_analysis = big_picture_analyzer.analyze(self.turn_number)
 
@@ -202,9 +239,10 @@ class GameSession:
             from tools.reporting import TurnReportWriter
             report_writer = TurnReportWriter()
 
-            # Get current inventory for report
-            current_inventory = self.inventory_toolkit.state.get_items()
+            # current_inventory already fetched above for BigPictureAnalyzer
 
+            # Use decision_for_this_command for agents/decision - these are the agents that
+            # LED to the current command, not the agents planning the NEXT command
             report_writer.write_turn_report(
                 session_id=self.session_id,
                 turn_number=self.turn_number,
@@ -212,20 +250,20 @@ class GameSession:
                 score=zork_response.Score,
                 moves=zork_response.Moves,
                 game_response=zork_response.Response,
-                player_command=input_text,  # The command that was just executed (not the next one)
-                player_reasoning=reasoning_for_this_command,  # Reasoning for THIS command (captured before update)
-                issue_agents=issue_agents,
-                explorer_agent=explorer_agent,
-                loop_detection_agent=loop_detection_agent,
-                interaction_agent=interaction_agent,
-                decision_prompt=decision_prompt,
-                decision=player_response,
+                player_command=input_text,  # The command that was just executed
+                player_reasoning=decision_for_this_command.reasoning,  # Reasoning that LED to this command
+                issue_agents=decision_for_this_command.issue_agents,  # Agents that decided this command
+                explorer_agent=decision_for_this_command.explorer_agent,
+                loop_detection_agent=decision_for_this_command.loop_detection_agent,
+                interaction_agent=decision_for_this_command.interaction_agent,
+                decision_prompt=decision_for_this_command.decision_prompt,
+                decision=decision_for_this_command.decision,
                 recent_history=recent_summary,
                 complete_history=long_summary,
                 current_inventory=current_inventory,
                 big_picture_analysis=big_picture_analysis,
-                research_tool_calls=research_tool_calls,
-                decision_tool_calls=decision_tool_calls,
+                research_tool_calls=decision_for_this_command.research_tool_calls,
+                decision_tool_calls=decision_for_this_command.decision_tool_calls,
                 all_deaths=all_deaths
             )
 

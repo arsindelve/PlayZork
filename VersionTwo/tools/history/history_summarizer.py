@@ -118,12 +118,26 @@ Location: {location}
 Score: {score}
 Moves: {moves}
 
-Update the comprehensive summary to include this new interaction. Keep track of:
-- All locations visited
-- All items found and their locations
-- All puzzles encountered (solved or unsolved)
-- Key discoveries and observations
-- Overall progress and score changes
+Update the comprehensive summary to include this new interaction.
+
+CRITICAL RULES FOR UPDATING STATE:
+1. When a condition CHANGES, UPDATE or REMOVE the old state:
+   - If player turns on a light source → REMOVE any "pitch-dark" or "can't see" descriptions
+   - If a door is unlocked → Mark it as UNLOCKED, remove "locked" status
+   - If an item is taken → Move it to inventory, remove from location
+   - If a puzzle is solved → Mark it SOLVED, don't say it "remains unsolved"
+
+2. The summary must reflect CURRENT state, not historical state:
+   - Don't say "room remains dark" if player now has a working light
+   - Don't say "door is locked" if player unlocked it
+   - Don't say "item is in room" if player took it
+
+3. Keep track of:
+   - Current location and inventory (CURRENT state)
+   - All locations visited
+   - All items found and their CURRENT locations (inventory or room)
+   - All puzzles encountered with CURRENT status (solved/unsolved)
+   - Key discoveries and observations
 
 Provide a detailed but concise narrative. Output ONLY the updated summary.""")
         ])
