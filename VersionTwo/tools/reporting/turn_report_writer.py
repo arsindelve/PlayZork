@@ -375,6 +375,115 @@ class TurnReportWriter:
             transition: width 0.3s ease;
         }
 
+        /* Death Log Styles */
+        .death-log-section {
+            background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+            border: 2px solid #ef4444;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .death-log-title {
+            font-size: 1.3em;
+            color: #991b1b;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .death-count-badge {
+            background: #991b1b;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.8em;
+        }
+
+        .death-entry {
+            background: white;
+            border: 1px solid #fecaca;
+            border-left: 4px solid #ef4444;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .death-entry:last-child {
+            margin-bottom: 0;
+        }
+
+        .death-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #fecaca;
+        }
+
+        .death-turn {
+            font-weight: bold;
+            color: #991b1b;
+        }
+
+        .death-location {
+            background: #fef2f2;
+            color: #991b1b;
+            padding: 4px 10px;
+            border-radius: 10px;
+            font-size: 0.85em;
+        }
+
+        .death-cause {
+            background: #fef2f2;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        .death-cause-label {
+            font-weight: bold;
+            color: #991b1b;
+            font-size: 0.85em;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .death-events {
+            margin-bottom: 10px;
+        }
+
+        .death-events-label {
+            font-weight: bold;
+            color: #7f1d1d;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+        }
+
+        .death-recommendations {
+            background: #ecfdf5;
+            border-left: 4px solid #10b981;
+            padding: 12px;
+            border-radius: 4px;
+        }
+
+        .death-recommendations-label {
+            font-weight: bold;
+            color: #065f46;
+            font-size: 0.85em;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .no-deaths {
+            text-align: center;
+            color: #10b981;
+            font-style: italic;
+            padding: 20px;
+        }
+
         header .back-link {
             color: white;
             text-decoration: none;
@@ -425,7 +534,10 @@ class TurnReportWriter:
         recent_history: Optional[str] = None,
         complete_history: Optional[str] = None,
         current_inventory: Optional[List[str]] = None,
-        big_picture_analysis: Optional[str] = None
+        big_picture_analysis: Optional[str] = None,
+        research_tool_calls: Optional[List[dict]] = None,
+        decision_tool_calls: Optional[List[dict]] = None,
+        all_deaths: Optional[List[dict]] = None
     ):
         """
         Write a detailed HTML report for a single turn.
@@ -449,6 +561,7 @@ class TurnReportWriter:
             complete_history: Complete history summary from tools
             current_inventory: List of items currently in inventory
             big_picture_analysis: Strategic analysis of game state
+            decision_tool_calls: Tool calls made by the decision agent
         """
         # Create session directory
         session_dir = Path(self.logs_base_path) / session_id
@@ -733,6 +846,52 @@ class TurnReportWriter:
 
                 f.write("            </section>\n")
 
+                # Death Log Section
+                f.write("""
+            <section class="section">
+                <h2 class="section-title">Death Log</h2>
+                <div class="death-log-section">
+                    <div class="death-log-title">
+                        <span>💀</span> Deaths This Session
+""")
+                death_count = len(all_deaths) if all_deaths else 0
+                f.write(f'                        <span class="death-count-badge">{death_count} death{"s" if death_count != 1 else ""}</span>\n')
+                f.write("                    </div>\n")
+
+                if all_deaths and len(all_deaths) > 0:
+                    for death in all_deaths:
+                        f.write('                    <div class="death-entry">\n')
+                        f.write('                        <div class="death-header">\n')
+                        f.write(f'                            <span class="death-turn">Turn {death["turn_number"]}</span>\n')
+                        f.write(f'                            <span class="death-location">📍 {self._escape(death["location"] or "Unknown")}</span>\n')
+                        f.write('                        </div>\n')
+
+                        # Cause of death
+                        f.write('                        <div class="death-cause">\n')
+                        f.write('                            <div class="death-cause-label">Cause of Death</div>\n')
+                        f.write(f'                            <div>{self._escape(death["cause_of_death"])}</div>\n')
+                        f.write('                        </div>\n')
+
+                        # Events leading to death
+                        f.write('                        <div class="death-events">\n')
+                        f.write('                            <div class="death-events-label">Events Leading to Death</div>\n')
+                        f.write(f'                            <div>{self._escape(death["events_leading_to_death"])}</div>\n')
+                        f.write('                        </div>\n')
+
+                        # Recommendations
+                        f.write('                        <div class="death-recommendations">\n')
+                        f.write('                            <div class="death-recommendations-label">How to Avoid</div>\n')
+                        f.write(f'                            <div>{self._escape(death["recommendations"])}</div>\n')
+                        f.write('                        </div>\n')
+
+                        f.write('                    </div>\n')
+                else:
+                    f.write('                    <div class="no-deaths">No deaths recorded yet - keep it up!</div>\n')
+
+                f.write("""                </div>
+            </section>
+""")
+
                 # Decision Section
                 f.write("""
             <section class="section">
@@ -745,7 +904,45 @@ class TurnReportWriter:
                         """ + self._escape(player_reasoning) + """
                     </div>
                 </div>
+""")
 
+                # Tool Calls (Research + Decision phases)
+                if research_tool_calls or decision_tool_calls:
+                    f.write("""
+                <h3 class="subsection-title">Tool Calls</h3>
+                <div class="tool-calls">
+""")
+                    # Research phase tool calls
+                    if research_tool_calls:
+                        f.write('                    <div style="margin-bottom: 10px; color: #6b7280; font-weight: bold;">Research Phase:</div>\n')
+                        for tool_call in research_tool_calls:
+                            tool_name = tool_call.get('tool_name', 'Unknown')
+                            tool_input = tool_call.get('input', '')
+                            tool_output = tool_call.get('output', '')
+                            f.write(f"""                    <div class="tool-call">
+                        <span class="tool-name">{self._escape(tool_name)}</span>
+                        {f'<span class="tool-input">({self._escape(tool_input)})</span>' if tool_input else ''}
+                        <div class="tool-output">{self._escape(tool_output[:1000])}{'...' if len(tool_output) > 1000 else ''}</div>
+                    </div>
+""")
+
+                    # Decision phase tool calls
+                    if decision_tool_calls:
+                        f.write('                    <div style="margin-bottom: 10px; margin-top: 15px; color: #6b7280; font-weight: bold;">Decision Phase:</div>\n')
+                        for tool_call in decision_tool_calls:
+                            tool_name = tool_call.get('tool_name', 'Unknown')
+                            tool_input = tool_call.get('input', '')
+                            tool_output = tool_call.get('output', '')
+                            f.write(f"""                    <div class="tool-call">
+                        <span class="tool-name">{self._escape(tool_name)}</span>
+                        {f'<span class="tool-input">({self._escape(tool_input)})</span>' if tool_input else ''}
+                        <div class="tool-output">{self._escape(tool_output[:1000])}{'...' if len(tool_output) > 1000 else ''}</div>
+                    </div>
+""")
+                    f.write("""                </div>
+""")
+
+                f.write("""
                 <h3 class="subsection-title">Decision Prompt</h3>
                 <pre>""" + self._escape(decision_prompt) + """</pre>
             </section>

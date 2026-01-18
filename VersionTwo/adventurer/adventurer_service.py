@@ -107,7 +107,7 @@ class AdventurerService:
         # Chain with structured output (using shared decision_llm)
         return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str]:
+    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str, List, List]:
         """
         Execute the LangGraph decision flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
 
@@ -137,8 +137,10 @@ class AdventurerService:
             "loop_detection_agent": None,  # Will be populated by spawn_agents node (always)
             "interaction_agent": None,  # Will be populated by spawn_agents node (always)
             "research_context": "",
+            "research_tool_calls": [],  # Will be populated by research node
             "decision": None,
             "decision_prompt": "",  # Will be populated by decision node
+            "decision_tool_calls": [],  # Will be populated by decision node
             "issue_closed_response": None,  # Will be populated by close_issues node
             "observer_response": None,  # Will be populated by observe node
             "memory_persisted": False
@@ -159,5 +161,16 @@ class AdventurerService:
         # Log the final decision
         self.logger.log_decision(adventurer_response.command, adventurer_response.reason)
 
-        # Return the decision, issue agents, explorer agent, loop detection agent, interaction agent, closed issues, observer response, and decision prompt for display/reporting
-        return adventurer_response, final_state["issue_agents"], final_state["explorer_agent"], final_state["loop_detection_agent"], final_state["interaction_agent"], issue_closed_response, observer_response, final_state.get("decision_prompt", "")
+        # Return the decision, issue agents, explorer agent, loop detection agent, interaction agent, closed issues, observer response, decision prompt, and tool calls for display/reporting
+        return (
+            adventurer_response,
+            final_state["issue_agents"],
+            final_state["explorer_agent"],
+            final_state["loop_detection_agent"],
+            final_state["interaction_agent"],
+            issue_closed_response,
+            observer_response,
+            final_state.get("decision_prompt", ""),
+            final_state.get("research_tool_calls", []),
+            final_state.get("decision_tool_calls", [])
+        )

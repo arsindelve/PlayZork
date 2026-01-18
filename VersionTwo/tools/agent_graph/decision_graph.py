@@ -38,10 +38,12 @@ class DecisionState(TypedDict):
 
     # Research phase output
     research_context: str
+    research_tool_calls: List[dict]  # Tool calls made by research agent
 
     # Decision phase output
     decision: Optional[AdventurerResponse]
     decision_prompt: str  # Formatted prompt for reporting
+    decision_tool_calls: List[dict]  # Tool calls made by decision agent
 
     # Issue closing phase output
     issue_closed_response: Optional[IssueClosedResponse]
@@ -257,7 +259,8 @@ def create_spawn_agents_node(
                     agent.reason = f"Research failed: {str(e)}"
 
             # Combine all agents (IssueAgents + ExplorerAgent + LoopDetectionAgent + InteractionAgent)
-            all_agents = issue_agents + ([explorer_agent] if explorer_agent else []) + [loop_detection_agent, interaction_agent]
+            # Filter out None agents (e.g., loop_detection_agent is disabled)
+            all_agents = [a for a in issue_agents + [explorer_agent, loop_detection_agent, interaction_agent] if a is not None]
 
             # Run all agents in parallel using threads
             if all_agents:
@@ -342,6 +345,9 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
             operation_name="Research Agent"
         )
 
+        # Track tool calls for HTML report
+        research_tool_calls = []
+
         # Execute tool calls if present
         if hasattr(response, 'tool_calls') and response.tool_calls:
             tool_results = []
@@ -361,8 +367,16 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
 
                 if tool_name in tools_map:
                     tool_result = tools_map[tool_name].invoke(tool_args)
-                    logger.info(f"[ResearchAgent]      Result: {str(tool_result)[:150]}...")
+                    result_str = str(tool_result)
+                    logger.info(f"[ResearchAgent]      Result: {result_str[:150]}...")
                     tool_results.append(f"{tool_name} result: {tool_result}")
+
+                    # Track for HTML report
+                    research_tool_calls.append({
+                        "tool_name": tool_name,
+                        "input": str(tool_args) if tool_args else "",
+                        "output": result_str
+                    })
 
             # Combine tool results into summary
             research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
@@ -378,24 +392,27 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
         logger.info("=" * 80)
 
         state["research_context"] = research_context
+        state["research_tool_calls"] = research_tool_calls
         return state
 
     return research_node
 
 
-def create_decision_node(decision_chain: Runnable):
+def create_decision_node(decision_chain: Runnable, history_toolkit, inventory_toolkit, decision_llm):
     """
-    Create the decision node that generates structured output.
+    Create the decision node that uses tools then generates structured output.
 
     Args:
         decision_chain: The LangChain decision chain with structured output
+        history_toolkit: HistoryToolkit for accessing tools
+        decision_llm: LLM for tool-calling research phase
 
     Returns:
         Node function for the graph
     """
     def decision_node(state: DecisionState) -> DecisionState:
         """
-        Decision phase: Generate AdventurerResponse based on agent proposals.
+        Decision phase: First call tools for context, then generate AdventurerResponse.
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -414,24 +431,85 @@ def create_decision_node(decision_chain: Runnable):
         logger.info(f"[DecisionAgent] LOCATION: {zork_response.LocationName}")
         logger.info(f"[DecisionAgent] SCORE: {zork_response.Score}, MOVES: {zork_response.Moves}")
         logger.info("[DecisionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+        # Step 1: Call tools to gather additional context
+        logger.info("[DecisionAgent] TOOL USE PHASE - Gathering strategic context")
+
+        from tools.analysis import get_analysis_tools
+        from langchain_core.prompts import ChatPromptTemplate
+
+        # Get all available tools for decision agent
+        decision_tools = history_toolkit.get_tools() + get_analysis_tools() + inventory_toolkit.get_tools()
+        tools_map = {tool.name: tool for tool in decision_tools}
+
+        # Create tool-calling prompt
+        tool_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are gathering context before making a decision in a text adventure game.
+
+Available tools:
+- get_strategic_analysis: Get the big picture analysis of where we are in the game
+- get_recent_turns: Get recent turn history
+- get_full_summary: Get complete game summary
+- get_current_inventory: Get list of items we're carrying
+
+Call tools to gather context that will help you make a good decision."""),
+            ("human", "Gather strategic context for decision making at {location}.")
+        ])
+
+        # Bind tools and invoke
+        llm_with_tools = decision_llm.bind_tools(decision_tools)
+        tool_chain = tool_prompt | llm_with_tools
+
+        tool_calls_history = []
+        additional_context = ""
+
+        try:
+            tool_response = tool_chain.invoke({"location": zork_response.LocationName})
+
+            # Execute tool calls
+            if hasattr(tool_response, 'tool_calls') and tool_response.tool_calls:
+                for tool_call in tool_response.tool_calls:
+                    tool_name = tool_call['name']
+                    tool_args = tool_call.get('args', {})
+
+                    logger.info(f"[DecisionAgent] Tool call: {tool_name}({tool_args})")
+
+                    if tool_name in tools_map:
+                        tool_result = tools_map[tool_name].invoke(tool_args)
+                        result_str = str(tool_result)
+                        logger.info(f"[DecisionAgent] Tool result: {result_str[:200]}...")
+
+                        tool_calls_history.append({
+                            "tool_name": tool_name,
+                            "input": str(tool_args) if tool_args else "",
+                            "output": result_str
+                        })
+                        additional_context += f"\n\n{tool_name} result:\n{result_str}"
+        except Exception as e:
+            logger.error(f"[DecisionAgent] Tool calling failed: {e}")
+
+        logger.info(f"[DecisionAgent] Made {len(tool_calls_history)} tool calls")
+        logger.info("=" * 80)
         logger.info("DECISION - Choosing best action from agent proposals")
         logger.info("=" * 80)
         logger.info(f"Location: {zork_response.LocationName}")
         logger.info(f"Score: {zork_response.Score}, Moves: {zork_response.Moves}")
         logger.info(f"Game Response (first 100): {zork_response.Response[:100]}...")
-        logger.info(f"Research Context (first 500):\n{research_context[:500]}...")
 
         # Format agent proposals for Decision Agent
         agent_proposals_text = _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, interaction_agent)
         logger.info(f"Agent Proposals:\n{agent_proposals_text}")
         logger.info("=" * 80)
 
+        # Combine research context with tool results
+        full_research_context = research_context + additional_context
+
         decision_input = {
             "score": zork_response.Score,
             "locationName": zork_response.LocationName,
             "moves": zork_response.Moves,
             "game_response": zork_response.Response,
-            "research_context": research_context,
+            "research_context": full_research_context,
             "agent_proposals": agent_proposals_text
         }
 
@@ -446,7 +524,7 @@ def create_decision_node(decision_chain: Runnable):
             score=zork_response.Score,
             moves=zork_response.Moves,
             game_response=zork_response.Response,
-            research_context=research_context,
+            research_context=full_research_context,
             agent_proposals=agent_proposals_text
         )
 
@@ -466,6 +544,7 @@ def create_decision_node(decision_chain: Runnable):
 
         state["decision"] = decision
         state["decision_prompt"] = full_prompt
+        state["decision_tool_calls"] = tool_calls_history
         return state
 
     return decision_node
@@ -771,7 +850,7 @@ def create_decision_graph(
         history_toolkit
     ))
     graph.add_node("research", create_research_node(research_agent, history_toolkit))
-    graph.add_node("decide", create_decision_node(decision_chain))
+    graph.add_node("decide", create_decision_node(decision_chain, history_toolkit, inventory_toolkit, decision_llm))
     graph.add_node("close_issues", create_close_issues_node(decision_llm, history_toolkit, memory_toolkit))
     graph.add_node("observe", create_observe_node(decision_llm, research_agent, history_toolkit, memory_toolkit))
     graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit, turn_number_ref))

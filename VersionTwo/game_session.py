@@ -130,7 +130,9 @@ class GameSession:
 
             # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)
             # The graph handles: research, decision, issue closing, observation, and memory persistence
-            player_response, issue_agents, explorer_agent, loop_detection_agent, interaction_agent, issue_closed_response, observer_response, decision_prompt = self.adventurer_service.handle_user_input(
+            (player_response, issue_agents, explorer_agent, loop_detection_agent, interaction_agent,
+             issue_closed_response, observer_response, decision_prompt,
+             research_tool_calls, decision_tool_calls) = self.adventurer_service.handle_user_input(
                 zork_response,
                 self.turn_number
             )
@@ -141,13 +143,15 @@ class GameSession:
 
             # Step 4: Update display with the turn
             # Use pending_reasoning from PREVIOUS turn (reasoning for the command that just executed)
+            # Capture it before updating so we can use it in the report later
+            reasoning_for_this_command = self.pending_reasoning
             display.add_turn(
                 location=zork_response.LocationName,
                 game_text=zork_response.Response,
                 command=input_text,  # The command that was just executed
                 score=zork_response.Score,
                 moves=zork_response.Moves,
-                reasoning=self.pending_reasoning,  # Reasoning for THIS command (from previous turn)
+                reasoning=reasoning_for_this_command,  # Reasoning for THIS command (from previous turn)
                 closed_issues=closed_issues,  # Issues that were resolved this turn
                 new_issue=new_issue  # New issue identified this turn
             )
@@ -169,13 +173,30 @@ class GameSession:
             display.update_map_from_transitions(transitions)
 
             # Step 7b: Generate big picture analysis (saved to database for future use)
-            from tools.analysis import BigPictureAnalyzer
+            from tools.analysis import BigPictureAnalyzer, DeathAnalyzer
             big_picture_analyzer = BigPictureAnalyzer(
                 self.history_toolkit,
                 self.session_id,
                 self.db
             )
             big_picture_analysis = big_picture_analyzer.analyze(self.turn_number)
+
+            # Step 7c: Analyze for death (saved to database if death detected)
+            death_analyzer = DeathAnalyzer(
+                self.history_toolkit,
+                self.session_id,
+                self.db
+            )
+            death_analysis = death_analyzer.analyze_turn(
+                turn_number=self.turn_number,
+                game_response=zork_response.Response,
+                player_command=input_text,
+                location=zork_response.LocationName,
+                score=zork_response.Score,
+                moves=zork_response.Moves
+            )
+            # Get all deaths for the report
+            all_deaths = death_analyzer.get_all_deaths()
 
             # Step 8: Write turn report for analysis and debugging
             from tools.reporting import TurnReportWriter
@@ -192,7 +213,7 @@ class GameSession:
                 moves=zork_response.Moves,
                 game_response=zork_response.Response,
                 player_command=input_text,  # The command that was just executed (not the next one)
-                player_reasoning=self.pending_reasoning,  # Reasoning for THIS command (from previous turn)
+                player_reasoning=reasoning_for_this_command,  # Reasoning for THIS command (captured before update)
                 issue_agents=issue_agents,
                 explorer_agent=explorer_agent,
                 loop_detection_agent=loop_detection_agent,
@@ -202,7 +223,10 @@ class GameSession:
                 recent_history=recent_summary,
                 complete_history=long_summary,
                 current_inventory=current_inventory,
-                big_picture_analysis=big_picture_analysis
+                big_picture_analysis=big_picture_analysis,
+                research_tool_calls=research_tool_calls,
+                decision_tool_calls=decision_tool_calls,
+                all_deaths=all_deaths
             )
 
             # Update master session index

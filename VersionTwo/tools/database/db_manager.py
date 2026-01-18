@@ -159,6 +159,25 @@ class DatabaseManager:
                 )
             """)
 
+            # Deaths table - tracks player deaths with analysis
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS deaths (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    turn_number INTEGER NOT NULL,
+                    location TEXT,
+                    score INTEGER DEFAULT 0,
+                    moves INTEGER DEFAULT 0,
+                    cause_of_death TEXT NOT NULL,
+                    events_leading_to_death TEXT NOT NULL,
+                    recommendations TEXT NOT NULL,
+                    game_response TEXT,
+                    player_command TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
+
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_turns_session
@@ -193,6 +212,11 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_strategic_analysis_session
                 ON strategic_analysis(session_id, turn_number DESC)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_deaths_session
+                ON deaths(session_id, turn_number DESC)
             """)
 
     # ===== Session Management =====
@@ -743,3 +767,100 @@ class DatabaseManager:
             )
             row = cursor.fetchone()
             return row[0] if row else None
+
+    # ===== Death Tracking =====
+
+    def add_death(
+        self,
+        session_id: str,
+        turn_number: int,
+        location: str,
+        score: int,
+        moves: int,
+        cause_of_death: str,
+        events_leading_to_death: str,
+        recommendations: str,
+        game_response: str,
+        player_command: str
+    ) -> int:
+        """
+        Record a player death with analysis.
+
+        Args:
+            session_id: Game session ID
+            turn_number: Turn when death occurred
+            location: Location where death occurred
+            score: Score at time of death
+            moves: Move count at time of death
+            cause_of_death: LLM-analyzed cause of death
+            events_leading_to_death: LLM-analyzed events leading to death
+            recommendations: LLM-generated recommendations for avoiding this death
+            game_response: The game's response text containing the death
+            player_command: The command that led to death
+
+        Returns:
+            ID of the inserted death record
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO deaths
+                   (session_id, turn_number, location, score, moves,
+                    cause_of_death, events_leading_to_death, recommendations,
+                    game_response, player_command)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, turn_number, location, score, moves,
+                 cause_of_death, events_leading_to_death, recommendations,
+                 game_response, player_command)
+            )
+            return cursor.lastrowid
+
+    def get_all_deaths(
+        self,
+        session_id: str
+    ) -> List[dict]:
+        """
+        Get all deaths for a session.
+
+        Returns:
+            List of death records as dicts with keys:
+            id, turn_number, location, score, moves, cause_of_death,
+            events_leading_to_death, recommendations, game_response, player_command
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT id, turn_number, location, score, moves,
+                          cause_of_death, events_leading_to_death, recommendations,
+                          game_response, player_command, timestamp
+                   FROM deaths
+                   WHERE session_id = ?
+                   ORDER BY turn_number ASC""",
+                (session_id,)
+            )
+            return [
+                {
+                    "id": row[0],
+                    "turn_number": row[1],
+                    "location": row[2],
+                    "score": row[3],
+                    "moves": row[4],
+                    "cause_of_death": row[5],
+                    "events_leading_to_death": row[6],
+                    "recommendations": row[7],
+                    "game_response": row[8],
+                    "player_command": row[9],
+                    "timestamp": row[10]
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def get_death_count(self, session_id: str) -> int:
+        """Get the number of deaths in a session."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM deaths WHERE session_id = ?",
+                (session_id,)
+            )
+            return cursor.fetchone()[0]

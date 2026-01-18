@@ -95,53 +95,33 @@ class BigPictureAnalyzer:
         """Build the analysis prompt for the LLM."""
         system_prompt = """
         
-        You are the “orientation + intent” layer for an interactive fiction playthrough.
+  You are pausing play in an interactive fiction game to take stock, like a thoughtful human player would.
 
-Your job is to answer, clearly and decisively:
+Write 2–3 short paragraphs answering:
 “What the hell is going on here, and what are we going to do about it?”
 
-This is NOT a summary, NOT a walkthrough, and NOT speculative analysis.
+Write as if you are talking to yourself, not explaining a system.
 
-You must do three things, in this order:
+Do:
+- State plainly what kind of situation this is
+- Say what actually matters right now, and what clearly does not
+- Explain what must change before progress will count
+- Reorient how we should be thinking about the game at this moment
 
-1) DECLARE WHAT THIS PHASE OF THE GAME IS
-   - Make at least one strong, explicit judgment about the game’s intent.
-   - Examples (do not copy verbatim): “This section is a gate,” “This is a denial phase,”
-     “Normal play is intentionally invalid right now,” “We are missing permission to proceed.”
-   - Do not hedge. Take a stand.
+If the game is undoing, ignoring, or nullifying progress (resets, confinement, stonewalling, repeated failure),
+treat that as intentional: the game is refusing to advance until a prerequisite is met.
+Explain that refusal in plain terms.
 
-2) IDENTIFY THE DOMINANT CONSTRAINT
-   - Explain what is currently preventing progress from sticking.
-   - If progress is being undone, ignored, reset, or nullified, treat that as intentional enforcement,
-     not a loop or trial-and-error gameplay.
-   - Rank constraints: clearly state what matters most and what does NOT matter right now.
+Do NOT:
+- Number sections or mirror the prompt’s structure
+- Name abstractions like “phase,” “gate,” “constraint,” “global state,” or “loop”
+- Restate the puzzle in different words
+- Suggest specific actions or commands
+- Describe rooms, exits, or turn history
+- Write academically or mechanically
 
-3) REFRAME HOW WE SHOULD THINK
-   - Answer “what are we going to do about it?” at the level of mindset and intent,
-     not actions.
-   - Explain what kind of condition must change for progress to become possible.
-   - Explicitly state what kinds of activity are currently wasted effort.
-
-CRITICAL RULE:
-If the game repeatedly nullifies progress (by resetting state, undoing outcomes,
-confining the player, stonewalling responses, or otherwise forcing the same situation),
-treat this as enforced progression denial.
-This means the game is saying: “You are not allowed to proceed yet.”
-Analyze the prerequisite being enforced — not the surface mechanics.
-
-DO NOT:
-- Retell events or describe rooms
-- Suggest specific commands, actions, or step-by-step tactics
-- Talk about “loops,” “flags,” or internal variables
-- Hedge, speculate vaguely, or restate the puzzle in different words
-- Use literary, philosophical, or atmospheric language
-
-Assume the reader already knows what happened.
-Your value is interpretation, prioritization, and reorientation.
-
-Write 2–3 short paragraphs.
-        
-        
+Assume the reader knows what happened.
+Your job is to make sense of it and reset expectations.
         
         """
 

@@ -12,7 +12,7 @@ GAME_OBJECTIVE = "Reach a score of 80 points"
 GAME_OBJECTIVE_SCORE = 80  # Numeric value for scoring logic
 
 # Session ID for tracking game sessions
-SESSION_ID = "P-V5"
+SESSION_ID = "E1"
 
 # ═══════════════════════════════════════════════════════════
 # GAME BACKEND CONFIGURATION
@@ -31,11 +31,18 @@ GAME_BACKENDS = {
         "name": "Planetfall",
         "objective": "Complete the mission",
         "target_score": 80
+    },
+    "escaperoom": {
+        "base_url": "http://localhost:5000",
+        "endpoint": "/EscapeRoom",
+        "name": "Escape Room",
+        "objective": "Escape the room",
+        "target_score": 100
     }
 }
 
 # Active game backend - change this to switch games
-ACTIVE_GAME = "planetfall"  # Options: "zork" or "planetfall"
+ACTIVE_GAME = "escaperoom"  # Options: "zork", "planetfall", or "escaperoom"
 
 # Helper function to get the current game config
 def get_game_config():

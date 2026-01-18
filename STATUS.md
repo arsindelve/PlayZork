@@ -389,3 +389,422 @@ TURN FLOW:
 4. Verify session resumption works correctly across runs
 5. Verify display shows reasoning for all decisions
 6. Verify ExplorerAgent stops spawning when all directions explored from a location
+
+---
+
+# Development Log: 2025-01-18
+
+## Major New Feature: Death Analyzer Tool
+
+### Overview
+
+Implemented a comprehensive death tracking and analysis system that uses LLMs to detect player deaths, analyze their causes, and generate recommendations for avoiding similar deaths in future playthroughs. This creates a persistent "lessons learned" database that accumulates wisdom across the session.
+
+### Problem Statement
+
+When the player dies in a text adventure game:
+1. The game resets to a previous state (often losing progress)
+2. The same death can happen repeatedly if the system doesn't learn from it
+3. There was no mechanism to remember WHY deaths occurred or HOW to avoid them
+4. Deaths were silent events with no analysis or tracking
+
+### Solution: DeathAnalyzer
+
+A new tool that runs after every turn and:
+1. **Detects death** using LLM analysis of the game response
+2. **Analyzes cause** with context from recent game history
+3. **Generates recommendations** for avoiding this death in the future
+4. **Persists to database** for permanent memory
+5. **Displays in HTML reports** so all deaths are visible with their lessons
+
+### Implementation Details
+
+#### 1. Database Schema Addition (`tools/database/db_manager.py`)
+
+**New Table: `deaths`**
+```sql
+CREATE TABLE IF NOT EXISTS deaths (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    turn_number INTEGER NOT NULL,
+    location TEXT,
+    score INTEGER DEFAULT 0,
+    moves INTEGER DEFAULT 0,
+    cause_of_death TEXT NOT NULL,
+    events_leading_to_death TEXT NOT NULL,
+    recommendations TEXT NOT NULL,
+    game_response TEXT,
+    player_command TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+)
+```
+
+**New Index:**
+```sql
+CREATE INDEX IF NOT EXISTS idx_deaths_session
+ON deaths(session_id, turn_number DESC)
+```
+
+**New Methods:**
+- `add_death()` - Record a death with full analysis
+- `get_all_deaths()` - Retrieve all deaths for a session as list of dicts
+- `get_death_count()` - Get total number of deaths in session
+
+#### 2. DeathAnalyzer Class (`tools/analysis/death_analyzer.py`)
+
+**New File Created** with two classes:
+
+**DeathAnalysis (Pydantic Model)**
+```python
+class DeathAnalysis(BaseModel):
+    died: bool = Field(description="Whether the player died this turn")
+    cause_of_death: str = Field(default="", description="What killed the player")
+    events_leading_to_death: str = Field(default="", description="The sequence of events that led to death")
+    recommendations: str = Field(default="", description="How to avoid this death in the future")
+```
+
+**DeathAnalyzer Class**
+
+Core method: `analyze_turn()`
+```python
+def analyze_turn(
+    self,
+    turn_number: int,
+    game_response: str,
+    player_command: str,
+    location: str,
+    score: int,
+    moves: int
+) -> Optional[DeathAnalysis]:
+```
+
+**Two-Phase LLM Analysis:**
+
+1. **Quick Detection Phase** (`_analyze_for_death`)
+   - Uses cheap LLM with structured output
+   - Checks for death indicators in game response:
+     - "You have died"
+     - "You are dead"
+     - "Your adventure is over"
+     - "You have been killed/slain"
+     - Score resetting with death message
+   - Returns immediately if no death detected (saves LLM calls)
+
+2. **Full Analysis Phase** (`_analyze_death_with_context`)
+   - Only runs if death detected
+   - Gathers last 10 turns of history for context
+   - Uses LLM to analyze:
+     - **Cause**: What specifically killed the player
+     - **Events**: The sequence of decisions that led here
+     - **Recommendations**: Actionable advice for avoidance
+   - Persists to database automatically
+
+**LLM Prompts:**
+
+Detection prompt focuses on identifying death markers:
+```
+Look for death indicators such as:
+- "You have died"
+- "You are dead"
+- Score resetting to 0 with death message
+- Game over messages
+- Being eaten, drowned, crushed, etc.
+```
+
+Analysis prompt focuses on lessons learned:
+```
+Your job is to:
+1. Identify the CAUSE of death - what specifically killed the player
+2. Trace the EVENTS leading to death - what decisions or circumstances led to this outcome
+3. Provide RECOMMENDATIONS - specific, actionable advice for avoiding this death in future playthroughs
+```
+
+#### 3. Integration into Game Loop (`game_session.py`)
+
+**New Step 7c** added after big picture analysis:
+```python
+# Step 7c: Analyze for death (saved to database if death detected)
+death_analyzer = DeathAnalyzer(
+    self.history_toolkit,
+    self.session_id,
+    self.db
+)
+death_analysis = death_analyzer.analyze_turn(
+    turn_number=self.turn_number,
+    game_response=zork_response.Response,
+    player_command=input_text,
+    location=zork_response.LocationName,
+    score=zork_response.Score,
+    moves=zork_response.Moves
+)
+# Get all deaths for the report
+all_deaths = death_analyzer.get_all_deaths()
+```
+
+**Report Writer Call Updated:**
+```python
+report_writer.write_turn_report(
+    ...
+    all_deaths=all_deaths  # New parameter
+)
+```
+
+#### 4. HTML Report Display (`tools/reporting/turn_report_writer.py`)
+
+**New CSS Styles:**
+- `.death-log-section` - Red gradient background with skull emoji
+- `.death-count-badge` - Shows total death count
+- `.death-entry` - Individual death card with red left border
+- `.death-header` - Turn number and location
+- `.death-cause` - Red background for cause of death
+- `.death-events` - Events leading to death
+- `.death-recommendations` - Green background for avoidance tips
+- `.no-deaths` - Celebratory message if no deaths yet
+
+**New HTML Section** (after Agent Analysis, before Decision Agent):
+```html
+<section class="section">
+    <h2 class="section-title">Death Log</h2>
+    <div class="death-log-section">
+        <div class="death-log-title">
+            <span>💀</span> Deaths This Session
+            <span class="death-count-badge">N deaths</span>
+        </div>
+        <!-- For each death: -->
+        <div class="death-entry">
+            <div class="death-header">
+                <span class="death-turn">Turn N</span>
+                <span class="death-location">📍 Location</span>
+            </div>
+            <div class="death-cause">
+                <div class="death-cause-label">Cause of Death</div>
+                <div>Eaten by a grue</div>
+            </div>
+            <div class="death-events">
+                <div class="death-events-label">Events Leading to Death</div>
+                <div>Entered dark area without lamp...</div>
+            </div>
+            <div class="death-recommendations">
+                <div class="death-recommendations-label">How to Avoid</div>
+                <div>Always carry a light source when...</div>
+            </div>
+        </div>
+    </div>
+</section>
+```
+
+#### 5. Module Exports (`tools/analysis/__init__.py`)
+
+Updated to export new classes:
+```python
+from .death_analyzer import DeathAnalyzer, DeathAnalysis
+
+__all__ = [
+    'BigPictureAnalyzer',
+    'DeathAnalyzer',
+    'DeathAnalysis',
+    ...
+]
+```
+
+### Files Created
+
+1. `tools/analysis/death_analyzer.py` - DeathAnalyzer class and DeathAnalysis model
+
+### Files Modified
+
+1. `tools/database/db_manager.py` - Added deaths table, index, and methods
+2. `tools/analysis/__init__.py` - Added exports for DeathAnalyzer
+3. `game_session.py` - Integrated death analyzer into turn loop
+4. `tools/reporting/turn_report_writer.py` - Added CSS and HTML for death log section
+
+---
+
+## Bug Fix: None Agents in Parallel Execution
+
+### Problem
+
+When running the game, an exception was thrown:
+```
+AttributeError: 'NoneType' object has no attribute 'issue_content'
+```
+
+The error occurred in `decision_graph.py` line 239 when trying to process agents in parallel.
+
+### Root Cause
+
+The `loop_detection_agent` was explicitly disabled (set to `None` on line 172):
+```python
+loop_detection_agent = None  # DISABLED - not useful in practice
+```
+
+But it was being added to the agent list unconditionally:
+```python
+all_agents = issue_agents + ([explorer_agent] if explorer_agent else []) + [loop_detection_agent, interaction_agent]
+```
+
+This caused `None` to be in the list, which then failed when the parallel execution tried to access `agent.issue_content`.
+
+### Fix
+
+Changed the agent list construction to filter out None values:
+```python
+# Old (broken):
+all_agents = issue_agents + ([explorer_agent] if explorer_agent else []) + [loop_detection_agent, interaction_agent]
+
+# New (fixed):
+all_agents = [a for a in issue_agents + [explorer_agent, loop_detection_agent, interaction_agent] if a is not None]
+```
+
+### File Modified
+
+- `tools/agent_graph/decision_graph.py` (line 262-263)
+
+---
+
+## Bug Fix: Wrong Reasoning Displayed in HTML Reports
+
+### Problem
+
+The HTML turn report was showing mismatched command/reasoning pairs:
+- **Command shown**: "look"
+- **Reasoning shown**: "Chose InteractionAgent proposing OPEN BULKHEAD..."
+
+The system was executing the correct command, but the report displayed the reasoning for the NEXT command instead of the current one.
+
+### Root Cause
+
+In `game_session.py`, the reasoning was being captured AFTER it was updated:
+
+```python
+# Step 4: Display uses self.pending_reasoning (CORRECT - old value)
+display.add_turn(..., reasoning=self.pending_reasoning, ...)
+
+# Then we UPDATE pending_reasoning to new value
+self.pending_reasoning = player_response.reason
+
+# ... later ...
+
+# Step 8: Report uses self.pending_reasoning (WRONG - now has new value!)
+report_writer.write_turn_report(..., player_reasoning=self.pending_reasoning, ...)
+```
+
+The display got the correct (old) reasoning, but the report writer got the wrong (new) reasoning because it was called after the update.
+
+### Fix
+
+Captured the reasoning before updating it:
+```python
+# Capture reasoning BEFORE updating so we can use it in the report later
+reasoning_for_this_command = self.pending_reasoning
+
+display.add_turn(..., reasoning=reasoning_for_this_command, ...)
+
+self.pending_reasoning = player_response.reason  # Update for next turn
+
+# ... later ...
+
+# Report now uses the captured value
+report_writer.write_turn_report(..., player_reasoning=reasoning_for_this_command, ...)
+```
+
+### File Modified
+
+- `game_session.py` (lines 146-147, 216)
+
+---
+
+## New Game Backend: Escape Room
+
+### Addition
+
+Added a new game backend configuration for local testing:
+
+```python
+"escaperoom": {
+    "base_url": "http://localhost:5000",
+    "endpoint": "/EscapeRoom",
+    "name": "Escape Room",
+    "objective": "Escape the room",
+    "target_score": 100
+}
+```
+
+### Configuration
+
+Set as active game:
+```python
+ACTIVE_GAME = "escaperoom"  # Options: "zork", "planetfall", or "escaperoom"
+```
+
+Session ID updated to "E1" for the new game.
+
+### File Modified
+
+- `config.py` (lines 35-41, 45)
+
+---
+
+## Summary of All Changes Today
+
+### New Features
+1. **Death Analyzer Tool** - LLM-powered death detection, analysis, and recommendation system
+2. **Death Log in HTML Reports** - Visual display of all deaths with causes and avoidance tips
+3. **Escape Room Game Backend** - New localhost game for testing
+
+### Bug Fixes
+1. **None Agent Crash** - Fixed parallel execution crashing on disabled agents
+2. **Wrong Reasoning Display** - Fixed HTML reports showing next turn's reasoning instead of current
+
+### Files Created
+- `tools/analysis/death_analyzer.py`
+
+### Files Modified
+- `tools/database/db_manager.py`
+- `tools/analysis/__init__.py`
+- `game_session.py`
+- `tools/reporting/turn_report_writer.py`
+- `tools/agent_graph/decision_graph.py`
+- `config.py`
+
+---
+
+## Architecture After Today's Changes
+
+```
+TURN FLOW (Updated):
+
+1. GameSession increments turn_number
+2. ZorkService sends command, receives response
+3. HistoryToolkit updates (adds turn, generates summaries)
+4. MapperToolkit updates (records movement or blocked)
+5. LangGraph Decision Flow (spawn → research → decide → persist)
+6. DisplayManager updates all panels
+7. BigPictureAnalyzer generates strategic analysis
+8. **NEW: DeathAnalyzer checks for death**
+   - If death detected:
+     a. LLM analyzes cause with recent history context
+     b. LLM generates avoidance recommendations
+     c. Death record persisted to database
+   - All deaths retrieved for report
+9. TurnReportWriter generates HTML with:
+   - Game state, context, strategic overview
+   - Agent analysis
+   - **NEW: Death log section showing all session deaths**
+   - Decision agent reasoning and tool calls
+10. Session index updated
+11. Return chosen command, loop continues
+```
+
+## Testing Needed for New Features
+
+1. **Death Detection** - Verify LLM correctly identifies death markers in various game responses
+2. **Death Analysis Quality** - Verify LLM provides useful cause/events/recommendations
+3. **Database Persistence** - Verify deaths survive session restarts
+4. **HTML Display** - Verify death log renders correctly with styling
+5. **Performance** - Verify death analysis doesn't add significant latency (cheap LLM should be fast)
+6. **Edge Cases** - Test with:
+   - Multiple deaths in same session
+   - Deaths at different locations
+   - Deaths from different causes (combat, environment, puzzles)
