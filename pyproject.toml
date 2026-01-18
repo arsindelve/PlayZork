@@ -14,3 +14,8 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "rich>=14.2.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

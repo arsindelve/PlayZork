@@ -146,6 +146,19 @@ class DatabaseManager:
                 )
             """)
 
+            # Strategic analysis table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS strategic_analysis (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    turn_number INTEGER NOT NULL,
+                    analysis TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id),
+                    UNIQUE(session_id, turn_number)
+                )
+            """)
+
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_turns_session
@@ -175,6 +188,11 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_map_transitions_session
                 ON map_transitions(session_id, from_location)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_strategic_analysis_session
+                ON strategic_analysis(session_id, turn_number DESC)
             """)
 
     # ===== Session Management =====
@@ -668,3 +686,60 @@ class DatabaseManager:
                    WHERE session_id = ? AND dropped_turn IS NULL""",
                 (turn_number, session_id)
             )
+
+    # ===== Strategic Analysis =====
+
+    def save_strategic_analysis(
+        self,
+        session_id: str,
+        turn_number: int,
+        analysis: str
+    ) -> None:
+        """Save strategic analysis for a turn."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT OR REPLACE INTO strategic_analysis
+                   (session_id, turn_number, analysis)
+                   VALUES (?, ?, ?)""",
+                (session_id, turn_number, analysis)
+            )
+
+    def get_latest_strategic_analysis(self, session_id: str) -> Optional[Tuple[int, str]]:
+        """
+        Get the most recent strategic analysis.
+
+        Returns:
+            (turn_number, analysis) or None
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT turn_number, analysis
+                   FROM strategic_analysis
+                   WHERE session_id = ?
+                   ORDER BY turn_number DESC
+                   LIMIT 1""",
+                (session_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return (row[0], row[1])
+            return None
+
+    def get_strategic_analysis_for_turn(
+        self,
+        session_id: str,
+        turn_number: int
+    ) -> Optional[str]:
+        """Get strategic analysis for a specific turn."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT analysis
+                   FROM strategic_analysis
+                   WHERE session_id = ? AND turn_number = ?""",
+                (session_id, turn_number)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None

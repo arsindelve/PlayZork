@@ -88,6 +88,39 @@ def get_exits_from_location(location: str) -> str:
     return result.strip()
 
 
+@tool
+def find_path_between_locations(from_location: str, to_location: str) -> str:
+    """Find the shortest path between two known locations you've already discovered.
+
+    This is CRITICAL for:
+    - Navigating back to locations with important items or objectives
+    - Planning efficient routes to reach specific destinations
+    - Avoiding getting lost when you know where you need to go
+
+    IMPORTANT: Both locations must have been visited before. This only works
+    for places you've already been. For unexplored areas, use exploration instead.
+
+    Args:
+        from_location: Starting location name (exact name from map, e.g., "West Of House")
+        to_location: Destination location name (exact name from map, e.g., "Kitchen")
+
+    Returns:
+        Step-by-step directions as comma-separated list (e.g., "NORTH, EAST, SOUTH")
+        or "cannot determine how to get there" if locations are unreachable or unknown
+
+    Examples:
+        find_path_between_locations("West Of House", "Kitchen")
+        -> "EAST, NORTH"
+
+        find_path_between_locations("Kitchen", "Unknown Place")
+        -> "cannot determine how to get there"
+    """
+    if _mapper_state is None:
+        return "Error: Mapper tools not initialized."
+
+    return _mapper_state.pathfinder.get_path_string(from_location, to_location)
+
+
 def get_mapper_tools():
     """
     Get the list of all mapper tools for use with LangChain agents
@@ -95,4 +128,4 @@ def get_mapper_tools():
     Returns:
         List of tool functions decorated with @tool
     """
-    return [get_map, get_exits_from_location]
+    return [get_map, get_exits_from_location, find_path_between_locations]

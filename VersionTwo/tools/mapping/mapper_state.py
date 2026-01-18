@@ -1,7 +1,10 @@
 """MapperState - Tracks location transitions and builds a map"""
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING
 from pydantic import BaseModel
 from tools.database import DatabaseManager
+
+if TYPE_CHECKING:
+    from .pathfinder import PathFinder
 
 
 class LocationTransition(BaseModel):
@@ -29,6 +32,20 @@ class MapperState:
         self.session_id = session_id
         self.db = db
         self.previous_location: Optional[str] = None
+        self._pathfinder: Optional['PathFinder'] = None
+
+    @property
+    def pathfinder(self) -> 'PathFinder':
+        """
+        Get pathfinder instance (lazy initialization).
+
+        Returns:
+            PathFinder instance for this mapper state
+        """
+        if self._pathfinder is None:
+            from .pathfinder import PathFinder
+            self._pathfinder = PathFinder(self)
+        return self._pathfinder
 
     def record_movement(
         self,

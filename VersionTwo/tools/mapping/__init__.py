@@ -1,9 +1,10 @@
 """MapperToolkit - Facade for the mapping system"""
-from typing import List
+from typing import List, Optional
 from tools.database import DatabaseManager
 
 from .mapper_state import MapperState, LocationTransition
 from .mapper_tools import initialize_mapper_tools, get_mapper_tools
+from .pathfinder import PathFinder
 
 
 class MapperToolkit:
@@ -61,6 +62,40 @@ class MapperToolkit:
         """
         return get_mapper_tools()
 
+    def find_path(
+        self,
+        from_location: str,
+        to_location: str
+    ) -> Optional[List[str]]:
+        """
+        Find shortest path between two locations (Python API).
+
+        Args:
+            from_location: Starting location name
+            to_location: Destination location name
+
+        Returns:
+            List of directions or None if no path exists
+        """
+        return self.state.pathfinder.find_path(from_location, to_location)
+
+    def get_path_string(
+        self,
+        from_location: str,
+        to_location: str
+    ) -> str:
+        """
+        Find path and return as formatted string (Python API).
+
+        Args:
+            from_location: Starting location name
+            to_location: Destination location name
+
+        Returns:
+            Comma-separated directions or error message
+        """
+        return self.state.pathfinder.get_path_string(from_location, to_location)
+
 
 # Export public API
-__all__ = ['MapperToolkit', 'MapperState', 'LocationTransition']
+__all__ = ['MapperToolkit', 'MapperState', 'LocationTransition', 'PathFinder']

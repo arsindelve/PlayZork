@@ -47,6 +47,11 @@ class GameSession:
         self.inventory_toolkit = InventoryToolkit(session_id, self.db)
         self.logger.logger.info("Inventory toolkit initialized")
 
+        # Initialize analysis tools so agents can access big picture analysis
+        from tools.analysis import initialize_analysis_tools
+        initialize_analysis_tools(session_id, self.db)
+        self.logger.logger.info("Analysis tools initialized")
+
         # Pass toolkits to adventurer service
         self.adventurer_service = AdventurerService(
             self.history_toolkit,
@@ -163,6 +168,15 @@ class GameSession:
             transitions = self.mapper_toolkit.state.get_all_transitions()
             display.update_map_from_transitions(transitions)
 
+            # Step 7b: Generate big picture analysis (saved to database for future use)
+            from tools.analysis import BigPictureAnalyzer
+            big_picture_analyzer = BigPictureAnalyzer(
+                self.history_toolkit,
+                self.session_id,
+                self.db
+            )
+            big_picture_analysis = big_picture_analyzer.analyze(self.turn_number)
+
             # Step 8: Write turn report for analysis and debugging
             from tools.reporting import TurnReportWriter
             report_writer = TurnReportWriter()
@@ -177,8 +191,8 @@ class GameSession:
                 score=zork_response.Score,
                 moves=zork_response.Moves,
                 game_response=zork_response.Response,
-                player_command=player_response.command,
-                player_reasoning=player_response.reason,
+                player_command=input_text,  # The command that was just executed (not the next one)
+                player_reasoning=self.pending_reasoning,  # Reasoning for THIS command (from previous turn)
                 issue_agents=issue_agents,
                 explorer_agent=explorer_agent,
                 loop_detection_agent=loop_detection_agent,
@@ -187,7 +201,8 @@ class GameSession:
                 decision=player_response,
                 recent_history=recent_summary,
                 complete_history=long_summary,
-                current_inventory=current_inventory
+                current_inventory=current_inventory,
+                big_picture_analysis=big_picture_analysis
             )
 
             # Update master session index
@@ -197,7 +212,7 @@ class GameSession:
                 location=zork_response.LocationName,
                 score=zork_response.Score,
                 moves=zork_response.Moves,
-                player_command=player_response.command,
+                player_command=input_text,  # The command that was just executed (not the next one)
                 game_response=zork_response.Response
             )
 

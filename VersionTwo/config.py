@@ -12,7 +12,7 @@ GAME_OBJECTIVE = "Reach a score of 80 points"
 GAME_OBJECTIVE_SCORE = 80  # Numeric value for scoring logic
 
 # Session ID for tracking game sessions
-SESSION_ID = "P-V1"
+SESSION_ID = "P-V5"
 
 # ═══════════════════════════════════════════════════════════
 # GAME BACKEND CONFIGURATION
@@ -47,7 +47,7 @@ def get_game_config():
 # ═══════════════════════════════════════════════════════════
 # CHANGE THIS ONE LINE TO SWITCH PROVIDERS
 # ═══════════════════════════════════════════════════════════
-LLM_PROVIDER = "ollama"  # Options: "openai" or "ollama"
+LLM_PROVIDER = "openai"  # Options: "openai" or "ollama"
 
 # ═══════════════════════════════════════════════════════════
 # TIMEOUT AND RETRY CONFIGURATION

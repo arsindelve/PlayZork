@@ -178,13 +178,17 @@ def create_spawn_agents_node(
             num_special_agents = (1 if explorer_agent else 0) + 1  # +1 for Interaction (Loop disabled)
             logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {num_special_agents} special agents...")
 
-            # Get tools (include inventory for agents to query)
+            # Get tools (include inventory and analysis for agents to query)
             history_tools = history_toolkit.get_tools()
             mapper_tools = mapper_toolkit.get_tools()
             inventory_tools = inventory_toolkit.get_tools()
 
+            # Get analysis tools (big picture strategic analysis)
+            from tools.analysis import get_analysis_tools
+            analysis_tools = get_analysis_tools()
+
             # Combine all tools for IssueAgents (they use combined tools)
-            all_tools = history_tools + mapper_tools + inventory_tools
+            all_tools = history_tools + mapper_tools + inventory_tools + analysis_tools
 
             # Execute all agent research in parallel using threads
             def research_agent_sync(agent):
@@ -341,7 +345,10 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
         # Execute tool calls if present
         if hasattr(response, 'tool_calls') and response.tool_calls:
             tool_results = []
-            tools_map = {tool.name: tool for tool in history_toolkit.get_tools()}
+            # Include analysis tools alongside history tools
+            from tools.analysis import get_analysis_tools
+            all_research_tools = history_toolkit.get_tools() + get_analysis_tools()
+            tools_map = {tool.name: tool for tool in all_research_tools}
 
             logger.info(f"[ResearchAgent] Made {len(response.tool_calls)} tool calls:")
 

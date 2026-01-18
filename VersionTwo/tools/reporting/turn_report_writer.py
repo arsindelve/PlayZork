@@ -331,6 +331,36 @@ class TurnReportWriter:
             font-style: italic;
         }
 
+        .big-picture-section {
+            background: linear-gradient(135deg, #e0f7fa 0%, #e8f5e9 100%);
+            border: 2px solid #00acc1;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .big-picture-title {
+            font-size: 1.3em;
+            color: #00838f;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .big-picture-content {
+            background: white;
+            padding: 20px;
+            border-radius: 6px;
+            border-left: 4px solid #00acc1;
+            line-height: 1.8;
+            white-space: pre-wrap;
+        }
+
+        .big-picture-content strong {
+            color: #00695c;
+        }
+
         .confidence-bar {
             height: 8px;
             background: #e5e7eb;
@@ -394,7 +424,8 @@ class TurnReportWriter:
         decision,
         recent_history: Optional[str] = None,
         complete_history: Optional[str] = None,
-        current_inventory: Optional[List[str]] = None
+        current_inventory: Optional[List[str]] = None,
+        big_picture_analysis: Optional[str] = None
     ):
         """
         Write a detailed HTML report for a single turn.
@@ -417,6 +448,7 @@ class TurnReportWriter:
             recent_history: Recent history summary from tools
             complete_history: Complete history summary from tools
             current_inventory: List of items currently in inventory
+            big_picture_analysis: Strategic analysis of game state
         """
         # Create session directory
         session_dir = Path(self.logs_base_path) / session_id
@@ -520,6 +552,25 @@ class TurnReportWriter:
                     f.write('                <p class="empty-state">Inventory is empty</p>\n')
 
                 f.write("            </section>\n")
+
+                # Big Picture Analysis Section
+                f.write("""
+            <section class="section">
+                <h2 class="section-title">Strategic Overview</h2>
+                <div class="big-picture-section">
+                    <div class="big-picture-title">
+                        <span>🔍</span> Big Picture Analysis
+                    </div>
+                    <div class="big-picture-content">
+""")
+                if big_picture_analysis:
+                    f.write(f"                        {self._escape(big_picture_analysis)}\n")
+                else:
+                    f.write('                        <p class="empty-state">No strategic analysis available</p>\n')
+                f.write("""                    </div>
+                </div>
+            </section>
+""")
 
                 # Agent Analysis Section
                 f.write("""
@@ -804,8 +855,7 @@ class TurnReportWriter:
         }}
 
         .container {{
-            max-width: 1400px;
-            margin: 0 auto;
+            width: 100%;
             background: white;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             border-radius: 8px;
@@ -972,7 +1022,73 @@ class TurnReportWriter:
             color: #9ca3af;
             font-style: italic;
         }}
+
+        .refresh-indicator {{
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(102, 126, 234, 0.9);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            opacity: 0.7;
+            transition: opacity 0.3s;
+        }}
+
+        .refresh-indicator:hover {{
+            opacity: 1;
+        }}
     </style>
+    <script>
+        (function() {{
+            const REFRESH_INTERVAL = 3000; // 3 seconds
+            const BOTTOM_THRESHOLD = 150;  // pixels from bottom to consider "at bottom"
+            const STORAGE_KEY = 'zork_index_was_at_bottom';
+
+            // Check if user was at bottom before last refresh
+            function wasAtBottom() {{
+                return sessionStorage.getItem(STORAGE_KEY) === 'true';
+            }}
+
+            // Check if currently near bottom
+            function isNearBottom() {{
+                const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+                const windowHeight = window.innerHeight;
+                const documentHeight = document.documentElement.scrollHeight;
+                return (documentHeight - scrollTop - windowHeight) < BOTTOM_THRESHOLD;
+            }}
+
+            // Scroll to bottom of page
+            function scrollToBottom() {{
+                window.scrollTo({{
+                    top: document.documentElement.scrollHeight,
+                    behavior: 'instant'
+                }});
+            }}
+
+            // On page load: scroll to bottom if we were there before refresh
+            document.addEventListener('DOMContentLoaded', function() {{
+                if (wasAtBottom()) {{
+                    scrollToBottom();
+                }}
+                // Default to "at bottom" for first visit
+                if (sessionStorage.getItem(STORAGE_KEY) === null) {{
+                    scrollToBottom();
+                    sessionStorage.setItem(STORAGE_KEY, 'true');
+                }}
+            }});
+
+            // Before refresh: save scroll position state
+            function refreshPage() {{
+                sessionStorage.setItem(STORAGE_KEY, isNearBottom() ? 'true' : 'false');
+                location.reload();
+            }}
+
+            // Set up auto-refresh
+            setTimeout(refreshPage, REFRESH_INTERVAL);
+        }})();
+    </script>
 </head>
 <body>
     <div class="container">
@@ -1034,6 +1150,9 @@ class TurnReportWriter:
         """Generate the footer for the session index file"""
         return """
         </div>
+    </div>
+    <div class="refresh-indicator" title="Page auto-refreshes every 3 seconds">
+        &#x27F3; Live
     </div>
 </body>
 </html>
