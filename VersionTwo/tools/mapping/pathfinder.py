@@ -174,3 +174,26 @@ class PathFinder:
 
         abbreviated = [abbrev_map.get(d, d) for d in path]
         return ", ".join(abbreviated)
+
+    def get_next_step(
+        self,
+        from_location: str,
+        to_location: str
+    ) -> Optional[str]:
+        """
+        Get just the first direction to take toward a destination.
+
+        Args:
+            from_location: Starting location name
+            to_location: Destination location name
+
+        Returns:
+            First direction string (e.g., "NORTH") if path exists,
+            None if no path exists or already at destination
+        """
+        path = self.find_path(from_location, to_location)
+
+        if path is None or len(path) == 0:
+            return None
+
+        return path[0]

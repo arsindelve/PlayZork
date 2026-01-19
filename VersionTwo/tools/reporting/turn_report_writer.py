@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import List, Optional
 import logging
 import html
+import json
 
 
 class TurnReportWriter:
@@ -507,6 +508,67 @@ class TurnReportWriter:
         header .back-link .arrow {
             font-size: 1.2em;
         }
+
+        /* Map Visualization Styles */
+        .map-section {
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            border: 2px solid #0284c7;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .map-title {
+            font-size: 1.3em;
+            color: #0369a1;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .map-container {
+            background: white;
+            border-radius: 6px;
+            height: 500px;
+            position: relative;
+        }
+
+        .map-legend {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px 15px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            margin-top: 10px;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.current {
+            background: #10b981;
+            box-shadow: 0 0 8px #10b981;
+        }
+
+        .legend-dot.visited {
+            background: #667eea;
+        }
+
+        .legend-dot.blocked {
+            background: #ef4444;
+        }
         """
 
     def _escape(self, text: str) -> str:
@@ -514,6 +576,145 @@ class TurnReportWriter:
         if text is None:
             return ""
         return html.escape(str(text))
+
+    def _generate_map_html(self, transitions: List, current_location: str) -> str:
+        """
+        Generate interactive map visualization using vis.js.
+
+        Args:
+            transitions: List of LocationTransition objects
+            current_location: Current player location (highlighted)
+
+        Returns:
+            HTML string containing the map visualization
+        """
+        if not transitions:
+            return """
+            <section class="section">
+                <h2 class="section-title">World Map</h2>
+                <div class="map-section">
+                    <div class="map-title">
+                        <span>🗺️</span> Explored Locations
+                    </div>
+                    <div class="empty-state">No map data yet - explore to build the map!</div>
+                </div>
+            </section>
+            """
+
+        # Build nodes and edges from transitions
+        nodes_set = set()
+        edges = []
+        blocked_locations = set()
+
+        for trans in transitions:
+            nodes_set.add(trans.from_location)
+            if trans.to_location == "BLOCKED":
+                blocked_locations.add(f"{trans.from_location}_{trans.direction}")
+            else:
+                nodes_set.add(trans.to_location)
+                edges.append({
+                    "from": trans.from_location,
+                    "to": trans.to_location,
+                    "label": trans.direction,
+                    "arrows": "to"
+                })
+
+        # Create nodes with styling
+        nodes = []
+        for loc in nodes_set:
+            is_current = loc.strip().lower() == current_location.strip().lower() if current_location else False
+            node = {
+                "id": loc,
+                "label": loc,
+                "color": {
+                    "background": "#10b981" if is_current else "#667eea",
+                    "border": "#065f46" if is_current else "#4c51bf",
+                    "highlight": {"background": "#34d399", "border": "#065f46"}
+                },
+                "font": {"color": "white", "size": 14, "face": "Arial"},
+                "shape": "box",
+                "borderWidth": 3 if is_current else 2,
+                "shadow": is_current
+            }
+            nodes.append(node)
+
+        # Convert to JSON for JavaScript
+        nodes_json = json.dumps(nodes)
+        edges_json = json.dumps(edges)
+
+        return f"""
+            <section class="section">
+                <h2 class="section-title">World Map</h2>
+                <div class="map-section">
+                    <div class="map-title">
+                        <span>🗺️</span> Explored Locations ({len(nodes_set)} discovered)
+                    </div>
+                    <div id="map-container" class="map-container"></div>
+                    <div class="map-legend">
+                        <div class="legend-item">
+                            <div class="legend-dot current"></div>
+                            <span>Current Location</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot visited"></div>
+                            <span>Visited Location</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+            <script>
+                (function() {{
+                    var nodes = new vis.DataSet({nodes_json});
+                    var edges = new vis.DataSet({edges_json});
+
+                    var container = document.getElementById('map-container');
+                    var data = {{ nodes: nodes, edges: edges }};
+                    var options = {{
+                        layout: {{
+                            improvedLayout: true,
+                            hierarchical: false
+                        }},
+                        physics: {{
+                            enabled: true,
+                            solver: 'forceAtlas2Based',
+                            forceAtlas2Based: {{
+                                gravitationalConstant: -50,
+                                centralGravity: 0.01,
+                                springLength: 150,
+                                springConstant: 0.08
+                            }},
+                            stabilization: {{
+                                iterations: 200,
+                                fit: true
+                            }}
+                        }},
+                        edges: {{
+                            color: {{ color: '#9ca3af', highlight: '#667eea' }},
+                            font: {{ size: 11, color: '#4b5563', strokeWidth: 2, strokeColor: '#ffffff' }},
+                            smooth: {{ type: 'curvedCW', roundness: 0.2 }}
+                        }},
+                        nodes: {{
+                            margin: 10
+                        }},
+                        interaction: {{
+                            hover: true,
+                            tooltipDelay: 200,
+                            zoomView: true,
+                            dragView: true
+                        }}
+                    }};
+
+                    var network = new vis.Network(container, data, options);
+
+                    // Fit to view after stabilization
+                    network.once('stabilizationIterationsDone', function() {{
+                        network.fit({{ animation: true }});
+                    }});
+                }})();
+            </script>
+        """
 
     def write_turn_report(
         self,
@@ -537,7 +738,8 @@ class TurnReportWriter:
         big_picture_analysis: Optional[str] = None,
         research_tool_calls: Optional[List[dict]] = None,
         decision_tool_calls: Optional[List[dict]] = None,
-        all_deaths: Optional[List[dict]] = None
+        all_deaths: Optional[List[dict]] = None,
+        map_transitions: Optional[List] = None
     ):
         """
         Write a detailed HTML report for a single turn.
@@ -947,6 +1149,10 @@ class TurnReportWriter:
                 <pre>""" + self._escape(decision_prompt) + """</pre>
             </section>
 """)
+
+                # World Map Section
+                map_html = self._generate_map_html(map_transitions or [], location)
+                f.write(map_html)
 
                 # Footer
                 f.write("""

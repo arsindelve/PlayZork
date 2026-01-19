@@ -100,10 +100,33 @@ class IssueAgent:
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"[IssueAgent ID:{self.memory.id}] Phase 1: Research for '{self.issue_content}'")
 
+        # Determine location status for research instructions
+        if self.location and current_location:
+            issue_loc_normalized = self.location.strip().lower()
+            current_loc_normalized = current_location.strip().lower()
+            is_same_location = issue_loc_normalized == current_loc_normalized
+        else:
+            is_same_location = True
+
+        # Build research instruction based on location
+        if not is_same_location and self.location:
+            research_instruction = (
+                f"You are investigating this strategic issue: '{self.issue_content}'. "
+                f"The issue is at '{self.location}' but you are at '{current_location}'. "
+                f"REQUIRED: 1) Call get_direction_to_location(from_location='{current_location}', to_location='{self.location}') to find path. "
+                f"2) Call get_current_inventory() to check if you have items that could solve this issue. "
+                f"3) Call get_full_summary() for context."
+            )
+        else:
+            research_instruction = (
+                f"You are investigating this strategic issue: '{self.issue_content}'. "
+                f"Use the available tools to gather relevant history context."
+            )
+
         # Phase 1: Research using history tools
         # Must match the research agent prompt parameters: score, locationName, moves, game_response
         research_input = {
-            "input": f"You are investigating this strategic issue: '{self.issue_content}'. Use the available tools to gather relevant history context.",
+            "input": research_instruction,
             "score": current_score,
             "locationName": current_location,
             "moves": current_moves,
@@ -155,6 +178,29 @@ class IssueAgent:
         else:
             logger.info(f"[IssueAgent ID:{self.memory.id}] No tool calls made")
             self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
+
+        # Extract navigation direction and inventory from research
+        navigation_direction = "NOT CHECKED"
+        inventory_items = []
+
+        for tool_call in self.tool_calls_history:
+            tool_name = tool_call.get("tool_name", "")
+            output = tool_call.get("output", "")
+
+            if tool_name == "get_direction_to_location":
+                if output in ["NO PATH", "ALREADY THERE"] or output.startswith("Error"):
+                    navigation_direction = output
+                else:
+                    navigation_direction = output  # e.g., "SOUTH"
+
+            elif tool_name == "get_current_inventory":
+                # Parse inventory output
+                if "empty" not in output.lower() and "no items" not in output.lower():
+                    # Try to extract items from the inventory output
+                    inventory_items = [item.strip() for item in output.replace("\n", ",").split(",") if item.strip()]
+
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Navigation direction: {navigation_direction}")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Inventory items: {inventory_items}")
 
         # Phase 2: Generate proposal based on research
         logger.info(f"[IssueAgent ID:{self.memory.id}] Phase 2: Generating proposal for '{self.issue_content}'")
@@ -220,6 +266,51 @@ RULE: If your action directly interacts with an object (OPEN, PUSH, EXAMINE, etc
       that exist in the CURRENT location to solve issues elsewhere.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NAVIGATION WITH INVENTORY AWARENESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When your issue is in a DIFFERENT LOCATION:
+
+1. CHECK RESEARCH: Did you find a direction via get_direction_to_location?
+2. CHECK INVENTORY: Do you have items that might solve this issue?
+
+CONFIDENCE RULES FOR NAVIGATION:
+
+A) PATH EXISTS + RELEVANT ITEM IN INVENTORY:
+   - Confidence: 85-95 (HIGH PRIORITY!)
+   - You have both the path AND the solution item
+   - Example: Issue "locked door", you have "key", path is "SOUTH"
+   - Propose: "SOUTH" with confidence 90
+   - Reason: "SOUTH leads to Exit Hallway where I can use the brass key to unlock the door"
+
+B) PATH EXISTS + NO RELEVANT ITEM:
+   - Confidence: 60-70 (moderate)
+   - You can get there but may not be able to solve it yet
+   - Propose the direction anyway (might find solution there)
+
+C) NO PATH EXISTS:
+   - Confidence: 0
+   - Propose: "nothing"
+   - Reason: "Cannot reach issue location - no known path"
+
+ITEM RELEVANCE MATCHING (fuzzy match):
+- "locked" / "lock" issues → look for "key" in inventory
+- "dark" / "darkness" issues → look for "lamp", "lantern", "flashlight", "torch"
+- "troll" / "combat" issues → look for "sword", "knife", "weapon"
+- "water" / "river" issues → look for "boat", "raft", "rope"
+
+EXAMPLE:
+Issue: "Locked metal door at Exit Hallway - need to unlock"
+Location: Storage Closet
+Inventory: brass key, leaflet
+Navigation: SOUTH (leads to Reception, then SOUTH to Exit Hallway)
+
+CORRECT PROPOSAL:
+- proposed_action: "SOUTH"
+- confidence: 90
+- reason: "SOUTH is the first step toward Exit Hallway. I have a brass key which should unlock the locked door."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RULES FOR PROPOSED_ACTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -275,6 +366,12 @@ YOUR CURRENT LOCATION:
 LOCATION STATUS:
 {location_status}
 
+NAVIGATION DIRECTION (from pathfinder):
+{navigation_direction}
+
+YOUR INVENTORY:
+{inventory_summary}
+
 CURRENT GAME STATE:
 {game_response}
 
@@ -285,6 +382,11 @@ CRITICAL: Consider whether your proposed action can be performed from your CURRE
 - Direct object interaction (OPEN, TAKE, PUSH, EXAMINE, etc.) usually requires being AT the object's location
 - Finding items/clues that solve the issue CAN happen in other locations
 - If you need to interact with the object but are in the wrong location, confidence should be 0
+
+If in DIFFERENT LOCATION with valid NAVIGATION DIRECTION:
+- If inventory has relevant item for this issue → confidence 85-95
+- If no relevant item → confidence 60-70
+- If NO PATH → confidence 0, propose "nothing"
 
 What should the adventurer do THIS TURN to make progress on YOUR issue?""")
         ])
@@ -301,6 +403,9 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
         else:
             location_status = "UNKNOWN"
 
+        # Prepare inventory summary for proposal
+        inventory_summary = ", ".join(inventory_items) if inventory_items else "empty"
+
         try:
             from llm_utils import invoke_with_retry
             proposal = invoke_with_retry(
@@ -312,6 +417,8 @@ What should the adventurer do THIS TURN to make progress on YOUR issue?""")
                     "issue_location": self.location or "Unknown",
                     "current_location": current_location,
                     "location_status": location_status,
+                    "navigation_direction": navigation_direction,
+                    "inventory_summary": inventory_summary,
                     "game_response": current_game_response,
                     "research_context": self.research_context
                 },

@@ -9,19 +9,45 @@ class PromptLibrary:
   @staticmethod
   def get_history_processor_human_prompt():
     return """
-    Previous summary:
-    {summary}
+Previous summary:
+{summary}
 
-    Latest interaction:
-    Player: {player_response}
-    Game: {game_response}
+Latest interaction:
+Player: {player_response}
+Game: {game_response}
 
-    Provide an updated narrative summary that incorporates this new interaction. Output ONLY the summary text.
-    """
+Update the summary with this new interaction. Output ONLY the updated summary.
+"""
 
   @staticmethod
   def get_history_processor_system_prompt():
-    return f"You are assisting someone playing {GAME_NAME}. You will summarize the game interaction history narratively, in a way that is most useful for helping them understand what has happened so far. Only summarize past interactions, do not provide advice or strategy. Do not provide a heading or title. IMPORTANT: Only output the summary itself, nothing else. Do not include any meta-commentary, instructions, or explanations - just the narrative summary."
+    return f"""You are a game state logger for {GAME_NAME}. Produce FACTUAL, TERSE summaries.
+
+FORMAT - Use this structure:
+```
+CURRENT: [location] | Score: X | Inventory: [items]
+
+RECENT ACTIONS:
+- Turn N: [COMMAND] → [result in 5-10 words]
+- Turn N-1: [COMMAND] → [result]
+...
+
+KEY FACTS:
+- [Important discoveries, unlocked doors, solved puzzles]
+- [Obstacles encountered, items found]
+```
+
+RULES:
+1. FACTS ONLY - No creative writing, no "you feel", no "your hand brushes"
+2. TERSE - Each action = one line, 10 words max
+3. STATE CHANGES - When something changes (door unlocked, item taken), UPDATE the record
+4. NO NARRATIVE - This is a log, not a story
+5. CURRENT STATE - Always reflect what is TRUE NOW, not what was true before
+
+BAD: "You approach the desk, feeling a sense of relief as your hand brushes against a flashlight"
+GOOD: "Turn 5: TAKE FLASHLIGHT → Success. Now in inventory."
+
+Output ONLY the summary. No meta-commentary."""
 
   @staticmethod
   def get_decision_agent_evaluation_prompt():

@@ -9,7 +9,7 @@ from tools.mapping import MapperToolkit
 from tools.database import DatabaseManager
 from display_manager import DisplayManager
 from game_logger import GameLogger
-from config import get_cheap_llm
+from config import get_cheap_llm, get_expensive_llm
 
 
 @dataclass
@@ -51,11 +51,14 @@ class GameSession:
 
         self.zork_service = ZorkService(session_id=session_id)
 
-        # Create cheap LLM for summarization and de-duplication
+        # Create cheap LLM for de-duplication
         cheap_llm = get_cheap_llm(temperature=0)
 
-        # Create history toolkit with cheap LLM for summarization
-        self.history_toolkit = HistoryToolkit(cheap_llm, session_id, self.db)
+        # Create expensive LLM for history summarization (needs quality)
+        expensive_llm = get_expensive_llm(temperature=0)
+
+        # Create history toolkit with expensive LLM for better summarization
+        self.history_toolkit = HistoryToolkit(expensive_llm, session_id, self.db)
 
         # Create memory toolkit with cheap LLM for de-duplication (write-only strategic issue storage)
         self.memory_toolkit = MemoryToolkit(session_id, self.db, cheap_llm)
@@ -264,7 +267,8 @@ class GameSession:
                 big_picture_analysis=big_picture_analysis,
                 research_tool_calls=decision_for_this_command.research_tool_calls,
                 decision_tool_calls=decision_for_this_command.decision_tool_calls,
-                all_deaths=all_deaths
+                all_deaths=all_deaths,
+                map_transitions=transitions
             )
 
             # Update master session index

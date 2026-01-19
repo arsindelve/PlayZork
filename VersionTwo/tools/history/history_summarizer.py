@@ -107,8 +107,41 @@ class HistorySummarizer:
 
         # Create a prompt for comprehensive summarization
         prompt = ChatPromptTemplate.from_messages([
-            ("system", PromptLibrary.get_history_processor_system_prompt()),
-            ("human", """Previous comprehensive summary:
+            ("system", """You are a game state database for an interactive fiction game. Maintain a COMPREHENSIVE, STRUCTURED record of ALL discoveries.
+
+FORMAT (use exactly):
+```
+CURRENT STATE:
+Location: [current location]
+Score: [X] | Moves: [Y]
+Inventory: [list items, note if ON/OFF for light sources]
+
+LOCATIONS DISCOVERED:
+- [Location]: Exits [directions]. Contains: [objects]. Notes: [dark/locked/etc]
+- [Location]: ...
+
+ITEMS FOUND:
+- [item]: [INVENTORY or location where it is] [state if relevant]
+- [item]: ...
+
+PUZZLES/OBSTACLES:
+- [SOLVED] [description of what was solved]
+- [UNSOLVED] [description] - [what might be needed]
+
+NOTABLE FAILURES:
+- [command] → "[error message]" (at [location])
+```
+
+RULES:
+1. This is a DATABASE, not a story. No narrative prose.
+2. Track EVERYTHING discovered - locations, items, puzzles, failures
+3. Update state when things change:
+   - Item taken → move from location to INVENTORY
+   - Door unlocked → mark as UNLOCKED
+   - Puzzle solved → move from UNSOLVED to SOLVED
+4. Current state must reflect REALITY NOW, not history
+5. Be comprehensive but terse - no fluff words"""),
+            ("human", """Previous comprehensive record:
 {summary}
 
 Latest interaction:
@@ -118,28 +151,8 @@ Location: {location}
 Score: {score}
 Moves: {moves}
 
-Update the comprehensive summary to include this new interaction.
-
-CRITICAL RULES FOR UPDATING STATE:
-1. When a condition CHANGES, UPDATE or REMOVE the old state:
-   - If player turns on a light source → REMOVE any "pitch-dark" or "can't see" descriptions
-   - If a door is unlocked → Mark it as UNLOCKED, remove "locked" status
-   - If an item is taken → Move it to inventory, remove from location
-   - If a puzzle is solved → Mark it SOLVED, don't say it "remains unsolved"
-
-2. The summary must reflect CURRENT state, not historical state:
-   - Don't say "room remains dark" if player now has a working light
-   - Don't say "door is locked" if player unlocked it
-   - Don't say "item is in room" if player took it
-
-3. Keep track of:
-   - Current location and inventory (CURRENT state)
-   - All locations visited
-   - All items found and their CURRENT locations (inventory or room)
-   - All puzzles encountered with CURRENT status (solved/unsolved)
-   - Key discoveries and observations
-
-Provide a detailed but concise narrative. Output ONLY the updated summary.""")
+Update the comprehensive record. Add any new discoveries. Update any changed state.
+Output ONLY the updated record in the structured format.""")
         ])
 
         prompt_variables = {

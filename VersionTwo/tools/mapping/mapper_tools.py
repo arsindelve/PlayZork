@@ -121,6 +121,36 @@ def find_path_between_locations(from_location: str, to_location: str) -> str:
     return _mapper_state.pathfinder.get_path_string(from_location, to_location)
 
 
+@tool
+def get_direction_to_location(from_location: str, to_location: str) -> str:
+    """Get the single next direction to move toward a destination location.
+
+    Use this when you need to navigate to a location to solve a puzzle there.
+    Returns only the FIRST step, not the full path.
+
+    Args:
+        from_location: Your current location (exact name)
+        to_location: Target location (exact name)
+
+    Returns:
+        Single direction (e.g., "NORTH") if path exists,
+        "NO PATH" if unreachable,
+        "ALREADY THERE" if same location
+    """
+    if _mapper_state is None:
+        return "Error: Mapper tools not initialized."
+
+    if from_location.strip().lower() == to_location.strip().lower():
+        return "ALREADY THERE"
+
+    next_step = _mapper_state.pathfinder.get_next_step(from_location, to_location)
+
+    if next_step is None:
+        return "NO PATH"
+
+    return next_step
+
+
 def get_mapper_tools():
     """
     Get the list of all mapper tools for use with LangChain agents
@@ -128,4 +158,4 @@ def get_mapper_tools():
     Returns:
         List of tool functions decorated with @tool
     """
-    return [get_map, get_exits_from_location, find_path_between_locations]
+    return [get_map, get_exits_from_location, find_path_between_locations, get_direction_to_location]
