@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
-from config import GAME_NAME
+from adventurer.prompt_library import PromptLibrary
 import logging
 
 
@@ -215,48 +215,8 @@ class ExplorerAgent:
             why_chosen = "It is a cardinal direction to try systematically"
 
         proposal_prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are an ExplorerAgent focused on systematic exploration in {GAME_NAME}.
-
-Your task: Advocate for exploring the {{best_direction}} direction from the current location.
-
-This direction was chosen as the best option from {{unexplored_count}} unexplored directions because:
-- It follows priority rules (mentioned > cardinals > diagonals > up/down)
-- {why_chosen}
-
-Rules for proposed_action:
-- Propose exploring {{best_direction}} (e.g., "GO {{best_direction}}" or just "{{best_direction}}")
-- Use standard command format for {GAME_NAME}
-- NEVER use semicolons (;) in your proposed action
-- NEVER combine multiple commands - propose ONE simple direction command only
-- Use the SIMPLEST form: just the direction (e.g., "NORTH") or "GO NORTH"
-
-Rules for reason:
-- Explain why exploring this direction makes sense now
-- Mention if it was in the location description
-- Note how many other directions remain unexplored
-- Keep it concise (1-2 sentences)
-
-Output format: ExplorerProposal with proposed_action, reason, and confidence={{confidence}}.
-"""),
-            ("human", """BEST DIRECTION TO EXPLORE:
-{best_direction}
-
-CURRENT LOCATION:
-{current_location}
-
-ALL UNEXPLORED DIRECTIONS ({unexplored_count}):
-{all_unexplored}
-
-MENTIONED DIRECTIONS:
-{mentioned_dirs}
-
-CURRENT GAME STATE:
-{game_response}
-
-RESEARCH CONTEXT:
-{research_context}
-
-Propose exploring {best_direction}.""")
+            ("system", PromptLibrary.get_explorer_agent_system_prompt(why_chosen)),
+            ("human", PromptLibrary.get_explorer_agent_human_prompt())
         ])
 
         try:

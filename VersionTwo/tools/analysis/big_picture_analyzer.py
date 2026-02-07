@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from tools.history import HistoryToolkit
 from tools.database import DatabaseManager
 from config import get_expensive_llm
+from adventurer.prompt_library import PromptLibrary
 
 
 class BigPictureAnalyzer:
@@ -105,71 +106,15 @@ class BigPictureAnalyzer:
 
     def _build_analysis_prompt(self, recent_turns: str, full_summary: str) -> list:
         """Build the analysis prompt for the LLM."""
-        system_prompt = """You are the "orientation + intent" layer for an interactive fiction playthrough.
-
-Your job is to answer, clearly and decisively:
-"What the hell is going on here, and what are we going to do about it?"
-
-This is NOT a summary, NOT a walkthrough, and NOT speculative analysis.
-
-You must do three things, in this order:
-
-1) DECLARE WHAT THIS PHASE OF THE GAME IS
-   - Make at least one strong, explicit judgment about the game's intent.
-   - Examples (do not copy verbatim): "This section is a gate," "This is a denial phase,"
-     "Normal play is intentionally invalid right now," "We are missing permission to proceed."
-   - Do not hedge. Take a stand.
-
-2) IDENTIFY THE DOMINANT CONSTRAINT
-   - Explain what is currently preventing progress from sticking.
-   - If progress is being undone, ignored, reset, or nullified, treat that as intentional enforcement,
-     not a loop or trial-and-error gameplay.
-   - Rank constraints: clearly state what matters most and what does NOT matter right now.
-
-3) REFRAME HOW WE SHOULD THINK
-   - Answer "what are we going to do about it?" at the level of mindset and intent,
-     not actions.
-   - Explain what kind of condition must change for progress to become possible.
-   - Explicitly state what kinds of activity are currently wasted effort.
-
-CRITICAL RULE:
-If the game repeatedly nullifies progress (by resetting state, undoing outcomes,
-confining the player, stonewalling responses, or otherwise forcing the same situation),
-treat this as enforced progression denial.
-This means the game is saying: "You are not allowed to proceed yet."
-Analyze the prerequisite being enforced — not the surface mechanics.
-
-DO NOT:
-- Retell events or describe rooms
-- Suggest specific commands, actions, or step-by-step tactics
-- Talk about "loops," "flags," or internal variables
-- Hedge, speculate vaguely, or restate the puzzle in different words
-- Use literary, philosophical, or atmospheric language
-
-Assume the reader already knows what happened.
-Your value is interpretation, prioritization, and reorientation.
-
-Write 2–3 short paragraphs."""
-
         # Format current inventory
         if self.current_inventory:
             inventory_text = ", ".join(self.current_inventory)
         else:
             inventory_text = "Empty (carrying nothing)"
 
-        human_prompt = f"""CURRENT STATE (ground truth - do not contradict):
-- Location: {self.current_location}
-- Inventory: {inventory_text}
-
-HISTORY SUMMARY:
-{full_summary}
-
-RECENT EVENTS (Last 50 turns):
-{recent_turns}
-
-Provide your strategic assessment following the format exactly."""
-
         return [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=human_prompt)
+            SystemMessage(content=PromptLibrary.get_big_picture_system_prompt()),
+            HumanMessage(content=PromptLibrary.get_big_picture_human_prompt(
+                self.current_location, inventory_text, full_summary, recent_turns
+            ))
         ]

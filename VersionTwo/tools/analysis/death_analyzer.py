@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from tools.history import HistoryToolkit
 from tools.database import DatabaseManager
 from config import get_cheap_llm
+from adventurer.prompt_library import PromptLibrary
 
 
 class DeathAnalysis(BaseModel):
@@ -125,29 +126,11 @@ class DeathAnalyzer:
         llm_with_structure = self.llm.with_structured_output(DeathAnalysis)
 
         prompt = [
-            SystemMessage(content="""You are analyzing a text adventure game response to determine if the player died.
-
-Look for death indicators such as:
-- "You have died"
-- "You are dead"
-- "You died"
-- "Your adventure is over"
-- "You have been killed"
-- "You have been slain"
-- Score resetting to 0 with death message
-- Game over messages
-- Being eaten, drowned, crushed, etc.
-
-If the player died, set died=True. Otherwise set died=False.
-For this quick check, you can leave the other fields empty."""),
-            HumanMessage(content=f"""Did the player die from this command?
-
-COMMAND: {player_command}
-
-GAME RESPONSE:
-{game_response}
-
-Determine if the player died.""")
+            SystemMessage(content=PromptLibrary.get_death_detection_system_prompt()),
+            HumanMessage(content=PromptLibrary.get_death_detection_human_prompt().format(
+                player_command=player_command,
+                game_response=game_response
+            ))
         ]
 
         try:
@@ -176,28 +159,12 @@ Determine if the player died.""")
         llm_with_structure = self.llm.with_structured_output(DeathAnalysis)
 
         prompt = [
-            SystemMessage(content="""You are analyzing a player death in a text adventure game.
-
-Your job is to:
-1. Identify the CAUSE of death - what specifically killed the player (e.g., "eaten by a grue", "fell into a pit", "drowned")
-2. Trace the EVENTS leading to death - what decisions or circumstances led to this outcome
-3. Provide RECOMMENDATIONS - specific, actionable advice for avoiding this death in future playthroughs
-
-Be concise but thorough. Focus on practical lessons learned."""),
-            HumanMessage(content=f"""The player just died. Analyze this death.
-
-FATAL COMMAND: {player_command}
-
-GAME RESPONSE (containing death):
-{game_response}
-
-RECENT HISTORY (events leading up to death):
-{recent_context}
-
-Provide a complete analysis with:
-- cause_of_death: What killed the player
-- events_leading_to_death: The sequence of events/decisions that led here
-- recommendations: How to avoid this death in the future""")
+            SystemMessage(content=PromptLibrary.get_death_analysis_system_prompt()),
+            HumanMessage(content=PromptLibrary.get_death_analysis_human_prompt().format(
+                player_command=player_command,
+                game_response=game_response,
+                recent_context=recent_context
+            ))
         ]
 
         try:

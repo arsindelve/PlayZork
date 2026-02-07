@@ -2,7 +2,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from typing import List
 from .memory_state import Memory
-from config import GAME_NAME
+from adventurer.prompt_library import PromptLibrary
 
 
 class MemoryRetriever:
@@ -42,27 +42,8 @@ class MemoryRetriever:
         ])
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are helping someone play {GAME_NAME} by searching their memory notes.
-
-You will be given:
-1. A list of memories (things they flagged as important)
-2. A question they're asking
-
-Your job:
-- Find the most relevant memories that answer the question
-- Return ONLY the relevant memory numbers and a brief answer
-- If no memories are relevant, say "No relevant memories found."
-
-Format:
-Relevant memories: #3, #7, #12
-Answer: [1-2 sentence answer based on those memories]
-"""),
-            ("human", """Memories:
-{memories}
-
-Question: {query}
-
-Which memories are relevant and what's the answer?""")
+            ("system", PromptLibrary.get_memory_query_system_prompt()),
+            ("human", PromptLibrary.get_memory_query_human_prompt())
         ])
 
         response = self.llm.invoke(
@@ -95,13 +76,8 @@ Which memories are relevant and what's the answer?""")
         ])
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", f"You are summarizing memories about a specific location in {GAME_NAME}. Be concise."),
-            ("human", """Location: {location}
-
-Memories from this location:
-{memories}
-
-Provide a 2-3 sentence summary of what we learned here.""")
+            ("system", PromptLibrary.get_memory_location_summary_system_prompt()),
+            ("human", PromptLibrary.get_memory_location_summary_human_prompt())
         ])
 
         response = self.llm.invoke(

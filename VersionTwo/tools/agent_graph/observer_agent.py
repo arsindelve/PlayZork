@@ -13,7 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from .observer_response import ObserverResponse
 from tools.memory import MemoryToolkit
-from config import GAME_NAME
+from adventurer.prompt_library import PromptLibrary
 import logging
 
 
@@ -157,137 +157,6 @@ class ObserverAgent:
 
     def _create_observation_prompt(self, game_response: str, location: str, historical_context: str, tracked_issues: str) -> str:
         """Create the prompt for game response observation"""
-        return f"""You are the Observer Agent in a {GAME_NAME}-playing AI system.
-
-YOUR SINGLE RESPONSIBILITY:
-Analyze the game response and identify ANY new strategic issues, puzzles, or obstacles to track.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ALREADY TRACKED ISSUES (DO NOT DUPLICATE)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-These issues are ALREADY being tracked. Do NOT add duplicates:
-
-{tracked_issues}
-
-CRITICAL: If the game response mentions something already in this list, leave 'remember' EMPTY.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-HISTORICAL CONTEXT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-{historical_context}
-
-Use this context to understand what has been seen before.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHAT TO IDENTIFY (ONLY IF NEW)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-✓ NEW puzzles or obstacles:
-  - Locked doors, gates, gratings
-  - Blocking entities (trolls, guards, etc.)
-  - Environmental hazards (darkness, chasms, etc.)
-
-✓ NEW items or objects:
-  - Items mentioned in the description
-  - Objects that can be interacted with
-  - Tools or keys that might solve puzzles
-
-✓ NEW opportunities:
-  - Mechanisms or switches discovered
-  - Clues about puzzle solutions
-
-✗ DO NOT TRACK (ExplorerAgent handles these):
-  - Blocked paths ("You can't go that way")
-  - New directions or exits mentioned
-  - Movement confirmations
-  - Simple location descriptions
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CRITICAL: INCLUDE ACCEPTANCE CRITERIA
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-When creating an issue, use this format:
-"[Description] — [ACCEPTANCE CRITERIA]"
-
-The acceptance criteria should clearly state what needs to happen for this issue to be SOLVED.
-
-Format examples:
-- "Locked [item] — unlock/open it"
-- "[Item] that cannot be opened — find tool to open it"
-- "[Obstacle] blocking path — defeat/remove it"
-- "Simple [item] — take it"
-
-EXAMPLES:
-
-Game: "There is a small mailbox here."
-Tracked issues: (empty)
-→ remember: "Small mailbox at West Of House — open it and examine contents"
-→ rememberImportance: 700
-→ item: "mailbox"
-
-Game: "There is a small mailbox here."
-Tracked issues: "Small mailbox at West Of House — open it and examine contents"
-→ remember: ""  ← EMPTY because already tracked!
-→ rememberImportance: None
-→ item: ""
-
-Game: "In disturbing the pile of leaves, a grating is revealed."
-Tracked issues: (empty)
-→ remember: "Grating at Clearing — open or unlock it"
-→ rememberImportance: 800
-→ item: "grating"
-
-Game: "The grating is locked."
-Tracked issues: "Grating at Clearing — open or unlock it"
-→ remember: "Locked grating at Clearing — find key and unlock it"  ← UPDATE with more specific criteria
-→ rememberImportance: 900
-→ item: ""
-
-Game: "There is a jewel-encrusted egg in the bird's nest. It cannot be opened."
-Tracked issues: (empty)
-→ remember: "Jewel-encrusted egg in nest — find tool to open it"
-→ rememberImportance: 750
-→ item: "egg"
-
-Game: "There is a brass lantern here."
-Tracked issues: (empty)
-→ remember: "Brass lantern at location — take it"
-→ rememberImportance: 600
-→ item: "lantern"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-IMPORTANCE SCORING (1-1000)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-- 900-1000: Critical obstacles (locked gates blocking main path, trolls)
-- 700-800: Important items or doors (keys, treasures, entry points)
-- 500-600: Interesting objects to investigate (piles, chests, mechanisms)
-- 300-400: Minor items or flavor objects
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CRITICAL RULES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. ALWAYS use the format: "[Description] — [ACCEPTANCE CRITERIA]"
-2. Check TRACKED ISSUES first - if already listed, leave 'remember' EMPTY
-3. Only track TRULY NEW discoveries that require puzzle-solving
-4. DO NOT track blocked paths, new exits, or directions (ExplorerAgent handles exploration)
-5. DO NOT track general location descriptions or movement confirmations
-6. ONLY track items, obstacles, or puzzles that need solving
-7. Include location name in description for context
-8. Make acceptance criteria SPECIFIC and MEASURABLE (what action resolves it?)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CURRENT ANALYSIS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Location: {location}
-Game Response: {game_response}
-
-Analyze this response and output JSON with:
-- remember: NEW strategic issue (or empty string if already tracked or nothing new)
-- rememberImportance: Importance score 1-1000 (or null if remember empty)
-- item: Any item mentioned (or empty string)
-"""
+        return PromptLibrary.get_observer_observation_prompt(
+            game_response, location, historical_context, tracked_issues
+        )

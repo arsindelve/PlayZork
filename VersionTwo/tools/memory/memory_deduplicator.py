@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-from config import GAME_NAME
+from adventurer.prompt_library import PromptLibrary
 
 
 class DeduplicationResult(BaseModel):
@@ -31,41 +31,8 @@ class MemoryDeduplicator:
         """Create LangChain chain for de-duplication checking"""
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are a de-duplication assistant for a {GAME_NAME} game-playing AI.
-
-Your task: Determine if a NEW strategic issue is semantically similar to EXISTING issues.
-
-Strategic issues are:
-- UNSOLVED PUZZLES (e.g., "locked grating blocks path east")
-- OBVIOUS THINGS TO TRY (e.g., "get inside the white house")
-- MAJOR OBSTACLES (e.g., "troll demands payment to pass")
-
-Rules for determining duplicates:
-1. Same core problem = DUPLICATE
-   - "Need to get into the white house" ≈ "Find way to enter white house" → DUPLICATE
-   - "Locked grating blocks east path" ≈ "Can't go east due to locked grate" → DUPLICATE
-
-2. Different specific details = NOT DUPLICATE
-   - "Troll blocks bridge" vs "Cyclops blocks passage" → NOT DUPLICATE
-   - "Need light for dark room" vs "Need to cross river" → NOT DUPLICATE
-
-3. Progress updates = DUPLICATE
-   - If new issue is just a rephrasing or update of existing issue → DUPLICATE
-
-4. More specific version = DUPLICATE
-   - "Need to explore the house" (existing) vs "Check kitchen in house" (new) → DUPLICATE
-
-5. Completely different problem = NOT DUPLICATE
-   - Even if same location or similar phrasing
-
-Return your decision as structured output."""),
-            ("human", """NEW ISSUE:
-{new_issue}
-
-EXISTING ISSUES:
-{existing_issues}
-
-Is the NEW issue a duplicate of any existing issue?""")
+            ("system", PromptLibrary.get_deduplication_system_prompt()),
+            ("human", PromptLibrary.get_deduplication_human_prompt())
         ])
 
         # Use structured output for consistent parsing

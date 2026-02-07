@@ -107,52 +107,8 @@ class HistorySummarizer:
 
         # Create a prompt for comprehensive summarization
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a game state database for an interactive fiction game. Maintain a COMPREHENSIVE, STRUCTURED record of ALL discoveries.
-
-FORMAT (use exactly):
-```
-CURRENT STATE:
-Location: [current location]
-Score: [X] | Moves: [Y]
-Inventory: [list items, note if ON/OFF for light sources]
-
-LOCATIONS DISCOVERED:
-- [Location]: Exits [directions]. Contains: [objects]. Notes: [dark/locked/etc]
-- [Location]: ...
-
-ITEMS FOUND:
-- [item]: [INVENTORY or location where it is] [state if relevant]
-- [item]: ...
-
-PUZZLES/OBSTACLES:
-- [SOLVED] [description of what was solved]
-- [UNSOLVED] [description] - [what might be needed]
-
-NOTABLE FAILURES:
-- [command] → "[error message]" (at [location])
-```
-
-RULES:
-1. This is a DATABASE, not a story. No narrative prose.
-2. Track EVERYTHING discovered - locations, items, puzzles, failures
-3. Update state when things change:
-   - Item taken → move from location to INVENTORY
-   - Door unlocked → mark as UNLOCKED
-   - Puzzle solved → move from UNSOLVED to SOLVED
-4. Current state must reflect REALITY NOW, not history
-5. Be comprehensive but terse - no fluff words"""),
-            ("human", """Previous comprehensive record:
-{summary}
-
-Latest interaction:
-Player: {player_response}
-Game: {game_response}
-Location: {location}
-Score: {score}
-Moves: {moves}
-
-Update the comprehensive record. Add any new discoveries. Update any changed state.
-Output ONLY the updated record in the structured format.""")
+            ("system", PromptLibrary.get_long_running_summary_system_prompt()),
+            ("human", PromptLibrary.get_long_running_summary_human_prompt())
         ])
 
         prompt_variables = {

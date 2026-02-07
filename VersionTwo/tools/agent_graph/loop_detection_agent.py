@@ -13,7 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_core.prompts import ChatPromptTemplate
 from .loop_detection_response import LoopDetectionResponse
-from config import GAME_NAME
+from adventurer.prompt_library import PromptLibrary
 import logging
 
 
@@ -223,91 +223,8 @@ class LoopDetectionAgent:
         logger.info(f"[LoopDetectionAgent] Phase 3: Analyzing for loop patterns with LLM")
 
         analysis_prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are the LoopDetectionAgent in a {GAME_NAME}-playing AI system.
-
-YOUR RESPONSIBILITY:
-Analyze raw game history to detect unproductive loops and propose actions to break them.
-
-LOOP TYPES TO DETECT:
-
-1. **Stuck in Location** (loop_type: "stuck_location")
-   - Same location for 5+ CONSECUTIVE turns (not scattered visits!)
-   - Example STUCK: [Turn 5: Kitchen, 6: Kitchen, 7: Kitchen, 8: Kitchen, 9: Kitchen]
-   - Example NOT STUCK: [Turn 1: Kitchen, 8: Kitchen, 10: Kitchen] = normal exploration
-   - No score increase during this time
-   - Agent is repeatedly trying different actions at same location, all failing
-   - IMPORTANT: Must be CONSECUTIVE - visiting a location multiple times during exploration is NORMAL
-
-2. **Oscillating Between Locations** (loop_type: "oscillating")
-   - Moving back and forth between 2-3 locations
-   - Example: NORTH → SOUTH → NORTH → SOUTH
-   - Example: Kitchen → Hallway → Kitchen → Hallway
-   - No meaningful progress being made
-
-3. **Repeated Action at Same Location** (loop_type: "repeated_action")
-   - Same command attempted 3+ times AT THE SAME LOCATION
-   - Example: "NORTH" failed 3 times while AT "Kitchen"
-   - IMPORTANT: "NORTH at Kitchen" is different from "NORTH at Hallway"
-   - IMPORTANT: If we've moved to a new location, old repetitions don't count
-   - This loop is about context-specific failures, not global command frequency
-
-WHEN LOOP DETECTED:
-- Set loop_detected = true
-- Set appropriate loop_type
-- Propose a RADICALLY DIFFERENT action to break the loop:
-  * If location description mentions interactive verbs (climbable, openable, takeable), try that verb!
-    Example: "cliff appears climbable" → propose "CLIMB CLIFF" or "CLIMB UP"
-    Example: "door can be opened" → propose "OPEN DOOR"
-  * Try an unexplored exit from available_exits
-  * Try examining objects mentioned in description (EXAMINE item)
-  * Try different action categories: if moving failed → interact with objects, if attacking → examine
-  * Try INVENTORY to check what you have
-- Confidence: 95-100 (very high - loops are bad, must break them!)
-- Reason: Explain the loop pattern clearly and why this action breaks it
-
-CRITICAL COMMAND RULES:
-- NEVER use semicolons (;) in your proposed action
-- NEVER combine multiple commands - propose ONE simple command only
-- Use the SIMPLEST possible version of each command
-- Examples: 'NORTH', 'EXAMINE DOOR', 'INVENTORY', 'CLIMB CLIFF'
-- NOT allowed: 'GO NORTH; EXAMINE ROOM', 'TAKE ITEM AND EXAMINE IT'
-
-WHEN NO LOOP DETECTED:
-- Set loop_detected = false
-- Set loop_type = ""
-- Set proposed_action = "nothing"
-- Confidence: 0
-- Reason: "No loop pattern detected in recent history"
-
-========================================================
-CRITICAL: BE PRECISE, NOT AGGRESSIVE
-========================================================
-
-TRUE LOOPS waste turns and prevent progress. But normal exploration is NOT a loop!
-
-REAL LOOP SIGNS (detect these):
-+ Same location for 5+ CONSECUTIVE turns (stuck, can't escape)
-+ Alternating between just 2 locations repeatedly (A→B→A→B→A)
-+ Same action at same location 3+ times with no progress
-
-NOT A LOOP (do NOT flag these):
-+ Visiting Kitchen on turns [1, 8, 10] = normal exploration
-+ Trying different directions from same hub location
-+ Returning to previous locations as part of mapping
-
-Only flag if genuinely STUCK. Scattered visits during exploration are NORMAL.
-
-Respond with structured output."""),
-            ("human", """CURRENT LOCATION: {current_location}
-CURRENT SCORE: {current_score}
-
-AVAILABLE EXITS (from mapper):
-{available_exits}
-
-RAW GAME HISTORY (Last 10 Turns):
-{raw_history}
-
-Analyze for loops and propose breaking action if needed:""")
+            ("system", PromptLibrary.get_loop_detection_system_prompt()),
+            ("human", PromptLibrary.get_loop_detection_human_prompt())
         ])
 
         analysis_chain = analysis_prompt | decision_llm.with_structured_output(LoopDetectionResponse)
