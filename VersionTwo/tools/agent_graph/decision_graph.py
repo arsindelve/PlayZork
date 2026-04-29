@@ -61,7 +61,8 @@ def create_spawn_agents_node(
     inventory_toolkit,
     research_agent: Runnable,
     decision_llm,
-    history_toolkit: HistoryToolkit
+    history_toolkit: HistoryToolkit,
+    turn_number_ref: dict,
 ):
     """
     Create the spawn agents node that creates IssueAgents and ExplorerAgent.
@@ -73,227 +74,193 @@ def create_spawn_agents_node(
         research_agent: Research agent with tools for IssueAgents and ExplorerAgent to use
         decision_llm: LLM for generating proposals
         history_toolkit: HistoryToolkit for accessing tools
+        turn_number_ref: Mutable {"current": int} carrying the current turn for lazy decay
 
     Returns:
         Node function for the graph
     """
-    def spawn_agents_node(state: DecisionState) -> DecisionState:
+    async def spawn_agents_node(state: DecisionState) -> DecisionState:
         """
         Spawn phase: Create one IssueAgent for each tracked strategic issue.
         Each agent performs its own research and generates a proposal IN PARALLEL.
         """
-        import logging
         import asyncio
+        import logging
         logger = logging.getLogger(__name__)
 
-        try:
-            logger.info("\n" + "=" * 80)
-            logger.info("SPAWN AGENTS - Creating specialized agents for this turn")
-            logger.info("=" * 80)
+        logger.info("\n" + "=" * 80)
+        logger.info("SPAWN AGENTS - Creating specialized agents for this turn")
+        logger.info("=" * 80)
 
-            # Get top 5 tracked issues from database (ordered by importance)
-            memories = memory_toolkit.state.get_top_memories(limit=5)
-            logger.info(f"Retrieved {len(memories)} memories from database")
+        # Get top 5 tracked issues from database (ordered by lazily-decayed importance)
+        memories = memory_toolkit.state.get_top_memories(
+            limit=5,
+            current_turn=turn_number_ref.get("current"),
+        )
+        logger.info(f"Retrieved {len(memories)} memories from database")
 
-            # Sort by location name for cleaner console display
-            memories_sorted = sorted(memories, key=lambda m: m.location if m.location else "")
+        # Sort by location name for cleaner console display
+        memories_sorted = sorted(memories, key=lambda m: m.location if m.location else "")
 
-            # Create one IssueAgent for each issue (max 5)
-            issue_agents = [IssueAgent(memory=mem) for mem in memories_sorted]
+        # Create one IssueAgent for each issue (max 5)
+        issue_agents = [IssueAgent(memory=mem) for mem in memories_sorted]
 
-            logger.info(f"SPAWNED {len(issue_agents)} IssueAgents (top 5 by importance)")
+        logger.info(f"SPAWNED {len(issue_agents)} IssueAgents (top 5 by importance)")
 
-            # Extract current game state
-            game_response = state["game_response"]
-            current_location = game_response.LocationName or "Unknown"
-            current_game_text = game_response.Response
-            current_score = game_response.Score
-            current_moves = game_response.Moves
+        # Extract current game state
+        game_response = state["game_response"]
+        current_location = game_response.LocationName or "Unknown"
+        current_game_text = game_response.Response
+        current_score = game_response.Score
+        current_moves = game_response.Moves
 
-            # ========== NEW: Spawn ONE ExplorerAgent (if unexplored directions exist) ==========
-            # Get known exits from current location
-            known_exits = mapper_toolkit.state.get_exits_from(current_location)
-            known_directions = {direction.upper() for direction, _ in known_exits}
+        # ========== NEW: Spawn ONE ExplorerAgent (if unexplored directions exist) ==========
+        # Get known exits from current location
+        known_exits = mapper_toolkit.state.get_exits_from(current_location)
+        known_directions = {direction.upper() for direction, _ in known_exits}
 
-            # Determine unexplored directions
-            CARDINAL_DIRECTIONS = [
-                "NORTH", "SOUTH", "EAST", "WEST",
-                "NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST",
-                "UP", "DOWN"
-            ]
+        # Determine unexplored directions
+        CARDINAL_DIRECTIONS = [
+            "NORTH", "SOUTH", "EAST", "WEST",
+            "NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST",
+            "UP", "DOWN"
+        ]
 
-            unexplored_directions = [
-                d for d in CARDINAL_DIRECTIONS
-                if d not in known_directions
-            ]
+        unexplored_directions = [
+            d for d in CARDINAL_DIRECTIONS
+            if d not in known_directions
+        ]
 
-            # Parse game text to see which directions are mentioned
-            game_text_upper = current_game_text.upper()
-            mentioned_directions = []
+        # Parse game text to see which directions are mentioned
+        game_text_upper = current_game_text.upper()
+        mentioned_directions = []
 
-            # Direction alias mapping
-            DIRECTION_ALIASES = {
-                "NORTH": ["NORTH", "NORTHERN", " N "],
-                "SOUTH": ["SOUTH", "SOUTHERN", " S "],
-                "EAST": ["EAST", "EASTERN", " E "],
-                "WEST": ["WEST", "WESTERN", " W "],
-                "NORTHEAST": ["NORTHEAST", "NE"],
-                "NORTHWEST": ["NORTHWEST", "NW"],
-                "SOUTHEAST": ["SOUTHEAST", "SE"],
-                "SOUTHWEST": ["SOUTHWEST", "SW"],
-                "UP": ["UP", "ABOVE", "UPWARD"],
-                "DOWN": ["DOWN", "BELOW", "DOWNWARD"],
-            }
+        # Direction alias mapping
+        DIRECTION_ALIASES = {
+            "NORTH": ["NORTH", "NORTHERN", " N "],
+            "SOUTH": ["SOUTH", "SOUTHERN", " S "],
+            "EAST": ["EAST", "EASTERN", " E "],
+            "WEST": ["WEST", "WESTERN", " W "],
+            "NORTHEAST": ["NORTHEAST", "NE"],
+            "NORTHWEST": ["NORTHWEST", "NW"],
+            "SOUTHEAST": ["SOUTHEAST", "SE"],
+            "SOUTHWEST": ["SOUTHWEST", "SW"],
+            "UP": ["UP", "ABOVE", "UPWARD"],
+            "DOWN": ["DOWN", "BELOW", "DOWNWARD"],
+        }
 
-            for direction in unexplored_directions:
-                for alias in DIRECTION_ALIASES.get(direction, [direction]):
-                    if alias in game_text_upper:
-                        mentioned_directions.append(direction)
-                        break  # Only count each direction once
+        for direction in unexplored_directions:
+            for alias in DIRECTION_ALIASES.get(direction, [direction]):
+                if alias in game_text_upper:
+                    mentioned_directions.append(direction)
+                    break  # Only count each direction once
 
-            # Create ONE ExplorerAgent if there are unexplored directions
-            explorer_agent = None
-            if unexplored_directions:
-                explorer_agent = ExplorerAgent(
-                    current_location=current_location,
-                    unexplored_directions=unexplored_directions,
-                    mentioned_directions=mentioned_directions,
-                    turn_number=0  # Will be set properly when turn_number added to state
+        # Create ONE ExplorerAgent if there are unexplored directions
+        explorer_agent = None
+        if unexplored_directions:
+            explorer_agent = ExplorerAgent(
+                current_location=current_location,
+                unexplored_directions=unexplored_directions,
+                mentioned_directions=mentioned_directions,
+                turn_number=0  # Will be set properly when turn_number added to state
+            )
+            logger.info(f"SPAWNED 1 ExplorerAgent - {len(unexplored_directions)} unexplored directions: {unexplored_directions}")
+            logger.info(f"  Mentioned in description: {mentioned_directions if mentioned_directions else 'None'}")
+            logger.info(f"  Best direction chosen: {explorer_agent.best_direction}")
+        else:
+            logger.info("NO ExplorerAgent spawned - all directions explored from this location")
+
+        # ========== DISABLED: LoopDetectionAgent ==========
+        # loop_detection_agent = LoopDetectionAgent()
+        # logger.info("SPAWNED 1 LoopDetectionAgent - monitors for stuck/oscillating patterns")
+        loop_detection_agent = None  # DISABLED - not useful in practice
+        logger.info("LoopDetectionAgent DISABLED")
+
+        # ========== NEW: Spawn ONE InteractionAgent (ALWAYS) ==========
+        interaction_agent = InteractionAgent()
+        logger.info("SPAWNED 1 InteractionAgent - identifies local object interactions")
+
+        # ========== PARALLEL RESEARCH: IssueAgents + ExplorerAgent + InteractionAgent ==========
+        num_special_agents = (1 if explorer_agent else 0) + 1  # +1 for Interaction (Loop disabled)
+        logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {num_special_agents} special agents...")
+
+        # Get tools (include inventory and analysis for agents to query)
+        history_tools = history_toolkit.get_tools()
+        mapper_tools = mapper_toolkit.get_tools()
+        inventory_tools = inventory_toolkit.get_tools()
+
+        # Get analysis tools (big picture strategic analysis)
+        from tools.analysis import get_analysis_tools
+        analysis_tools = get_analysis_tools()
+
+        # Combine all tools for IssueAgents (they use combined tools)
+        all_tools = history_tools + mapper_tools + inventory_tools + analysis_tools
+
+        # Build a coroutine for each agent's research+propose pass. Agents are
+        # async-native (chain.ainvoke), so no thread offload is needed.
+        def agent_coroutine(agent):
+            if isinstance(agent, ExplorerAgent):
+                return agent.research_and_propose(
+                    research_agent=research_agent,
+                    decision_llm=decision_llm,
+                    history_tools=history_tools,
+                    mapper_tools=mapper_tools,
+                    current_game_response=current_game_text,
+                    current_score=current_score,
+                    current_moves=current_moves,
                 )
-                logger.info(f"SPAWNED 1 ExplorerAgent - {len(unexplored_directions)} unexplored directions: {unexplored_directions}")
-                logger.info(f"  Mentioned in description: {mentioned_directions if mentioned_directions else 'None'}")
-                logger.info(f"  Best direction chosen: {explorer_agent.best_direction}")
-            else:
-                logger.info("NO ExplorerAgent spawned - all directions explored from this location")
+            if isinstance(agent, LoopDetectionAgent):
+                return agent.research_and_propose(
+                    research_agent=research_agent,
+                    decision_llm=decision_llm,
+                    history_tools=history_tools,
+                    mapper_tools=mapper_tools,
+                    current_location=current_location,
+                    current_game_response=current_game_text,
+                    current_score=current_score,
+                    current_moves=current_moves,
+                )
+            if isinstance(agent, InteractionAgent):
+                return agent.research_and_propose(
+                    research_agent=research_agent,
+                    decision_llm=decision_llm,
+                    history_tools=history_tools,
+                    mapper_tools=mapper_tools,
+                    current_location=current_location,
+                    current_game_response=current_game_text,
+                    current_score=current_score,
+                    current_moves=current_moves,
+                    inventory_tools=inventory_tools,
+                )
+            # IssueAgent
+            return agent.research_and_propose(
+                research_agent=research_agent,
+                decision_llm=decision_llm,
+                history_tools=all_tools,
+                current_location=current_location,
+                current_game_response=current_game_text,
+                current_score=current_score,
+                current_moves=current_moves,
+            )
 
-            # ========== DISABLED: LoopDetectionAgent ==========
-            # loop_detection_agent = LoopDetectionAgent()
-            # logger.info("SPAWNED 1 LoopDetectionAgent - monitors for stuck/oscillating patterns")
-            loop_detection_agent = None  # DISABLED - not useful in practice
-            logger.info("LoopDetectionAgent DISABLED")
+        # Filter out None agents (e.g., loop_detection_agent is disabled)
+        all_agents = [a for a in issue_agents + [explorer_agent, loop_detection_agent, interaction_agent] if a is not None]
 
-            # ========== NEW: Spawn ONE InteractionAgent (ALWAYS) ==========
-            interaction_agent = InteractionAgent()
-            logger.info("SPAWNED 1 InteractionAgent - identifies local object interactions")
+        # Run all agents in parallel — pure async, no threads.
+        if all_agents:
+            await asyncio.gather(*(agent_coroutine(a) for a in all_agents))
 
-            # ========== PARALLEL RESEARCH: IssueAgents + ExplorerAgent + InteractionAgent ==========
-            num_special_agents = (1 if explorer_agent else 0) + 1  # +1 for Interaction (Loop disabled)
-            logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {num_special_agents} special agents...")
+        logger.info(f"All {len(all_agents)} agents completed research in PARALLEL")
+        logger.info("=" * 80)
+        logger.info("SPAWN AGENTS COMPLETE")
+        logger.info("=" * 80)
 
-            # Get tools (include inventory and analysis for agents to query)
-            history_tools = history_toolkit.get_tools()
-            mapper_tools = mapper_toolkit.get_tools()
-            inventory_tools = inventory_toolkit.get_tools()
+        state["issue_agents"] = issue_agents
+        state["explorer_agent"] = explorer_agent  # Single agent, can be None
+        state["loop_detection_agent"] = loop_detection_agent  # Always present
+        state["interaction_agent"] = interaction_agent  # Always present
+        return state
 
-            # Get analysis tools (big picture strategic analysis)
-            from tools.analysis import get_analysis_tools
-            analysis_tools = get_analysis_tools()
-
-            # Combine all tools for IssueAgents (they use combined tools)
-            all_tools = history_tools + mapper_tools + inventory_tools + analysis_tools
-
-            # Execute all agent research in parallel using threads
-            def research_agent_sync(agent):
-                """Synchronous research function to be run in thread"""
-                try:
-                    if isinstance(agent, ExplorerAgent):
-                        logger.info(f"Starting research for ExplorerAgent: {agent.best_direction}")
-                        agent.research_and_propose(
-                            research_agent=research_agent,
-                            decision_llm=decision_llm,
-                            history_tools=history_tools,
-                            mapper_tools=mapper_tools,
-                            current_game_response=current_game_text,
-                            current_score=current_score,
-                            current_moves=current_moves
-                        )
-                        logger.info(f"Research complete for ExplorerAgent -> {agent.proposed_action}")
-                    elif isinstance(agent, LoopDetectionAgent):
-                        logger.info(f"Starting research for LoopDetectionAgent")
-                        agent.research_and_propose(
-                            research_agent=research_agent,
-                            decision_llm=decision_llm,
-                            history_tools=history_tools,
-                            mapper_tools=mapper_tools,
-                            current_location=current_location,
-                            current_game_response=current_game_text,
-                            current_score=current_score,
-                            current_moves=current_moves
-                        )
-                        logger.info(f"Research complete for LoopDetectionAgent -> {agent.proposed_action} (conf: {agent.confidence})")
-                    elif isinstance(agent, InteractionAgent):
-                        logger.info(f"Starting research for InteractionAgent")
-                        agent.research_and_propose(
-                            research_agent=research_agent,
-                            decision_llm=decision_llm,
-                            history_tools=history_tools,
-                            mapper_tools=mapper_tools,
-                            current_location=current_location,
-                            current_game_response=current_game_text,
-                            current_score=current_score,
-                            current_moves=current_moves,
-                            inventory_tools=inventory_tools  # InteractionAgent needs inventory tools
-                        )
-                        logger.info(f"Research complete for InteractionAgent -> {agent.proposed_action} (conf: {agent.confidence})")
-                    else:  # IssueAgent
-                        logger.info(f"Starting research for IssueAgent: '{agent.issue_content}'")
-                        agent.research_and_propose(
-                            research_agent=research_agent,
-                            decision_llm=decision_llm,
-                            history_tools=all_tools,  # IssueAgents get all tools including inventory
-                            current_location=current_location,
-                            current_game_response=current_game_text,
-                            current_score=current_score,
-                            current_moves=current_moves
-                        )
-                        logger.info(f"Research complete for: '{agent.issue_content}' -> {agent.proposed_action}")
-                except Exception as e:
-                    logger.error(f"ERROR in agent research:")
-                    logger.error(f"  Exception type: {type(e).__name__}")
-                    logger.error(f"  Exception message: {str(e)}")
-                    import traceback
-                    logger.error(f"  Traceback:\n{traceback.format_exc()}")
-                    # Set defaults if research fails
-                    agent.proposed_action = "nothing"
-                    agent.confidence = 0
-                    agent.reason = f"Research failed: {str(e)}"
-
-            # Combine all agents (IssueAgents + ExplorerAgent + LoopDetectionAgent + InteractionAgent)
-            # Filter out None agents (e.g., loop_detection_agent is disabled)
-            all_agents = [a for a in issue_agents + [explorer_agent, loop_detection_agent, interaction_agent] if a is not None]
-
-            # Run all agents in parallel using threads
-            if all_agents:
-                import threading
-                threads = []
-                for agent in all_agents:
-                    thread = threading.Thread(target=research_agent_sync, args=(agent,))
-                    thread.start()
-                    threads.append(thread)
-
-                # Wait for all threads to complete
-                for thread in threads:
-                    thread.join()
-
-            logger.info(f"All {len(all_agents)} agents completed research in PARALLEL")
-            logger.info("=" * 80)
-            logger.info("SPAWN AGENTS COMPLETE")
-            logger.info("=" * 80)
-
-            state["issue_agents"] = issue_agents
-            state["explorer_agent"] = explorer_agent  # Single agent, can be None
-            state["loop_detection_agent"] = loop_detection_agent  # Always present
-            state["interaction_agent"] = interaction_agent  # Always present
-            return state
-
-        except Exception as e:
-            logger.error(f"CRITICAL ERROR in spawn_agents_node: {e}", exc_info=True)
-            # Return empty agents on error
-            state["issue_agents"] = []
-            state["explorer_agent"] = None
-            state["loop_detection_agent"] = None
-            state["interaction_agent"] = None
-            return state
 
     return spawn_agents_node
 
@@ -309,7 +276,7 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
     Returns:
         Node function for the graph
     """
-    def research_node(state: DecisionState) -> DecisionState:
+    async def research_node(state: DecisionState) -> DecisionState:
         """
         Research phase: Call history tools to gather context.
         """
@@ -337,9 +304,8 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
         logger.info(f"Current location: {zork_response.LocationName}")
         logger.info(f"Current game response (first 100): {zork_response.Response[:100]}...")
 
-        # Call research agent with timeout and retry
-        from llm_utils import invoke_with_retry
-        response = invoke_with_retry(
+        from llm_utils import ainvoke_with_retry
+        response = await ainvoke_with_retry(
             research_agent,
             research_input,
             operation_name="Research Agent"
@@ -398,21 +364,21 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
     return research_node
 
 
-def create_decision_node(decision_chain: Runnable, history_toolkit, inventory_toolkit, decision_llm):
+def create_decision_node(decision_chain: Runnable):
     """
-    Create the decision node that uses tools then generates structured output.
+    Create the decision node that generates structured output from agent
+    proposals and previously gathered research context.
 
     Args:
         decision_chain: The LangChain decision chain with structured output
-        history_toolkit: HistoryToolkit for accessing tools
-        decision_llm: LLM for tool-calling research phase
 
     Returns:
         Node function for the graph
     """
-    def decision_node(state: DecisionState) -> DecisionState:
+    async def decision_node(state: DecisionState) -> DecisionState:
         """
-        Decision phase: First call tools for context, then generate AdventurerResponse.
+        Decision phase: Generate AdventurerResponse from agent proposals plus
+        research_context already gathered by research_node and per-agent research.
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -432,63 +398,6 @@ def create_decision_node(decision_chain: Runnable, history_toolkit, inventory_to
         logger.info(f"[DecisionAgent] SCORE: {zork_response.Score}, MOVES: {zork_response.Moves}")
         logger.info("[DecisionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # Step 1: Call tools to gather additional context
-        logger.info("[DecisionAgent] TOOL USE PHASE - Gathering strategic context")
-
-        from tools.analysis import get_analysis_tools
-        from langchain_core.prompts import ChatPromptTemplate
-
-        # Get all available tools for decision agent
-        decision_tools = history_toolkit.get_tools() + get_analysis_tools() + inventory_toolkit.get_tools()
-        tools_map = {tool.name: tool for tool in decision_tools}
-
-        # Create tool-calling prompt
-        tool_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are gathering context before making a decision in a text adventure game.
-
-Available tools:
-- get_strategic_analysis: Get the big picture analysis of where we are in the game
-- get_recent_turns: Get recent turn history
-- get_full_summary: Get complete game summary
-- get_current_inventory: Get list of items we're carrying
-
-Call tools to gather context that will help you make a good decision."""),
-            ("human", "Gather strategic context for decision making at {location}.")
-        ])
-
-        # Bind tools and invoke
-        llm_with_tools = decision_llm.bind_tools(decision_tools)
-        tool_chain = tool_prompt | llm_with_tools
-
-        tool_calls_history = []
-        additional_context = ""
-
-        try:
-            tool_response = tool_chain.invoke({"location": zork_response.LocationName})
-
-            # Execute tool calls
-            if hasattr(tool_response, 'tool_calls') and tool_response.tool_calls:
-                for tool_call in tool_response.tool_calls:
-                    tool_name = tool_call['name']
-                    tool_args = tool_call.get('args', {})
-
-                    logger.info(f"[DecisionAgent] Tool call: {tool_name}({tool_args})")
-
-                    if tool_name in tools_map:
-                        tool_result = tools_map[tool_name].invoke(tool_args)
-                        result_str = str(tool_result)
-                        logger.info(f"[DecisionAgent] Tool result: {result_str[:200]}...")
-
-                        tool_calls_history.append({
-                            "tool_name": tool_name,
-                            "input": str(tool_args) if tool_args else "",
-                            "output": result_str
-                        })
-                        additional_context += f"\n\n{tool_name} result:\n{result_str}"
-        except Exception as e:
-            logger.error(f"[DecisionAgent] Tool calling failed: {e}")
-
-        logger.info(f"[DecisionAgent] Made {len(tool_calls_history)} tool calls")
         logger.info("=" * 80)
         logger.info("DECISION - Choosing best action from agent proposals")
         logger.info("=" * 80)
@@ -501,8 +410,11 @@ Call tools to gather context that will help you make a good decision."""),
         logger.info(f"Agent Proposals:\n{agent_proposals_text}")
         logger.info("=" * 80)
 
-        # Combine research context with tool results
-        full_research_context = research_context + additional_context
+        # No additional tool-calling pass here: research_node + per-agent research
+        # already gathered sufficient context. Keep tool_calls_history empty for the
+        # report writer's compatibility.
+        tool_calls_history: list = []
+        full_research_context = research_context
 
         decision_input = {
             "score": zork_response.Score,
@@ -531,9 +443,8 @@ Call tools to gather context that will help you make a good decision."""),
         # Combine system + human for full prompt
         full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[HUMAN]\n{formatted_human}"
 
-        # Invoke decision chain with timeout and retry
-        from llm_utils import invoke_with_retry
-        decision = invoke_with_retry(
+        from llm_utils import ainvoke_with_retry
+        decision = await ainvoke_with_retry(
             decision_chain.with_config(run_name="Decision Agent"),
             decision_input,
             operation_name="Decision Agent"
@@ -759,11 +670,8 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
             logger.info("NO MEMORY TO STORE (remember field empty or whitespace)")
             state["memory_persisted"] = False
 
-        # Decay all existing memory importance scores by 10%
-        # This ensures new issues are prioritized and stale issues lose importance
-        logger.info("Decaying all memory importance scores by 10%...")
-        decay_count = memory_toolkit.state.decay_all_importances(decay_factor=0.9)
-        logger.info(f"Decayed {decay_count} memories")
+        # Decay is now applied lazily on read (see MemoryState.get_top_memories);
+        # no per-turn UPDATE is needed here.
 
         # Update inventory based on this turn
         logger.info("\n" + "-" * 80)
@@ -847,10 +755,11 @@ def create_decision_graph(
         inventory_toolkit,
         research_agent,
         decision_llm,
-        history_toolkit
+        history_toolkit,
+        turn_number_ref,
     ))
     graph.add_node("research", create_research_node(research_agent, history_toolkit))
-    graph.add_node("decide", create_decision_node(decision_chain, history_toolkit, inventory_toolkit, decision_llm))
+    graph.add_node("decide", create_decision_node(decision_chain))
     graph.add_node("close_issues", create_close_issues_node(decision_llm, history_toolkit, memory_toolkit))
     graph.add_node("observe", create_observe_node(decision_llm, research_agent, history_toolkit, memory_toolkit))
     graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit, turn_number_ref))

@@ -1,8 +1,9 @@
 """
-Configuration for LLM models used throughout the application.
+Configuration for LLM models used throutry weghout the application.
 
 CHANGE PROVIDER HERE TO SWITCH BETWEEN OPENAI AND OLLAMA
 """
+from functools import lru_cache
 
 # ═══════════════════════════════════════════════════════════
 # GAME CONFIGURATION
@@ -54,7 +55,7 @@ def get_game_config():
 # ═══════════════════════════════════════════════════════════
 # CHANGE THIS ONE LINE TO SWITCH PROVIDERS
 # ═══════════════════════════════════════════════════════════
-LLM_PROVIDER = "openai"  # Options: "openai" or "ollama"
+LLM_PROVIDER = "ollama"  # Options: "openai" or "ollama"
 
 # ═══════════════════════════════════════════════════════════
 # TIMEOUT AND RETRY CONFIGURATION
@@ -62,14 +63,19 @@ LLM_PROVIDER = "openai"  # Options: "openai" or "ollama"
 LLM_TIMEOUT_SECONDS = 300  # Timeout for each LLM call
 LLM_MAX_RETRIES = 5       # Maximum retry attempts
 
+# Wall-clock budget for the full per-turn decision graph
+# (spawn_agents → research → decide → close → observe → persist).
+# A turn that exceeds this raises asyncio.TimeoutError instead of stalling.
+TURN_BUDGET_SECONDS = 600
+
 
 # ═══════════════════════════════════════════════════════════
 # MODEL CONFIGURATIONS
 # ═══════════════════════════════════════════════════════════
 MODELS = {
     "ollama": {
-        "cheap": "llama3.2",      # Research, summarization, deduplication
-        "expensive": "llama3.3",  # Decision-making, agent proposals
+        "cheap": "qwen2.5:14b",      # Research, summarization, deduplication (~9GB, ~80 tok/s)
+        "expensive": "qwen2.5:14b",  # Decision-making, agent proposals (same model — stays warm, no swap)
     },
     "openai": {
         "cheap": "gpt-5-nano-2025-08-07",
@@ -81,33 +87,26 @@ MODELS = {
 # ═══════════════════════════════════════════════════════════
 # FACTORY FUNCTIONS - Use these everywhere to get LLMs
 # ═══════════════════════════════════════════════════════════
-def get_cheap_llm(temperature: float = 0):
-    """
-    Get the cheap LLM instance.
-
-    Used for: research, summarization, deduplication
-    """
-    if LLM_PROVIDER == "ollama":
+# Clients are memoized per (provider, tier, temperature) so hot paths
+# reuse a single ChatOpenAI/ChatOllama instance — preserving HTTP
+# keepalive and avoiding per-turn client construction overhead.
+@lru_cache(maxsize=None)
+def _build_llm(provider: str, tier: str, temperature: float):
+    if provider == "ollama":
         from langchain_ollama import ChatOllama
-        return ChatOllama(model=MODELS["ollama"]["cheap"], temperature=temperature)
-    elif LLM_PROVIDER == "openai":
+        return ChatOllama(model=MODELS["ollama"][tier], temperature=temperature)
+    elif provider == "openai":
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model=MODELS["openai"]["cheap"], temperature=temperature)
+        return ChatOpenAI(model=MODELS["openai"][tier], temperature=temperature)
     else:
-        raise ValueError(f"Invalid LLM_PROVIDER: {LLM_PROVIDER}")
+        raise ValueError(f"Invalid LLM_PROVIDER: {provider}")
+
+
+def get_cheap_llm(temperature: float = 0):
+    """Get the cheap LLM instance (research, summarization, deduplication)."""
+    return _build_llm(LLM_PROVIDER, "cheap", temperature)
 
 
 def get_expensive_llm(temperature: float = 0):
-    """
-    Get the expensive LLM instance.
-
-    Used for: decision making, agent proposals, observation, issue detection
-    """
-    if LLM_PROVIDER == "ollama":
-        from langchain_ollama import ChatOllama
-        return ChatOllama(model=MODELS["ollama"]["expensive"], temperature=temperature)
-    elif LLM_PROVIDER == "openai":
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model=MODELS["openai"]["expensive"], temperature=temperature)
-    else:
-        raise ValueError(f"Invalid LLM_PROVIDER: {LLM_PROVIDER}")
+    """Get the expensive LLM instance (decisions, proposals, observation)."""
+    return _build_llm(LLM_PROVIDER, "expensive", temperature)

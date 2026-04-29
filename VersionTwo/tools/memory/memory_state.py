@@ -114,18 +114,32 @@ class MemoryState:
 
         return memory
 
-    def get_top_memories(self, limit: int = 10, include_closed: bool = False) -> List[Memory]:
+    def get_top_memories(
+        self,
+        limit: int = 10,
+        include_closed: bool = False,
+        current_turn: Optional[int] = None,
+        decay_factor: float = 0.9,
+    ) -> List[Memory]:
         """
         Get the N most important memories (from database).
 
         Args:
             limit: Maximum number of memories to return
             include_closed: If True, include closed issues (default: False)
+            current_turn: Current turn number for lazy decay; None disables decay
+            decay_factor: Per-turn decay multiplier (default 0.9)
 
         Returns:
-            List of Memory objects
+            List of Memory objects (importance is effective/decayed when current_turn set)
         """
-        db_memories = self.db.get_top_memories(self.session_id, limit, include_closed=include_closed)
+        db_memories = self.db.get_top_memories(
+            self.session_id,
+            limit,
+            include_closed=include_closed,
+            current_turn=current_turn,
+            decay_factor=decay_factor,
+        )
         # Convert database tuples to Memory objects
         # db_memories format: (id, content, importance, turn_number, location)
         memories = []

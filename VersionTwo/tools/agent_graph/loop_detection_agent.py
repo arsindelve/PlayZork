@@ -40,7 +40,7 @@ class LoopDetectionAgent:
         # Tool call history (for reporting)
         self.tool_calls_history: list = []
 
-    def research_and_propose(
+    async def research_and_propose(
         self,
         research_agent: Runnable,
         decision_llm: BaseChatModel,
@@ -95,18 +95,14 @@ class LoopDetectionAgent:
             "game_response": current_game_response
         }
 
-        try:
-            from llm_utils import invoke_with_retry
-            research_response = invoke_with_retry(
-                research_agent.with_config(
-                    run_name="LoopDetectionAgent Research"
-                ),
-                research_input,
-                operation_name="LoopDetectionAgent Research"
-            )
-        except Exception as e:
-            logger.error(f"[LoopDetectionAgent] Research agent failed: {e}")
-            raise
+        from llm_utils import ainvoke_with_retry
+        research_response = await ainvoke_with_retry(
+            research_agent.with_config(
+                run_name="LoopDetectionAgent Research"
+            ),
+            research_input,
+            operation_name="LoopDetectionAgent Research"
+        )
 
         # Execute tool calls to get raw history
         raw_history = ""
@@ -229,49 +225,42 @@ class LoopDetectionAgent:
 
         analysis_chain = analysis_prompt | decision_llm.with_structured_output(LoopDetectionResponse)
 
-        try:
-            from llm_utils import invoke_with_retry
-            response = invoke_with_retry(
-                analysis_chain.with_config(
-                    run_name="LoopDetectionAgent Analysis"
-                ),
-                {
-                    "current_location": current_location,
-                    "current_score": current_score,
-                    "available_exits": ", ".join(available_exits) if available_exits else "None available",
-                    "raw_history": raw_history[:3000]  # Truncate if too long
-                },
-                operation_name="LoopDetectionAgent Analysis"
-            )
+        response = await ainvoke_with_retry(
+            analysis_chain.with_config(
+                run_name="LoopDetectionAgent Analysis"
+            ),
+            {
+                "current_location": current_location,
+                "current_score": current_score,
+                "available_exits": ", ".join(available_exits) if available_exits else "None available",
+                "raw_history": raw_history[:3000]  # Truncate if too long
+            },
+            operation_name="LoopDetectionAgent Analysis"
+        )
 
-            # Store results
-            self.loop_detected = response.loop_detected
-            self.loop_type = response.loop_type
-            self.proposed_action = response.proposed_action
-            self.reason = response.reason
-            self.confidence = response.confidence
+        # Store results
+        self.loop_detected = response.loop_detected
+        self.loop_type = response.loop_type
+        self.proposed_action = response.proposed_action
+        self.reason = response.reason
+        self.confidence = response.confidence
 
-            # Store location and turn for invalidation tracking (if loop detected)
-            if self.loop_detected:
-                self.last_detection_location = current_location
-                self.last_detection_turn = current_moves
+        # Store location and turn for invalidation tracking (if loop detected)
+        if self.loop_detected:
+            self.last_detection_location = current_location
+            self.last_detection_turn = current_moves
 
-            # Log proposal summary
-            logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            if self.loop_detected:
-                logger.info(f"[LoopDetectionAgent] PROPOSAL SUMMARY - ⚠️ LOOP DETECTED")
-                logger.info(f"[LoopDetectionAgent] Loop Type: {self.loop_type}")
-                logger.info(f"[LoopDetectionAgent] Proposed Action: '{self.proposed_action}' (confidence: {self.confidence}/100)")
-                if self.reason:
-                    logger.info(f"[LoopDetectionAgent] Reason: {self.reason}")
-            else:
-                logger.info(f"[LoopDetectionAgent] PROPOSAL SUMMARY - No loop detected")
-                logger.info(f"[LoopDetectionAgent] Confidence: 0/100 (no action needed)")
-            logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-        except Exception as e:
-            logger.error(f"[LoopDetectionAgent] Analysis failed: {e}")
-            raise
+        logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        if self.loop_detected:
+            logger.info(f"[LoopDetectionAgent] PROPOSAL SUMMARY - ⚠️ LOOP DETECTED")
+            logger.info(f"[LoopDetectionAgent] Loop Type: {self.loop_type}")
+            logger.info(f"[LoopDetectionAgent] Proposed Action: '{self.proposed_action}' (confidence: {self.confidence}/100)")
+            if self.reason:
+                logger.info(f"[LoopDetectionAgent] Reason: {self.reason}")
+        else:
+            logger.info(f"[LoopDetectionAgent] PROPOSAL SUMMARY - No loop detected")
+            logger.info(f"[LoopDetectionAgent] Confidence: 0/100 (no action needed)")
+        logger.info(f"[LoopDetectionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     def _parse_turns(self, raw_history: str) -> List[dict]:
         """

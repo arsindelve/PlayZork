@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, field
 from typing import Optional, List, Any
 
@@ -94,6 +95,11 @@ class GameSession:
         # The report should show agents/decision that LED to the current command
         self.pending_decision = PendingDecision()
 
+        # Post-decision analyzers + report writer run as background tasks so the
+        # next turn doesn't wait on them. Tracked here so we can drain them at
+        # shutdown and surface any failures.
+        self._background_tasks: List[asyncio.Task] = []
+
     async def play(self):
         """
         Main gameplay loop. Runs indefinitely until interrupted.
@@ -120,6 +126,9 @@ class GameSession:
         except Exception as e:
             print(f"\nAn error occurred during gameplay: {e}")
         finally:
+            # Drain pending post-turn analyzers/reports so we don't lose the
+            # final turns' output. Failures are logged but do not block exit.
+            await self._drain_background_tasks()
             # Always stop the display cleanly
             display.stop()
 
@@ -158,7 +167,7 @@ class GameSession:
             # The graph handles: research, decision, issue closing, observation, and memory persistence
             (player_response, issue_agents, explorer_agent, loop_detection_agent, interaction_agent,
              issue_closed_response, observer_response, decision_prompt,
-             research_tool_calls, decision_tool_calls) = self.adventurer_service.handle_user_input(
+             research_tool_calls, decision_tool_calls) = await self.adventurer_service.handle_user_input(
                 zork_response,
                 self.turn_number
             )
@@ -208,78 +217,23 @@ class GameSession:
             transitions = self.mapper_toolkit.state.get_all_transitions()
             display.update_map_from_transitions(transitions)
 
-            # Step 7b: Generate big picture analysis (saved to database for future use)
-            from tools.analysis import BigPictureAnalyzer, DeathAnalyzer
-            # Get current inventory for the analyzer to know current state
+            # Snapshot current inventory once for the background task to use.
             current_inventory = self.inventory_toolkit.state.get_items()
-            big_picture_analyzer = BigPictureAnalyzer(
-                self.history_toolkit,
-                self.session_id,
-                self.db,
+
+            # Step 7b–8: Big-picture analysis, death analysis, turn report, and
+            # session index are all downstream of the decision and read by no
+            # later turn (except strategic_analysis, which tolerates a one-turn
+            # lag through its existing "latest" lookup). Dispatch them as a
+            # background task so the next turn doesn't wait on this LLM + I/O.
+            self._dispatch_post_turn_io(
+                turn_number=self.turn_number,
+                input_text=input_text,
+                zork_response=zork_response,
+                decision_for_this_command=decision_for_this_command,
+                recent_summary=recent_summary,
+                long_summary=long_summary,
                 current_inventory=current_inventory,
-                current_location=zork_response.LocationName
-            )
-            big_picture_analysis = big_picture_analyzer.analyze(self.turn_number)
-
-            # Step 7c: Analyze for death (saved to database if death detected)
-            death_analyzer = DeathAnalyzer(
-                self.history_toolkit,
-                self.session_id,
-                self.db
-            )
-            death_analysis = death_analyzer.analyze_turn(
-                turn_number=self.turn_number,
-                game_response=zork_response.Response,
-                player_command=input_text,
-                location=zork_response.LocationName,
-                score=zork_response.Score,
-                moves=zork_response.Moves
-            )
-            # Get all deaths for the report
-            all_deaths = death_analyzer.get_all_deaths()
-
-            # Step 8: Write turn report for analysis and debugging
-            from tools.reporting import TurnReportWriter
-            report_writer = TurnReportWriter()
-
-            # current_inventory already fetched above for BigPictureAnalyzer
-
-            # Use decision_for_this_command for agents/decision - these are the agents that
-            # LED to the current command, not the agents planning the NEXT command
-            report_writer.write_turn_report(
-                session_id=self.session_id,
-                turn_number=self.turn_number,
-                location=zork_response.LocationName,
-                score=zork_response.Score,
-                moves=zork_response.Moves,
-                game_response=zork_response.Response,
-                player_command=input_text,  # The command that was just executed
-                player_reasoning=decision_for_this_command.reasoning,  # Reasoning that LED to this command
-                issue_agents=decision_for_this_command.issue_agents,  # Agents that decided this command
-                explorer_agent=decision_for_this_command.explorer_agent,
-                loop_detection_agent=decision_for_this_command.loop_detection_agent,
-                interaction_agent=decision_for_this_command.interaction_agent,
-                decision_prompt=decision_for_this_command.decision_prompt,
-                decision=decision_for_this_command.decision,
-                recent_history=recent_summary,
-                complete_history=long_summary,
-                current_inventory=current_inventory,
-                big_picture_analysis=big_picture_analysis,
-                research_tool_calls=decision_for_this_command.research_tool_calls,
-                decision_tool_calls=decision_for_this_command.decision_tool_calls,
-                all_deaths=all_deaths,
-                map_transitions=transitions
-            )
-
-            # Update master session index
-            report_writer.update_session_index(
-                session_id=self.session_id,
-                turn_number=self.turn_number,
-                location=zork_response.LocationName,
-                score=zork_response.Score,
-                moves=zork_response.Moves,
-                player_command=input_text,  # The command that was just executed (not the next one)
-                game_response=zork_response.Response
+                transitions=transitions,
             )
 
             return player_response.command
@@ -288,6 +242,141 @@ class GameSession:
             self.logger.log_error(str(e))
             print(f"\nAn error occurred while processing turn: {e}")
             raise  # Re-raise to be caught by play() method
+
+    def _dispatch_post_turn_io(
+        self,
+        *,
+        turn_number: int,
+        input_text: str,
+        zork_response,
+        decision_for_this_command: PendingDecision,
+        recent_summary: str,
+        long_summary: str,
+        current_inventory: list,
+        transitions,
+    ) -> None:
+        """Schedule the post-decision analyzers + report writer as a background task.
+
+        Inputs are captured by value so the next turn can mutate state freely
+        while this task runs. Sync work is offloaded onto a worker thread via
+        asyncio.to_thread so it doesn't block the event loop.
+        """
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                self._run_post_turn_io,
+                turn_number,
+                input_text,
+                zork_response,
+                decision_for_this_command,
+                recent_summary,
+                long_summary,
+                current_inventory,
+                transitions,
+            )
+        )
+        task.add_done_callback(self._on_background_task_done)
+        self._background_tasks.append(task)
+
+    def _run_post_turn_io(
+        self,
+        turn_number: int,
+        input_text: str,
+        zork_response,
+        decision_for_this_command: PendingDecision,
+        recent_summary: str,
+        long_summary: str,
+        current_inventory: list,
+        transitions,
+    ) -> None:
+        """Synchronous post-turn work: big-picture analysis, death analysis,
+        turn report, session index. Runs on a worker thread."""
+        from tools.analysis import BigPictureAnalyzer, DeathAnalyzer
+        from tools.reporting import TurnReportWriter
+
+        big_picture_analyzer = BigPictureAnalyzer(
+            self.history_toolkit,
+            self.session_id,
+            self.db,
+            current_inventory=current_inventory,
+            current_location=zork_response.LocationName,
+        )
+        big_picture_analysis = big_picture_analyzer.analyze(turn_number)
+
+        death_analyzer = DeathAnalyzer(
+            self.history_toolkit,
+            self.session_id,
+            self.db,
+        )
+        death_analyzer.analyze_turn(
+            turn_number=turn_number,
+            game_response=zork_response.Response,
+            player_command=input_text,
+            location=zork_response.LocationName,
+            score=zork_response.Score,
+            moves=zork_response.Moves,
+        )
+        all_deaths = death_analyzer.get_all_deaths()
+
+        report_writer = TurnReportWriter()
+        report_writer.write_turn_report(
+            session_id=self.session_id,
+            turn_number=turn_number,
+            location=zork_response.LocationName,
+            score=zork_response.Score,
+            moves=zork_response.Moves,
+            game_response=zork_response.Response,
+            player_command=input_text,
+            player_reasoning=decision_for_this_command.reasoning,
+            issue_agents=decision_for_this_command.issue_agents,
+            explorer_agent=decision_for_this_command.explorer_agent,
+            loop_detection_agent=decision_for_this_command.loop_detection_agent,
+            interaction_agent=decision_for_this_command.interaction_agent,
+            decision_prompt=decision_for_this_command.decision_prompt,
+            decision=decision_for_this_command.decision,
+            recent_history=recent_summary,
+            complete_history=long_summary,
+            current_inventory=current_inventory,
+            big_picture_analysis=big_picture_analysis,
+            research_tool_calls=decision_for_this_command.research_tool_calls,
+            decision_tool_calls=decision_for_this_command.decision_tool_calls,
+            all_deaths=all_deaths,
+            map_transitions=transitions,
+        )
+        report_writer.update_session_index(
+            session_id=self.session_id,
+            turn_number=turn_number,
+            location=zork_response.LocationName,
+            score=zork_response.Score,
+            moves=zork_response.Moves,
+            player_command=input_text,
+            game_response=zork_response.Response,
+        )
+
+    def _on_background_task_done(self, task: asyncio.Task) -> None:
+        """Surface background-task failures via the logger and drop the task
+        from the tracking list so it can be GC'd."""
+        try:
+            self._background_tasks.remove(task)
+        except ValueError:
+            pass
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            self.logger.logger.error(
+                "Post-turn background task failed",
+                exc_info=exc,
+            )
+
+    async def _drain_background_tasks(self) -> None:
+        """Wait for all scheduled post-turn tasks to finish."""
+        if not self._background_tasks:
+            return
+        pending = list(self._background_tasks)
+        self.logger.logger.info(
+            f"Draining {len(pending)} pending post-turn task(s) before shutdown..."
+        )
+        await asyncio.gather(*pending, return_exceptions=True)
 
     async def _bootstrap_inventory(self):
         """

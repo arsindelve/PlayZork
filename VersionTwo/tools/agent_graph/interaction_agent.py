@@ -46,7 +46,7 @@ class InteractionAgent:
         # Tool call history (for reporting)
         self.tool_calls_history: list = []
 
-    def research_and_propose(
+    async def research_and_propose(
         self,
         research_agent: Runnable,
         decision_llm: BaseChatModel,
@@ -106,8 +106,8 @@ class InteractionAgent:
             }
 
             try:
-                from llm_utils import invoke_with_retry
-                research_response = invoke_with_retry(
+                from llm_utils import ainvoke_with_retry
+                research_response = await ainvoke_with_retry(
                     research_agent.with_config(
                         run_name="InteractionAgent Inventory Check",
                         configurable={"tools": all_tools}
@@ -186,44 +186,34 @@ class InteractionAgent:
 
         analysis_chain = analysis_prompt | decision_llm.with_structured_output(InteractionResponse)
 
-        try:
-            from llm_utils import invoke_with_retry
-            response = invoke_with_retry(
-                analysis_chain.with_config(
-                    run_name="InteractionAgent LLM Analysis"
-                ),
-                {
-                    "current_location": current_location,
-                    "current_score": current_score,
-                    "inventory": ", ".join(inventory_list) if inventory_list else "Your inventory is empty.",
-                    "game_response": current_game_response[:1000]  # Truncate if too long
-                },
-                operation_name="InteractionAgent LLM Analysis"
-            )
+        response = await ainvoke_with_retry(
+            analysis_chain.with_config(
+                run_name="InteractionAgent LLM Analysis"
+            ),
+            {
+                "current_location": current_location,
+                "current_score": current_score,
+                "inventory": ", ".join(inventory_list) if inventory_list else "Your inventory is empty.",
+                "game_response": current_game_response[:1000]  # Truncate if too long
+            },
+            operation_name="InteractionAgent LLM Analysis"
+        )
 
-            # Store results
-            self.proposed_action = response.proposed_action
-            self.reason = response.reason
-            self.confidence = response.confidence
-            self.detected_objects = response.detected_objects or []
-            self.inventory_items = response.inventory_items or []
+        # Store results
+        self.proposed_action = response.proposed_action
+        self.reason = response.reason
+        self.confidence = response.confidence
+        self.detected_objects = response.detected_objects or []
+        self.inventory_items = response.inventory_items or []
 
-            # Log proposal summary
-            logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            logger.info(f"[InteractionAgent] PROPOSAL SUMMARY - LLM")
-            logger.info(f"[InteractionAgent] Proposed Action: '{self.proposed_action}' (confidence: {self.confidence}/100)")
-            logger.info(f"[InteractionAgent] Detected Objects: {self.detected_objects}")
-            if self.reason:
-                logger.info(f"[InteractionAgent] Reason: {self.reason}")
-            logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-        except Exception as e:
-            logger.error(f"[InteractionAgent] LLM analysis failed: {e}")
-            # Set safe defaults
-            self.proposed_action = "nothing"
-            self.confidence = 0
-            self.reason = f"Analysis failed: {str(e)}"
-            raise
+        # Log proposal summary
+        logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[InteractionAgent] PROPOSAL SUMMARY - LLM")
+        logger.info(f"[InteractionAgent] Proposed Action: '{self.proposed_action}' (confidence: {self.confidence}/100)")
+        logger.info(f"[InteractionAgent] Detected Objects: {self.detected_objects}")
+        if self.reason:
+            logger.info(f"[InteractionAgent] Reason: {self.reason}")
+        logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     def _deterministic_parse(self, game_response: str, inventory: List[str]) -> Optional[Dict]:
         """

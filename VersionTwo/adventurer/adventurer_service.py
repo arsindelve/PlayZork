@@ -2,6 +2,8 @@ from zork.zork_api_response import ZorkApiResponse
 from .prompt_library import PromptLibrary
 from .adventurer_response import AdventurerResponse
 
+import asyncio
+
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from langchain_core.runnables import Runnable
 from tools.history import HistoryToolkit
@@ -9,7 +11,7 @@ from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
 from tools.agent_graph import create_decision_graph, ExplorerAgent, LoopDetectionAgent, InteractionAgent, IssueClosedResponse, ObserverResponse
 from game_logger import GameLogger
-from config import get_cheap_llm, get_expensive_llm
+from config import get_cheap_llm, get_expensive_llm, TURN_BUDGET_SECONDS
 from typing import List, Tuple, Optional
 
 
@@ -107,7 +109,7 @@ class AdventurerService:
         # Chain with structured output (using shared decision_llm)
         return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str, List, List]:
+    async def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str, List, List]:
         """
         Execute the LangGraph decision flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
 
@@ -147,9 +149,13 @@ class AdventurerService:
         }
 
         # Execute the graph (SpawnAgents → Research → Decide → CloseIssues → Observe → Persist)
-        # Each agent logs its own activities and summaries
+        # Each agent logs its own activities and summaries.
+        # A per-turn deadline guards against any hung agent stalling the run.
         self.logger.log_research_start()
-        final_state = self.decision_graph.invoke(initial_state)
+        final_state = await asyncio.wait_for(
+            self.decision_graph.ainvoke(initial_state),
+            timeout=TURN_BUDGET_SECONDS,
+        )
         self.logger.log_research_complete(final_state["research_context"])
 
         # Extract decision from final state

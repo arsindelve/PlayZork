@@ -2,6 +2,7 @@
 LLM utility functions for robust invocation with retry logic and timeout handling.
 """
 
+import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import time
@@ -71,5 +72,64 @@ def invoke_with_retry(chain, input_data, operation_name: str = "LLM call", timeo
 
         except TimeoutError:
             raise  # Re-raise timeout error
+
+    raise Exception(f"{operation_name} failed after {max_retries} attempts")
+
+
+async def ainvoke_with_retry(
+    chain,
+    input_data,
+    operation_name: str = "LLM call",
+    timeout_seconds: int = None,
+    max_retries: int = None,
+):
+    """
+    Async counterpart to invoke_with_retry.
+
+    Calls chain.ainvoke(input_data) under asyncio.wait_for for timeout, with
+    exponential-backoff retries on timeout/exception. No threads, no nested
+    pools — the underlying httpx-based LLM client is async-native.
+
+    Args:
+        chain: The LangChain chain/agent (must implement .ainvoke).
+        input_data: Input passed to the chain.
+        operation_name: Human-readable label for logging.
+        timeout_seconds: Per-attempt timeout (default: LLM_TIMEOUT_SECONDS).
+        max_retries: Maximum attempts (default: LLM_MAX_RETRIES).
+
+    Returns:
+        Result of chain.ainvoke.
+
+    Raises:
+        asyncio.TimeoutError or the underlying exception after max_retries.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = LLM_TIMEOUT_SECONDS
+    if max_retries is None:
+        max_retries = LLM_MAX_RETRIES
+
+    logger = logging.getLogger(__name__)
+
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"[{operation_name}] Attempt {attempt}/{max_retries} (timeout: {timeout_seconds}s)")
+        try:
+            result = await asyncio.wait_for(
+                chain.ainvoke(input_data),
+                timeout=timeout_seconds,
+            )
+            logger.info(f"[{operation_name}] Success on attempt {attempt}")
+            return result
+        except asyncio.TimeoutError:
+            logger.warning(f"[{operation_name}] Timeout after {timeout_seconds}s on attempt {attempt}")
+            if attempt >= max_retries:
+                raise
+        except Exception as e:
+            logger.error(f"[{operation_name}] Error on attempt {attempt}: {e}")
+            if attempt >= max_retries:
+                raise
+
+        wait_time = 2 ** attempt
+        logger.info(f"[{operation_name}] Waiting {wait_time}s before retry...")
+        await asyncio.sleep(wait_time)
 
     raise Exception(f"{operation_name} failed after {max_retries} attempts")

@@ -65,7 +65,7 @@ class IssueAgent:
             f"Discovered: Turn {self.turn_number}"
         )
 
-    def research_and_propose(
+    async def research_and_propose(
         self,
         research_agent: Runnable,
         decision_llm: BaseChatModel,
@@ -133,21 +133,16 @@ class IssueAgent:
             "game_response": current_game_response
         }
 
-        logger.info(f"[IssueAgent] Calling research_agent.invoke()...")
-        # Call research agent (can call tools) with timeout and retry
-        try:
-            from llm_utils import invoke_with_retry
-            research_response = invoke_with_retry(
-                research_agent.with_config(
-                    run_name=f"IssueAgent Research: {self.issue_content[:60]}"
-                ),
-                research_input,
-                operation_name=f"IssueAgent Research: {self.issue_content[:40]}"
-            )
-            logger.info(f"[IssueAgent ID:{self.memory.id}] Research agent responded successfully")
-        except Exception as e:
-            logger.error(f"[IssueAgent ID:{self.memory.id}] Research agent failed: {e}")
-            raise
+        logger.info(f"[IssueAgent] Calling research_agent.ainvoke()...")
+        from llm_utils import ainvoke_with_retry
+        research_response = await ainvoke_with_retry(
+            research_agent.with_config(
+                run_name=f"IssueAgent Research: {self.issue_content[:60]}"
+            ),
+            research_input,
+            operation_name=f"IssueAgent Research: {self.issue_content[:40]}"
+        )
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Research agent responded successfully")
 
         # Execute tool calls if present
         if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
@@ -226,28 +221,23 @@ class IssueAgent:
         # Prepare inventory summary for proposal
         inventory_summary = ", ".join(inventory_items) if inventory_items else "empty"
 
-        try:
-            from llm_utils import invoke_with_retry
-            proposal = invoke_with_retry(
-                proposal_chain.with_config(
-                    run_name=f"IssueAgent Proposal: {self.issue_content[:60]}"
-                ),
-                {
-                    "issue": self.issue_content,
-                    "issue_location": self.location or "Unknown",
-                    "current_location": current_location,
-                    "location_status": location_status,
-                    "navigation_direction": navigation_direction,
-                    "inventory_summary": inventory_summary,
-                    "game_response": current_game_response,
-                    "research_context": self.research_context
-                },
-                operation_name=f"IssueAgent Proposal: {self.issue_content[:40]}"
-            )
-            logger.info(f"[IssueAgent ID:{self.memory.id}] Proposal generated: {proposal.proposed_action} (confidence: {proposal.confidence})")
-        except Exception as e:
-            logger.error(f"[IssueAgent ID:{self.memory.id}] Proposal generation failed: {e}")
-            raise
+        proposal = await ainvoke_with_retry(
+            proposal_chain.with_config(
+                run_name=f"IssueAgent Proposal: {self.issue_content[:60]}"
+            ),
+            {
+                "issue": self.issue_content,
+                "issue_location": self.location or "Unknown",
+                "current_location": current_location,
+                "location_status": location_status,
+                "navigation_direction": navigation_direction,
+                "inventory_summary": inventory_summary,
+                "game_response": current_game_response,
+                "research_context": self.research_context
+            },
+            operation_name=f"IssueAgent Proposal: {self.issue_content[:40]}"
+        )
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Proposal generated: {proposal.proposed_action} (confidence: {proposal.confidence})")
 
         # Store proposal
         self.proposed_action = proposal.proposed_action

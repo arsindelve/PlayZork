@@ -426,40 +426,61 @@ class DatabaseManager:
         self,
         session_id: str,
         limit: int = 10,
-        include_closed: bool = False
+        include_closed: bool = False,
+        current_turn: Optional[int] = None,
+        decay_factor: float = 0.9,
     ) -> List[Tuple[int, str, int, int, str]]:
         """
         Get top N memories by importance.
+
+        When `current_turn` is provided, importance is decayed lazily on read:
+            effective = stored_importance * decay_factor ** max(0, current_turn - turn_number)
+        This avoids the O(N) per-turn UPDATE that the old eager-decay path did.
 
         Args:
             session_id: Game session ID
             limit: Maximum number of memories to return
             include_closed: If True, include closed issues (used for duplicate detection)
+            current_turn: Current turn number for lazy decay; None disables decay
+            decay_factor: Per-turn decay multiplier (0.9 = 10% reduction)
 
         Returns:
-            List of (id, content, importance, turn_number, location)
+            List of (id, content, importance, turn_number, location).
+            `importance` is the *effective* (decayed) score when current_turn is set.
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
+            if current_turn is not None:
+                # Lazy decay: compute effective importance in SQL.
+                # MAX(0, ...) guards against memories whose turn_number > current_turn
+                # (shouldn't happen, but safe).
+                importance_expr = (
+                    "CAST(importance * pow(?, MAX(0, ? - turn_number)) AS INTEGER)"
+                )
+                params_prefix: tuple = (decay_factor, current_turn)
+            else:
+                importance_expr = "importance"
+                params_prefix = ()
+
             if include_closed:
-                # Include all memories (open AND closed) - for duplicate checking
                 cursor.execute(
-                    """SELECT id, content, importance, turn_number, location
+                    f"""SELECT id, content, {importance_expr} AS effective_importance,
+                              turn_number, location
                        FROM memories
                        WHERE session_id = ?
-                       ORDER BY importance DESC, turn_number DESC
+                       ORDER BY effective_importance DESC, turn_number DESC
                        LIMIT ?""",
-                    (session_id, limit)
+                    (*params_prefix, session_id, limit),
                 )
             else:
-                # Only open memories - for agent spawning
                 cursor.execute(
-                    """SELECT id, content, importance, turn_number, location
+                    f"""SELECT id, content, {importance_expr} AS effective_importance,
+                              turn_number, location
                        FROM memories
                        WHERE session_id = ? AND (closed = 0 OR closed IS NULL)
-                       ORDER BY importance DESC, turn_number DESC
+                       ORDER BY effective_importance DESC, turn_number DESC
                        LIMIT ?""",
-                    (session_id, limit)
+                    (*params_prefix, session_id, limit),
                 )
             return [(row[0], row[1], row[2], row[3], row[4])
                     for row in cursor.fetchall()]

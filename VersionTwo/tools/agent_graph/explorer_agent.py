@@ -124,7 +124,7 @@ class ExplorerAgent:
         # Cap at 95 (never 100% certain)
         return min(base + bonus, 95)
 
-    def research_and_propose(
+    async def research_and_propose(
         self,
         research_agent: Runnable,
         decision_llm: BaseChatModel,
@@ -159,50 +159,44 @@ class ExplorerAgent:
             "game_response": current_game_response
         }
 
-        try:
-            from llm_utils import invoke_with_retry
-            research_response = invoke_with_retry(
-                research_agent.with_config(
-                    run_name=f"ExplorerAgent Research: {self.best_direction} from {self.current_location}"
-                ),
-                research_input,
-                operation_name="ExplorerAgent Research"
-            )
+        from llm_utils import ainvoke_with_retry
+        research_response = await ainvoke_with_retry(
+            research_agent.with_config(
+                run_name=f"ExplorerAgent Research: {self.best_direction} from {self.current_location}"
+            ),
+            research_input,
+            operation_name="ExplorerAgent Research"
+        )
 
-            # Execute tool calls if present
-            if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
-                tool_results = []
-                all_tools = history_tools + mapper_tools
-                tools_map = {tool.name: tool for tool in all_tools}
+        # Execute tool calls if present
+        if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
+            tool_results = []
+            all_tools = history_tools + mapper_tools
+            tools_map = {tool.name: tool for tool in all_tools}
 
-                logger.info(f"[ExplorerAgent:{self.best_direction}] Made {len(research_response.tool_calls)} tool calls:")
+            logger.info(f"[ExplorerAgent:{self.best_direction}] Made {len(research_response.tool_calls)} tool calls:")
 
-                for tool_call in research_response.tool_calls:
-                    tool_name = tool_call['name']
-                    tool_args = tool_call.get('args', {})
+            for tool_call in research_response.tool_calls:
+                tool_name = tool_call['name']
+                tool_args = tool_call.get('args', {})
 
-                    logger.info(f"[ExplorerAgent:{self.best_direction}]   -> {tool_name}({tool_args})")
+                logger.info(f"[ExplorerAgent:{self.best_direction}]   -> {tool_name}({tool_args})")
 
-                    if tool_name in tools_map:
-                        tool_result = tools_map[tool_name].invoke(tool_args)
-                        logger.info(f"[ExplorerAgent:{self.best_direction}]      Result: {str(tool_result)[:150]}...")
-                        tool_results.append(f"{tool_name} result: {tool_result}")
+                if tool_name in tools_map:
+                    tool_result = tools_map[tool_name].invoke(tool_args)
+                    logger.info(f"[ExplorerAgent:{self.best_direction}]      Result: {str(tool_result)[:150]}...")
+                    tool_results.append(f"{tool_name} result: {tool_result}")
 
-                        # Store tool call history for reporting
-                        self.tool_calls_history.append({
-                            "tool_name": tool_name,
-                            "input": str(tool_args),
-                            "output": str(tool_result)
-                        })
+                    self.tool_calls_history.append({
+                        "tool_name": tool_name,
+                        "input": str(tool_args),
+                        "output": str(tool_result)
+                    })
 
-                self.research_context = "\n\n".join(tool_results) if tool_results else "No tools called"
-            else:
-                logger.info(f"[ExplorerAgent:{self.best_direction}] No tool calls made")
-                self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
-
-        except Exception as e:
-            logger.error(f"[ExplorerAgent] Research failed: {e}")
-            raise
+            self.research_context = "\n\n".join(tool_results) if tool_results else "No tools called"
+        else:
+            logger.info(f"[ExplorerAgent:{self.best_direction}] No tool calls made")
+            self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
 
         # Calculate confidence for the chosen direction
         self.confidence = self._calculate_confidence(self.best_direction)
@@ -219,34 +213,27 @@ class ExplorerAgent:
             ("human", PromptLibrary.get_explorer_agent_human_prompt())
         ])
 
-        try:
-            from llm_utils import invoke_with_retry
-            proposal_chain = proposal_prompt | decision_llm.with_structured_output(ExplorerProposal)
+        proposal_chain = proposal_prompt | decision_llm.with_structured_output(ExplorerProposal)
 
-            proposal = invoke_with_retry(
-                proposal_chain.with_config(
-                    run_name=f"ExplorerAgent Proposal: {self.best_direction} from {self.current_location}"
-                ),
-                {
-                    "best_direction": self.best_direction,
-                    "current_location": self.current_location,
-                    "unexplored_count": len(self.unexplored_directions),
-                    "all_unexplored": ", ".join(self.unexplored_directions),
-                    "mentioned_dirs": ", ".join(self.mentioned_directions) if self.mentioned_directions else "None",
-                    "confidence": self.confidence,
-                    "game_response": current_game_response,
-                    "research_context": self.research_context
-                },
-                operation_name="ExplorerAgent Proposal"
-            )
+        proposal = await ainvoke_with_retry(
+            proposal_chain.with_config(
+                run_name=f"ExplorerAgent Proposal: {self.best_direction} from {self.current_location}"
+            ),
+            {
+                "best_direction": self.best_direction,
+                "current_location": self.current_location,
+                "unexplored_count": len(self.unexplored_directions),
+                "all_unexplored": ", ".join(self.unexplored_directions),
+                "mentioned_dirs": ", ".join(self.mentioned_directions) if self.mentioned_directions else "None",
+                "confidence": self.confidence,
+                "game_response": current_game_response,
+                "research_context": self.research_context
+            },
+            operation_name="ExplorerAgent Proposal"
+        )
 
-            self.proposed_action = proposal.proposed_action
-            self.reason = proposal.reason
-            # Confidence already calculated
-
-        except Exception as e:
-            logger.error(f"[ExplorerAgent] Proposal generation failed: {e}")
-            raise
+        self.proposed_action = proposal.proposed_action
+        self.reason = proposal.reason
 
         # Log proposal summary
         logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
