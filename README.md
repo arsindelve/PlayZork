@@ -198,7 +198,7 @@ This work reports on a preliminary prototype and intentionally limits the scope 
 * **No task completion:** The current system does not solve *Zork I* and becomes stuck early in gameplay. No claims are made about end-to-end task completion.
 * **Limited evaluation:** Results are qualitative and based on a small number of runs. No statistical guarantees or comparative benchmarks are provided.
 * **Model dependence:** Experiments use a single locally hosted LLM configuration; results may not generalize across models or scales.
-* **Manual issue definition:** Issue agents are currently defined manually; automatic discovery, merging, and retirement of issues is not yet implemented.
+* **Unvalidated issue lifecycle:** Issue discovery, semantic de-duplication, and retirement are automated via LLM observers, but the quality of that lifecycle (missed issues, premature closure, duplicate leakage) has not been measured.
 * **Unmeasured tradeoffs:** While the architecture makes exploration explicit, optimal weighting between exploration and exploitation remains an open question.
 
 These limitations are not incidental; they define the boundary of the present contribution, which is architectural and methodological rather than performance-driven.
@@ -225,26 +225,25 @@ This paper positions itself as an architectural and methodological contribution,
 
 ---
 
-## Current Status (v0.1-arxiv)
+## Current Status
 
-See `STATUS.md` for detailed system status.
+See `STATUS.md` for dated development logs. The tag `v0.1-arxiv` (the archived Zenodo deposit) is a **pre–multi-agent baseline**; the architecture described above is now implemented on `main`.
 
 **Working:**
 
-* Two-phase agent architecture (research → decision)
-* Tool-based memory access (history and memory toolkits)
-* Local LLM inference (Llama 3.3 via Ollama)
-* Structured output enforcement
-* State persistence across turns
+* Multi-agent deliberation per turn: up to 5 IssueAgents + ExplorerAgent + InteractionAgent propose in parallel; a separate Decision Agent arbitrates
+* Automatic issue lifecycle: an ObserverAgent discovers new strategic issues, semantic de-duplication merges them, an IssueClosedAgent retires resolved ones, and importance decays lazily over turns
+* Map graph with BFS pathfinding and blocked-direction tracking (failed movements are recorded and never re-proposed)
+* Inventory tracking, death analysis with lessons-learned persistence, and dual (recent + long-running) history summaries
+* SQLite persistence with session resumption; per-turn HTML reports of every proposal and decision
+* Structured output enforcement throughout; local LLM inference (Qwen 2.5 14B via Ollama) or OpenAI
+* Multiple game backends: *Zork I*, *Planetfall* (hosted APIs), and a local Escape Room test game
 
 **Not Working:**
 
 * Does not solve *Zork I* (gets stuck early)
-* Shallow tool usage in research phase
-* Memory tools underutilized
-* Command loops not fully prevented
-
-This tag represents a **pre–multi-agent baseline**: tool infrastructure in place, single-agent architecture stable, but reasoning quality insufficient for sustained progress.
+* Command loops not fully prevented (a dedicated LoopDetectionAgent exists but is disabled as ineffective)
+* Evaluation remains qualitative; no comparative benchmarks yet
 
 ---
 
@@ -254,44 +253,60 @@ This project uses **UV** for dependency management and **Ollama** for local LLM 
 
 ### Prerequisites
 
-Ollama running with Llama 3.3:
+Ollama running with the configured Qwen model:
 
 ```
-ollama pull llama3.3
-ollama serve
+brew install ollama
+brew services start ollama
+ollama pull qwen2.5:14b
 ```
 
-Optional `.env` configuration:
+Create the local runtime configuration:
 
-```
-OLLAMA_HOST="http://[your-host]:11434"
+```bash
+cp .env.example .env
 ```
 
 ### Running the System
 
 ```
-uv sync
+uv sync --locked
 uv run python VersionTwo/main.py
 ```
 
-```
-Project Structure
-```
+Runtime is configured via `.env`: `PLAYZORK_GAME` (zork | planetfall | escaperoom), `PLAYZORK_SESSION_ID` (sessions resume), and `PLAYZORK_LLM_PROVIDER` (ollama | openai). The run writes state to `data/zork_sessions.db`, logs to `logs/`, and per-turn HTML reports to `logs/sessions/<session-id>/`.
+
+### Project Structure
 
 ```
 VersionTwo/
-├── adventurer/           # Agent decision logic
-│   ├── adventurer_service.py
-│   └── prompt_library.py
+├── adventurer/              # Arbiter chain + all prompts
+│   ├── adventurer_service.py    # Builds research agent, decision chain, decision graph
+│   ├── adventurer_response.py   # Structured output schema for the arbiter
+│   └── prompt_library.py        # Every prompt in the system (static methods)
 ├── tools/
-│   ├── history/         # History toolkit with summarization
-│   └── memory/          # Memory toolkit with importance scoring
-├── zork/                # Zork API client
-├── game_session.py      # Main game loop
-└── display_manager.py   # Terminal UI
+│   ├── agent_graph/         # LangGraph pipeline + deliberating agents
+│   │   ├── decision_graph.py    # SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
+│   │   ├── issue_agent.py       # One advocate per tracked strategic issue
+│   │   ├── explorer_agent.py    # Advocates for unexplored directions
+│   │   ├── interaction_agent.py # Advocates for local object interactions
+│   │   ├── loop_detection_agent.py  # Loop breaker (currently disabled)
+│   │   ├── issue_closed_agent.py    # Retires resolved issues
+│   │   └── observer_agent.py        # Discovers new issues
+│   ├── history/             # Turn history + dual LLM summaries
+│   ├── memory/              # Strategic issue store (write-only, with semantic dedup)
+│   ├── mapping/             # Location graph, BFS pathfinding, blocked-direction tracking
+│   ├── inventory/           # Item tracking with LLM turn analysis
+│   ├── analysis/            # Big-picture strategy + death analysis
+│   ├── database/            # Shared SQLite persistence
+│   └── reporting/           # Per-turn HTML reports
+├── zork/                    # Game API client (Zork, Planetfall, Escape Room backends)
+├── game_session.py          # Main game loop
+├── config.py                # Game/provider/model configuration (.env-driven)
+└── display_manager.py       # Rich terminal UI
 
-STATUS.md
-NOTES.md
+STATUS.md                    # Dated development logs
+NOTES.md                     # Research notes
 ```
 
 ---
@@ -328,4 +343,4 @@ If you use this work, please cite:
 
 ## Acknowledgments
 
-Built with LangChain, Ollama, and Llama 3.3. *Zork I* © Infocom, 1980.
+Built with LangChain, LangGraph, Ollama, and Qwen 2.5. *Zork I* and *Planetfall* © Infocom.

@@ -4,14 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PlayZork is an experimental project that uses LLMs to autonomously play the classic 1980s text adventure game Zork. The project addresses the "Mr. Meeseeks problem" - LLMs lack long-term memory across API calls, so this implementation programmatically gives the LLM memory by providing complete game state context with each invocation.
+PlayZork is a research project using LLMs to autonomously play classic text adventure games (Zork I, Planetfall, and a local Escape Room test game). It has evolved from a single-agent memory experiment into a **multi-agent deliberation architecture**: specialist agents advocate for competing objectives, and a separate arbiter chooses one action per turn. The README.md is a working research draft describing this architecture; STATUS.md and NOTES.md are dated development logs.
 
-The goal: Can an LLM beat Zork (reach 350 points) if given proper memory and context?
+The core hypothesis: separating proposal generation (advocacy) from action selection (arbitration) improves long-horizon sequential decision making compared to single-shot inference.
 
 ## Repository Structure
 
 - **VersionTwo/** - Current Python implementation (active development)
-- **VersionOne/** - Earlier C# implementation (archived)
+- **VersionOne/** - Earlier C# implementation (archived, do not modify)
+- **VersionTwo/docs/WORLD_MODEL_PROPOSAL.md** - Design proposal for the next direction (structured world model)
 
 ## Development Setup
 
@@ -23,122 +24,114 @@ uv sync
 
 # Set up environment variables
 cp .env.example .env
-# Edit .env and add your OpenAI API key
 
-# Run the main Zork playing agent
+# Install/start the default local LLM and fetch its model
+brew install ollama
+brew services start ollama
+ollama pull qwen2.5:14b
+
+# Run the main playing agent (from the repo root — paths are CWD-relative)
 uv run python VersionTwo/main.py
 ```
 
-The game will run for 25 turns automatically, with the AI making decisions at each step.
+`run_playzork.py` at the repo root is a PyCharm play-button entry point that chdirs to the project root and launches `VersionTwo/main.py` with the same paths.
+
+The game runs until interrupted with Ctrl+C, with the AI making decisions at each step. Runtime artifacts (all CWD-relative, so always run from the repo root):
+
+- `data/zork_sessions.db` - SQLite persistence (all state)
+- `logs/game_<SESSION_ID>.log` - detailed per-session log (root logger writes here)
+- `logs/sessions/<SESSION_ID>/Turn-N.html` + `index.html` - per-turn HTML reports
+
+## Configuration
+
+All runtime configuration lives in `VersionTwo/config.py`, driven by `.env` (loaded from the repo root at import time):
+
+- `PLAYZORK_GAME` - active backend: `zork`, `planetfall`, or `escaperoom` (default `zork`). `GAME_NAME`, `GAME_OBJECTIVE`, and `GAME_OBJECTIVE_SCORE` are derived from the selected backend and interpolated into every prompt.
+- `PLAYZORK_SESSION_ID` - session ID for both the game backend and local persistence. **Sessions resume**: reusing an ID continues turn numbering and keeps prior turns/memories/map in the DB.
+- `PLAYZORK_LLM_PROVIDER` - `ollama` (default) or `openai`
+- `OLLAMA_HOST` / `OPENAI_API_KEY` - provider credentials
+
+Game backends (`GAME_BACKENDS` in config.py): Zork I and Planetfall are hosted AWS APIs; Escape Room expects a server at `localhost:5000` (not part of this repo).
+
+**Model tiers** (`MODELS` in config.py, accessed only via `get_cheap_llm()` / `get_expensive_llm()` — instances are memoized per (provider, tier, temperature)):
+- Cheap: research, summarization, deduplication, inventory analysis, death detection
+- Expensive: decisions, agent proposals, observation, history summarization
+- Ollama uses `qwen2.5:14b` for both tiers (stays warm, no model swap); temperature 0 throughout
+
+Timeouts: `LLM_TIMEOUT_SECONDS` (per LLM call, retried up to `LLM_MAX_RETRIES` with exponential backoff via `llm_utils.invoke_with_retry` / `ainvoke_with_retry`) and `TURN_BUDGET_SECONDS` (wall-clock cap on the whole per-turn decision graph).
 
 ## Architecture
 
-### Core Components
+### Per-Turn Flow
 
-The system follows a three-layer architecture:
+`GameSession.play()` (VersionTwo/game_session.py) loops indefinitely:
 
-1. **GameSession** (VersionTwo/game_session.py:5) - Orchestrates the game loop
-   - Manages the main gameplay loop (25 turns by default)
-   - Coordinates between ZorkService and AdventurerService
-   - Entry point: `play()` method initializes game and processes turns
+1. **ZorkService** POSTs the command to the game API → `ZorkApiResponse` (Response, LocationName, Score, Moves)
+2. **HistoryToolkit.update_after_turn** - stores the turn, regenerates two LLM summaries (recent + long-running)
+3. **MapperToolkit.update_after_turn** - records the location transition; a movement command with no location change is recorded as `location --[DIR]--> BLOCKED` so the explorer never re-suggests it
+4. **AdventurerService.handle_user_input** runs the LangGraph decision graph (below) and returns the next command
+5. Display update (Rich terminal UI via **DisplayManager**)
+6. Post-turn work (BigPictureAnalyzer, DeathAnalyzer, HTML report, session index) is dispatched as a **background task** (`_dispatch_post_turn_io`) so the next turn doesn't wait; tasks are drained at shutdown
 
-2. **ZorkService** (VersionTwo/zork/zork_service.py:6) - External Zork API integration
-   - Communicates with hosted Zork game API at AWS
-   - Endpoint: `https://bxqzfka0hc.execute-api.us-east-1.amazonaws.com/Prod/ZorkOne`
-   - Sends player commands, receives game state responses
-   - Returns ZorkApiResponse objects containing: Response text, LocationName, Moves, Score
+The HTML report for a turn shows the agents/decision that **led to** that turn's command, so `GameSession` carries the previous turn's decision data in a `PendingDecision` dataclass.
 
-3. **AdventurerService** (VersionTwo/adventurer/adventurer_service.py:10) - AI decision engine
-   - Uses LangChain with OpenAI models (GPT-3.5-turbo for history, GPT-4 for decisions)
-   - Receives game state and returns structured JSON commands via `with_structured_output()`
-   - Returns AdventurerResponse with: command, reason, remember, rememberImportance, item, moved
+### The Decision Graph
 
-### Memory System - The Key Innovation
-
-The memory system solves the LLM statelessness problem through two mechanisms:
-
-**HistoryProcessor** (VersionTwo/adventurer/history_processor.py:7)
-- Maintains both raw history and LLM-generated summarized history
-- Uses a cheaper LLM (GPT-3.5) to continuously summarize past interactions
-- On each turn: appends new interaction → generates new summary → passes summary to decision LLM
-- This creates "Leonard's tattoos from Memento" - persistent context across stateless API calls
-
-**PromptLibrary** (VersionTwo/adventurer/prompt_library.py:1)
-- Stores all prompts as static methods
-- `get_adventurer_prompt()`: Main decision prompt with JSON schema for structured output
-- `get_system_prompt()`: Game objective and rules (target: 350 points)
-- `get_history_processor_*_prompt()`: Templates for summarizing game history
-
-### Data Flow
+`tools/agent_graph/decision_graph.py` builds a LangGraph pipeline:
 
 ```
-GameSession.play_turn(input)
-  → ZorkService.play_turn(input)
-    → ZorkApiClient posts to AWS API
-    → Returns ZorkApiResponse
-  → AdventurerService.handle_user_input(ZorkApiResponse)
-    → HistoryProcessor provides summarized context
-    → LangChain chain invokes GPT-4 with structured output
-    → Returns AdventurerResponse.command
-  → Loop continues with new command
+SpawnAgents → Research → Decide → CloseIssues → Observe → Persist → END
 ```
+
+- **SpawnAgents** - creates specialist agents and runs all their research+proposal passes concurrently (`asyncio.gather`):
+  - **IssueAgent** (up to 5): one per tracked strategic issue from the memory DB, top 5 by lazily-decayed importance. Each researches with tools (including pathfinding to its issue's location and inventory checks) and proposes an action with confidence 1-100.
+  - **ExplorerAgent** (0 or 1): spawned if the current location has unexplored directions; picks the best direction deterministically (mentioned-in-description > cardinals > diagonals > up/down) and computes confidence heuristically.
+  - **InteractionAgent** (always): proposes local object interactions from the current room description + inventory.
+  - **LoopDetectionAgent**: **currently disabled** (`loop_detection_agent = None` in spawn_agents_node), but the class and its display/report plumbing remain.
+- **Research** - a cheap-LLM research agent (`tool_choice="any"`) gathers turn-level context; its bound tools and the execution map must stay in sync (history + mapper + inventory + analysis tools).
+- **Decide** - the **arbiter**. Receives all proposals formatted with expected-value scores (`_format_agent_proposals`) and picks exactly one command; it evaluates, it does not generate. Returns a structured `AdventurerResponse` (command, reason, remember, rememberImportance, item, moved).
+- **CloseIssues** - `IssueClosedAgent` marks resolved issues closed in the memory DB.
+- **Observe** - `ObserverAgent` scans the game response for new strategic issues to track.
+- **Persist** - stores the observer's new issue (after exact + LLM semantic dedup via `MemoryDeduplicator`) and runs `InventoryAnalyzer` on the executed command to update inventory state.
+
+### Toolkits (facades over shared SQLite state)
+
+Each toolkit wraps a state class and exposes LangChain `@tool` functions via module-level initialization (`initialize_*_tools(...)` then `get_*_tools()`):
+
+- **tools/history/** - turns + dual summaries; tools: `get_recent_turns`, `get_full_summary`
+- **tools/mapping/** - location graph with BFS pathfinding (`pathfinder.py`); tools: `get_map`, `get_exits_from_location`, `find_path_between_locations`, `get_direction_to_location`
+- **tools/inventory/** - item tracking, bootstrapped at game start by sending `INVENTORY` and LLM-parsing the response
+- **tools/memory/** - strategic issue storage. **Write-only by design**: issues are flagged via the observer's `remember` field and read only by the spawn node; `memory_tools.py`/`memory_retriever.py` read-tools exist but are not registered anywhere.
+- **tools/analysis/** - `get_strategic_analysis` (latest BigPictureAnalyzer output, tolerates one-turn lag), plus `DeathAnalyzer` (detects deaths, analyzes cause, persists lessons-learned)
+- **tools/database/db_manager.py** - single DatabaseManager for all tables: sessions, turns, summaries, memories, map_transitions, inventory, strategic_analysis, deaths
+- **tools/reporting/turn_report_writer.py** - per-turn HTML reports + session index
+
+### Memory Importance Decay
+
+Issue importance (1-1000) decays **lazily on read** (`MemoryState.get_top_memories` with `current_turn`), not via per-turn UPDATEs. New issues therefore naturally outrank stale ones.
 
 ## Key Implementation Details
 
-### Structured Output Format
+- **Structured output everywhere**: `AdventurerResponse`, `IssueProposal`, `ExplorerProposal`, etc. are Pydantic models enforced via `with_structured_output()`. Local models sometimes return wrong types — code defensively coerces (e.g., importance int coercion in MemoryState).
+- **All prompts live in `adventurer/prompt_library.py`** as static methods, with `GAME_NAME`/`GAME_OBJECTIVE` interpolated from config. Edit prompts there, not inline.
+- **Async convention**: hot-path agents use `ainvoke_with_retry`; `ObserverAgent` and `IssueClosedAgent` still use the sync `invoke_with_retry` inside sync graph nodes.
+- **LangSmith run names**: LLM invocations use `.with_config(run_name=...)` for traceability — keep this when adding calls.
+- **Legacy/dead code** (don't extend, candidates for removal): `adventurer/history_processor.py` (superseded by `tools/history/history_summarizer.py`), `tools/memory/memory_tools.py` + `memory_retriever.py` (unregistered), `PromptLibrary.get_adventurer_prompt`/`get_system_prompt` (pre-multi-agent), `LoopDetectionAgent` (disabled).
 
-The AdventurerResponse schema (VersionTwo/adventurer/adventurer_response.py:5) enforces:
-- `command`: Next Zork command (e.g., "NORTH", "TAKE LAMP")
-- `reason`: Why this command was chosen
-- `remember`: Novel critical information to persist (avoid duplicates - memory is limited)
-- `rememberImportance`: 1-1000 score (low-importance items may be forgotten)
-- `item`: New items discovered in location
-- `moved`: Direction attempted if movement command
+## Testing
 
-### LLM Usage Strategy
-
-The system supports two LLM providers configured in `VersionTwo/config.py`:
-
-**Provider Selection** (change `LLM_PROVIDER` in config.py):
-- `"openai"`: Uses OpenAI API (GPT models)
-- `"ollama"`: Uses local Ollama instance (open-source models)
-
-**Model Tiers**:
-- **Cheap models**: History summarization, research, deduplication
-  - OpenAI: gpt-5-nano-2025-08-07
-  - Ollama: llama3.3
-- **Expensive models**: Decision making, agent proposals, observation
-  - OpenAI: gpt-5-mini-2025-08-07
-  - Ollama: llama3.3
-- Temperature: 0 (deterministic behavior)
-
-### Dependencies
-
-- LangChain (prompts, chains, structured output)
-- langchain-openai (ChatOpenAI)
-- httpx (async HTTP client for Zork API)
-- Pydantic (data models with validation)
-
-## Environment Setup
-
-The project requires API credentials based on your LLM provider choice. Create a `.env` file in the project root:
 ```bash
-cp .env.example .env
+# Run from VersionTwo (pytest.ini + conftest.py live there and set up sys.path)
+cd VersionTwo && uv run python -m pytest
 ```
 
-### OpenAI Configuration
+Tests cover the pathfinder and decision-graph persist node. There is no integration-test coverage of the live game loop — verifying agent behavior means running a session and reading `logs/` and the HTML reports.
 
-If using OpenAI (default), add your API key to `.env`:
-```
-OPENAI_API_KEY=your-actual-api-key
-```
+## Dependencies
 
-### Ollama Configuration
+Managed via `pyproject.toml`: langchain / langchain-openai / langchain-ollama / **langgraph** (decision graph), httpx (async game API client), pydantic (structured outputs), rich (terminal UI), python-dotenv. Dev: pytest.
 
-If using Ollama, ensure the Ollama service is running and accessible. Add to `.env`:
-```
-OLLAMA_HOST=http://localhost:11434
-```
+## Ollama Troubleshooting
 
 **For VM/Remote Setup**: If Ollama runs on a different host (e.g., macOS host from VM):
 1. Start Ollama with network binding:
@@ -155,18 +148,3 @@ OLLAMA_HOST=http://localhost:11434
 - If Ollama connection fails, verify it's listening: `lsof -i :11434` on the host
 - IPv6 format requires brackets: `http://[ipv6-address]:11434`
 - Test connectivity: `curl -g "http://[your-ipv6]:11434/api/tags"`
-
-## Dependencies
-
-Managed via `pyproject.toml`:
-- **langchain** - LLM orchestration and prompt management
-- **langchain-openai** - OpenAI integration for LangChain
-- **langchain-ollama** - Ollama integration for LangChain (local models)
-- **httpx** - Async HTTP client for Zork API calls
-- **pydantic** - Data validation and structured outputs
-- **python-dotenv** - Environment variable management from .env files
-
-## Two Versions
-
-**VersionTwo** (Python): Current implementation, uses LangChain for LLM orchestration
-**VersionOne** (C#): Earlier implementation with similar architecture but .NET stack
