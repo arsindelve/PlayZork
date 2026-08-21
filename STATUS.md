@@ -808,3 +808,67 @@ TURN FLOW (Updated):
    - Multiple deaths in same session
    - Deaths at different locations
    - Deaths from different causes (combat, environment, puzzles)
+
+---
+
+# Development Log: 2026-08-21
+
+## Research Reframing (Thesis Direction)
+
+The project's original motivation — external memory scaffolding for small-context models — is obsolete: 1M-context models fit an entire game run in context. The standing research question is now:
+
+> **Can the multi-agent deliberation architecture (advocacy agents + arbiter + deterministic toolkits) let much LESS powerful models (qwen2.5:14b local) solve the game?**
+
+Architecture as a substitute for model capability. This is a candidate **Master's in AI thesis**. Key implication: correctness of the deterministic scaffolding (map, inventory, memory) is a *precondition* for interpretable experiments — a weak model cannot compensate for corrupted state, so any negative result from a buggy platform is uninterpretable.
+
+## Full Code Audit → 27 GitHub Issues
+
+Ran a nine-agent parallel audit (one reviewer per agent, plus the mapper and the orchestration layer). Every finding was verified by **executing the actual code** — real parsers driven with real game prose, throwaway SQLite DBs, installed library sources inspected. Unverified claims were dropped.
+
+**Result: [27 GitHub issues](https://github.com/arsindelve/PlayZork/issues), all labeled `bug`.**
+
+### Correctness (#1–#22) — headline findings per component
+
+- **Systemic (#1–#5)**: no exception handling anywhere in the turn path (one malformed LLM response ends the session); the dedup call has no retry at all; `TURN_BUDGET_SECONDS` (600s) < one call's retry envelope (~1530s), so retries are dead code and mid-graph timeouts can half-commit memory state; `tool_choice="any"` is silently ignored by ChatOllama; research LLM bound with 8 tools but Observer can execute only 2.
+- **IssueAgent (#6–#7)**: instructs the model to call `get_current_inventory()` — a tool that does not exist — so inventory renders as "empty" every turn on every code path (the high-confidence "I have the item" branch is unreachable); `"Unknown"`-location memories are pathfound to a nonexistent node → forced confidence 0 forever.
+- **Explorer/Mapper (#8–#15)**: substring alias matching fabricates "mentioned" directions ("NE" in CORNER → Attic proposes NORTHEAST at confidence 95); `N` never matches `NORTH` in the explored-check; `MOVE RUG` records direction "E" (the verb MOVE contains E); BLOCKED records are permanent (UNIQUE constraint silently rejects corrections — the trap door route is unreachable forever after one early failed DOWN); death/respawn writes a fabricated edge BFS then routes through; lookups are case-sensitive end to end; CLIMB/ENTER unrecognized → unreachable orphan rooms.
+- **InteractionAgent (#16–#18)**: deterministic regex parser bypasses the LLM with `TAKE NOTHING` (fires on Zork's standard EXAMINE reply), `OPEN YOU`, negation-blind `PRESS BUTTON` at confidence 80–90; unknown inventory presented as authoritatively empty; no history → re-proposes the same failed action every turn.
+- **IssueClosedAgent (#19–#20)**: returned IDs never validated — the prompt's own worked example `[5, 12]` can close real unrelated issues, invisibly and irreversibly (dedup matches closed rows); closer ranks by undecayed importance while the spawner uses decayed, so actively-worked issues can become un-closable.
+- **Inventory (#21)**: cache and DB permanently diverge (phantom items feed every prompt for the rest of the session).
+- **LoopDetectionAgent (#22)**: disabled safely today; confirmed broken five ways if re-enabled (nonexistent tool name → can only ever propose INVENTORY; parser can't read the real tool format; fabricated score data; proposes the very command it flags; turn parser corrupts location-less turns).
+
+### Orchestration (#23–#27) — with measured timings
+
+Turn 1 of today's smoke run (`logs/game_codex-smoke-20260821.log`) took **7m25s with only 2 subagents and zero IssueAgents**:
+
+| Phase | Time | Share |
+|---|---|---|
+| History summaries (serial, blocking, expensive model) | 86s | 19% |
+| Spawn agents (4 LLM calls) | 146s | 33% |
+| Research node (redundant) | 27s | 6% |
+| Decision | 74s | 17% |
+| Post-decision bookkeeping (observe + persist) | 112s | 25% |
+
+Findings: 25% of the turn happens **after the command is chosen** (#23); summaries block every turn's start and grow with game length — 113s by turn 2 (#24); ~40% of turn time is LLM round-trips for deterministic data fetches (#25); LangGraph is wired as a pure linear chain — its fan-out concurrency is unused, `research` waits behind spawn despite zero data dependency (#26); "parallel" fan-out achieved only ~1.9× against the single Ollama server, and the sync retry's timeout abandons-but-doesn't-cancel in-flight requests, piling retries onto the queue that caused the timeout (#27).
+
+## Plan of Attack (PLAN.md, committed)
+
+Milestone-ordered roadmap: **M1** runs survive (exception handling, budget coherence) → **M2** five-minute fixes (#6, #20, #9, #19, #7) → **M3** trustworthy world state (map upsert first — permanence makes every other mapper bug permanent) → **M4** turn engine restructure (deterministic TurnContext closes #4/#5/#17 for free; graph ends at `decide`) → **M5** honest proposals → **M6** LoopDetectionAgent decision point → thesis experiment protocol (seeded runs: single-shot-with-full-history baseline vs. architecture, plus ablations; score@turns and score@wall-clock). Estimated 8–12 focused days to a runnable experiment.
+
+## Documentation Overhaul (commit 8a56668, pushed)
+
+- **CLAUDE.md**: rewritten for the actual multi-agent architecture (decision graph, agent roster, toolkits, `.env`-driven config, session resumption) — the old text still described the pre-multi-agent single-decider design.
+- **README**: Current Status now describes `main` (v0.1-arxiv noted as the archived pre-multi-agent Zenodo baseline); accurate project structure tree; "manual issue definition" limitation replaced with the true one (automated lifecycle, unvalidated quality); Qwen 2.5 acknowledgments.
+- **PLAN.md**: new.
+
+## Uncommitted Working-Tree Changes (same day, separate session)
+
+- Config moved to `.env`-driven (`PLAYZORK_GAME` / `PLAYZORK_SESSION_ID` / `PLAYZORK_LLM_PROVIDER`); `GAME_NAME`/`GAME_OBJECTIVE` now derived from the active backend (fixes the prompts-say-Planetfall-while-playing-EscapeRoom inconsistency)
+- `run_playzork.py` PyCharm entry point
+- Research agent now binds history + mapper + inventory + analysis tools; research node execution map widened to match
+- Persist node analyzes the executed `player_command` instead of the next decision's command, with new test `tests/test_decision_graph.py`
+- `.env.example` rewritten
+
+## Testing
+
+All tests pass: 48 pathfinder + 1 new persist-node test.
