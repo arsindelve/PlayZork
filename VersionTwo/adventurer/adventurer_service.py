@@ -67,8 +67,16 @@ class AdventurerService:
         # Use cheap model for reasoning with tools
         llm = get_cheap_llm(temperature=0)
 
-        # Combine history and mapper tools
-        tools = self.history_toolkit.get_tools() + self.mapper_toolkit.get_tools()
+        # Bind every tool that research nodes and specialist agents may request.
+        # Passing extra tools only to the execution map is insufficient because
+        # the model must receive their schemas before it can select them.
+        from tools.analysis import get_analysis_tools
+        tools = (
+            self.history_toolkit.get_tools()
+            + self.mapper_toolkit.get_tools()
+            + self.inventory_toolkit.get_tools()
+            + get_analysis_tools()
+        )
 
         # Bind tools to the LLM and REQUIRE it to call at least one tool
         llm_with_tools = llm.bind_tools(tools, tool_choice="any")
@@ -109,7 +117,7 @@ class AdventurerService:
         # Chain with structured output (using shared decision_llm)
         return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    async def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str, List, List]:
+    async def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int, player_command: str) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str, List, List]:
         """
         Execute the LangGraph decision flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
 
@@ -124,6 +132,7 @@ class AdventurerService:
         Args:
             last_game_response: The most recent response from the Zork game
             turn_number: Current turn number for memory persistence
+            player_command: Command that produced last_game_response
 
         Returns:
             Tuple of (AdventurerResponse, List[IssueAgent], Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str) - the decision, issue agents, explorer agent, loop detection agent, interaction agent, closed issues, observer response, and decision prompt
@@ -134,6 +143,7 @@ class AdventurerService:
         # Initialize graph state
         initial_state = {
             "game_response": last_game_response,
+            "player_command": player_command,
             "issue_agents": [],  # Will be populated by spawn_agents node
             "explorer_agent": None,  # Will be populated if unexplored directions exist
             "loop_detection_agent": None,  # Will be populated by spawn_agents node (always)
@@ -144,6 +154,7 @@ class AdventurerService:
             "decision_prompt": "",  # Will be populated by decision node
             "decision_tool_calls": [],  # Will be populated by decision node
             "issue_closed_response": None,  # Will be populated by close_issues node
+            "pending_closures": [],  # Staged by close_issues, applied by persist (#3)
             "observer_response": None,  # Will be populated by observe node
             "memory_persisted": False
         }

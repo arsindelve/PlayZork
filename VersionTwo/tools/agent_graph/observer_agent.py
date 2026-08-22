@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool
 from .observer_response import ObserverResponse
 from tools.memory import MemoryToolkit
 from adventurer.prompt_library import PromptLibrary
+from .tool_execution import invoke_tool_safely
 import logging
 
 
@@ -113,10 +114,17 @@ class ObserverAgent:
 
                 self.logger.info(f"[ObserverAgent]   -> {tool_name}({tool_args})")
 
-                if tool_name in tools_map:
-                    tool_result = tools_map[tool_name].invoke(tool_args)
-                    self.logger.info(f"[ObserverAgent]      Result: {str(tool_result)[:150]}...")
-                    tool_results.append(f"{tool_name}: {tool_result}")
+                # Never raises: unknown tools and malformed model-supplied args
+                # come back as an "Error: ..." string instead (see #1).
+                tool_result = invoke_tool_safely(
+                    tools_map,
+                    tool_name,
+                    tool_args,
+                    label="ObserverAgent",
+                    log=self.logger,
+                )
+                self.logger.info(f"[ObserverAgent]      Result: {str(tool_result)[:150]}...")
+                tool_results.append(f"{tool_name}: {tool_result}")
 
             historical_context = "\n\n".join(tool_results) if tool_results else "No historical context available."
         else:

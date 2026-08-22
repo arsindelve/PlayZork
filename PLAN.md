@@ -29,14 +29,16 @@ Turn 1 of the 2026-08-21 smoke run took **7m25s** with only 2 subagents and zero
 
 ## Milestone 1 — Runs survive *(~half day, first)*
 
-| # | Issue | Task | Effort |
-|---|---|---|---|
-| 1 | [#1](https://github.com/arsindelve/PlayZork/issues/1) | Tool-invoke guards, `gather(return_exceptions=True)`, game-loop fallback command | S |
-| 2 | [#2](https://github.com/arsindelve/PlayZork/issues/2) | Wrap dedup LLM call in retry; fail open | XS |
-| 3 | [#3](https://github.com/arsindelve/PlayZork/issues/3) | Budget coherence (per-attempt timeout 60–90s); catch `TimeoutError` per turn | XS |
-| 4 | [#24](https://github.com/arsindelve/PlayZork/issues/24) *(option 1 only)* | Run the two summaries concurrently (~10 lines, −40s+/turn); full fix in M4 | XS |
+| # | Issue | Task | Effort | Status |
+|---|---|---|---|---|
+| 1 | [#1](https://github.com/arsindelve/PlayZork/issues/1) | Tool-invoke guards, `gather(return_exceptions=True)`, game-loop fallback command | S | ✅ done |
+| 2 | [#2](https://github.com/arsindelve/PlayZork/issues/2) | Wrap dedup LLM call in retry; fail open | XS | ✅ done |
+| 3 | [#3](https://github.com/arsindelve/PlayZork/issues/3) | Budget coherence; catch `TimeoutError` per turn; stage memory closures until persist | S | ✅ done |
+| 4 | [#24](https://github.com/arsindelve/PlayZork/issues/24) *(option 1 only)* | Run the two summaries concurrently (~10 lines, −40s+/turn); full fix in M4 | XS | |
 
 *Rationale: every later fix is validated by long runs; today any single malformed LLM response ends the run.*
+
+**Correction to the #3 plan (2026-08-21):** this milestone originally called for a 60–90s per-attempt timeout. The measured smoke run contradicts that — individual qwen2.5:14b calls took 43–113s under agent contention, so a 90s cap would abort *healthy* calls and (per [#27](https://github.com/arsindelve/PlayZork/issues/27)) pile retries onto an already-slow server. Taken instead: per-attempt 180s × 3 attempts (envelope 546s) inside a turn budget raised to 1200s, with the invariant `TURN_BUDGET_SECONDS ≥ 2 × retry envelope` enforced in `config.py` and covered by a test. M4 should revisit the budget downward once turn latency drops.
 
 ## Milestone 2 — Five-minute fixes that restore designed behavior *(~half day)*
 

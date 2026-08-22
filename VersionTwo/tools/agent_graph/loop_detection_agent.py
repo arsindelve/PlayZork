@@ -13,6 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_core.prompts import ChatPromptTemplate
 from .loop_detection_response import LoopDetectionResponse
+from .tool_execution import invoke_tool_safely, TOOL_ERROR_PREFIX
 from adventurer.prompt_library import PromptLibrary
 import logging
 
@@ -115,13 +116,21 @@ class LoopDetectionAgent:
                 tool_name = tool_call['name']
                 tool_args = tool_call.get('args', {})
 
-                if tool_name == "get_recent_turns" and tool_name in tools_map:
+                if tool_name == "get_recent_turns":
                     # Force last 10 turns
                     tool_args['n'] = 10
                     logger.info(f"[LoopDetectionAgent]   -> {tool_name}(n={tool_args['n']})")
-                    tool_result = tools_map[tool_name].invoke(tool_args)
+                    # Never raises; a failure comes back as "Error: ..." (#1)
+                    tool_result = invoke_tool_safely(
+                        tools_map,
+                        tool_name,
+                        tool_args,
+                        label="LoopDetectionAgent",
+                        log=logger,
+                    )
                     logger.info(f"[LoopDetectionAgent]      Result: {str(tool_result)[:150]}...")
-                    raw_history = tool_result
+                    if not str(tool_result).startswith(TOOL_ERROR_PREFIX):
+                        raw_history = tool_result
 
                     # Store tool call history for reporting
                     self.tool_calls_history.append({

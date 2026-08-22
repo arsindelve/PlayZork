@@ -6,6 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_core.language_models import BaseChatModel
 from adventurer.prompt_library import PromptLibrary
+from .tool_execution import invoke_tool_safely
 import logging
 
 
@@ -157,17 +158,24 @@ class IssueAgent:
 
                 logger.info(f"[IssueAgent ID:{self.memory.id}]   -> {tool_name}({tool_args})")
 
-                if tool_name in tools_map:
-                    tool_result = tools_map[tool_name].invoke(tool_args)
-                    logger.info(f"[IssueAgent ID:{self.memory.id}]      Result: {str(tool_result)[:150]}...")
-                    tool_results.append(f"{tool_name} result: {tool_result}")
+                # Never raises: unknown tools and malformed model-supplied args
+                # come back as an "Error: ..." string instead (see #1).
+                tool_result = invoke_tool_safely(
+                    tools_map,
+                    tool_name,
+                    tool_args,
+                    label=f"IssueAgent ID:{self.memory.id}",
+                    log=logger,
+                )
+                logger.info(f"[IssueAgent ID:{self.memory.id}]      Result: {str(tool_result)[:150]}...")
+                tool_results.append(f"{tool_name} result: {tool_result}")
 
-                    # Store tool call history for reporting
-                    self.tool_calls_history.append({
-                        "tool_name": tool_name,
-                        "input": str(tool_args),
-                        "output": str(tool_result)
-                    })
+                # Store tool call history for reporting
+                self.tool_calls_history.append({
+                    "tool_name": tool_name,
+                    "input": str(tool_args),
+                    "output": str(tool_result)
+                })
 
             self.research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
         else:

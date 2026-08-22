@@ -1,8 +1,10 @@
 """
-IssueClosedAgent - Identifies resolved issues and removes them from memory.
+IssueClosedAgent - Identifies resolved issues for persist_node to close.
 
 This agent analyzes recent game history to determine if any tracked
-strategic issues have been solved and should be removed from memory.
+strategic issues have been solved. It does NOT write to memory itself:
+closures are staged and applied by persist_node, so a turn cancelled by
+the turn budget cannot leave memory half-applied (GitHub issue #3).
 
 Responsibility: Aggressively close resolved issues to keep memory clean.
 Runs BEFORE ObserverAgent to avoid confusion with stale issues.
@@ -14,6 +16,7 @@ from .issue_closed_response import IssueClosedResponse
 from tools.memory import MemoryToolkit
 from tools.history import HistoryToolkit
 from adventurer.prompt_library import PromptLibrary
+from .tool_execution import invoke_tool_safely, TOOL_ERROR_PREFIX
 import logging
 
 
@@ -45,9 +48,14 @@ class IssueClosedAgent:
         decision_llm: BaseChatModel,
         history_toolkit: HistoryToolkit,
         memory_toolkit: MemoryToolkit
-    ) -> IssueClosedResponse:
+    ) -> tuple[IssueClosedResponse, List[dict]]:
         """
-        Analyze recent history and close resolved issues.
+        Analyze recent history and decide which issues are resolved.
+
+        READ-ONLY with respect to memory: this never closes anything itself
+        (GitHub issue #3). It returns the closures for persist_node to apply,
+        so a turn cancelled by the budget leaves memory untouched rather than
+        half-applied.
 
         Args:
             game_response: The game's response after command execution
@@ -59,7 +67,9 @@ class IssueClosedAgent:
             memory_toolkit: MemoryToolkit for accessing and removing tracked issues
 
         Returns:
-            IssueClosedResponse with list of closed issues
+            Tuple of (IssueClosedResponse, pending_closures), where
+            pending_closures is a list of {"id": int, "display": str | None}
+            dicts for persist_node to apply.
         """
         self.logger.info(f"[IssueClosedAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         self.logger.info(f"[IssueClosedAgent] AGENT: IssueClosedAgent")
@@ -74,7 +84,7 @@ class IssueClosedAgent:
 
         if not tracked_issues:
             self.logger.info(f"[IssueClosedAgent] No tracked issues to analyze")
-            return IssueClosedResponse(closed_issue_ids=[], closed_issue_contents=[], reasoning="No issues tracked yet.")
+            return IssueClosedResponse(closed_issue_ids=[], closed_issue_contents=[], reasoning="No issues tracked yet."), []
 
         tracked_issues_text = "\n".join([
             f"- [ID:{mem.id}, Importance:{mem.importance}/1000] {mem.content}"
@@ -86,22 +96,22 @@ class IssueClosedAgent:
         # Phase 2: Gather recent history (last 5 turns)
         self.logger.info(f"[IssueClosedAgent] Phase 2: Gathering recent history...")
 
-        # Use history toolkit to get recent turns
-        recent_turns_tool = None
-        for tool in history_toolkit.get_tools():
-            if tool.name == "get_recent_turns":
-                recent_turns_tool = tool
-                break
+        # Use history toolkit to get recent turns. invoke_tool_safely covers
+        # both "tool missing" and "tool raised" without ending the turn (#1).
+        tools_map = {tool.name: tool for tool in history_toolkit.get_tools()}
 
-        recent_history = ""
-        if recent_turns_tool:
-            self.logger.info(f"[IssueClosedAgent]   -> get_recent_turns(n=5)")
-            recent_history = recent_turns_tool.invoke({"n": 5})
-            self.logger.info(f"[IssueClosedAgent]      Result: {str(recent_history)[:150]}...")
-            self.logger.info(f"[IssueClosedAgent] Recent history length: {len(recent_history)} chars")
-        else:
+        self.logger.info(f"[IssueClosedAgent]   -> get_recent_turns(n=5)")
+        recent_history = invoke_tool_safely(
+            tools_map,
+            "get_recent_turns",
+            {"n": 5},
+            label="IssueClosedAgent",
+            log=self.logger,
+        )
+        if str(recent_history).startswith(TOOL_ERROR_PREFIX):
             recent_history = "No recent history available."
-            self.logger.warning(f"[IssueClosedAgent] get_recent_turns tool not found")
+        self.logger.info(f"[IssueClosedAgent]      Result: {str(recent_history)[:150]}...")
+        self.logger.info(f"[IssueClosedAgent] Recent history length: {len(recent_history)} chars")
 
         # Phase 3: Analyze which issues are resolved
         self.logger.info(f"[IssueClosedAgent] Phase 3: Analyzing for resolved issues...")
@@ -124,15 +134,20 @@ class IssueClosedAgent:
             operation_name="IssueClosedAgent Analysis"
         )
 
-        # Phase 4: Remove closed issues from memory
-        self.logger.info(f"[IssueClosedAgent] Phase 4: Removing closed issues from memory...")
+        # Phase 4: STAGE the closures. Nothing is written here.
+        #
+        # This agent used to close issues immediately, which made a cancelled
+        # turn corrupting: if the turn budget expired during `observe`, issues
+        # were already closed while the turn's new issue and inventory changes
+        # never landed, and the next session resumed from that half-applied
+        # state (GitHub issue #3). Closures are now handed to persist_node,
+        # which applies them last, after all cancellable LLM work.
+        self.logger.info(f"[IssueClosedAgent] Phase 4: Staging closures for persist...")
 
-        closed_contents = []
+        pending_closures = []
         if response.closed_issue_ids:
             for issue_id in response.closed_issue_ids:
-                self.logger.info(f"[IssueClosedAgent] Attempting to close issue ID: {issue_id}")
-
-                # Find the memory with this ID to get its content for logging/display
+                # Find the memory with this ID to get its content for display
                 mem_content = None
                 mem_importance = None
                 for mem in tracked_issues:
@@ -141,34 +156,34 @@ class IssueClosedAgent:
                         mem_importance = mem.importance
                         break
 
-                success = memory_toolkit.state.remove_memory(issue_id)
-                if success:
-                    self.logger.info(f"[IssueClosedAgent] [OK] REMOVED ID {issue_id}: '{mem_content}'")
-                    # Add to closed_contents for display (include ID for debugging)
-                    if mem_content and mem_importance is not None:
-                        closed_contents.append(f"[ID:{issue_id}, {mem_importance}/1000] {mem_content}")
-                else:
-                    self.logger.warning(f"[IssueClosedAgent] [FAIL] Database removal failed for ID {issue_id}: '{mem_content}'")
+                display = (
+                    f"[ID:{issue_id}, {mem_importance}/1000] {mem_content}"
+                    if mem_content and mem_importance is not None
+                    else None
+                )
+                pending_closures.append({"id": issue_id, "display": display})
+                self.logger.info(f"[IssueClosedAgent] STAGED close of ID {issue_id}: '{mem_content}'")
         else:
-            self.logger.info(f"[IssueClosedAgent] No issues closed this turn")
+            self.logger.info(f"[IssueClosedAgent] No issues to close this turn")
 
-        # Update response with content strings for display
-        response.closed_issue_contents = closed_contents
+        # closed_issue_contents stays empty until persist_node confirms the
+        # writes: the report must show what was actually closed, not intended.
+        response.closed_issue_contents = []
 
         # Log summary
         self.logger.info(f"[IssueClosedAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         self.logger.info(f"[IssueClosedAgent] SUMMARY")
-        if response.closed_issue_ids:
-            self.logger.info(f"[IssueClosedAgent] ISSUES CLOSED: {len(response.closed_issue_ids)} issue(s) resolved")
-            for closed_issue in response.closed_issue_contents:
-                self.logger.info(f"[IssueClosedAgent]   - CLOSED: '{closed_issue}'")
+        if pending_closures:
+            self.logger.info(f"[IssueClosedAgent] ISSUES STAGED FOR CLOSE: {len(pending_closures)}")
+            for closure in pending_closures:
+                self.logger.info(f"[IssueClosedAgent]   - STAGED: '{closure['display'] or closure['id']}'")
             if response.reasoning:
                 self.logger.info(f"[IssueClosedAgent]   Reasoning: {response.reasoning}")
         else:
             self.logger.info(f"[IssueClosedAgent] No issues closed this turn")
         self.logger.info(f"[IssueClosedAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        return response
+        return response, pending_closures
 
     def _create_analysis_prompt(
         self, game_response: str, location: str, recent_history: str, tracked_issues: str

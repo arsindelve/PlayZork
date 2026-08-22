@@ -13,6 +13,16 @@ from game_logger import GameLogger
 from config import get_cheap_llm, get_expensive_llm
 
 
+# Turn-level failure policy (see GitHub issue #1). A turn can fail for reasons
+# that say nothing about the run's health — one malformed LLM response, one
+# transient API error. Losing the whole session to that is what made long runs
+# impossible, so a failed turn falls back to a harmless command instead. A
+# sustained failure streak (game API down, model unreachable) still ends the
+# session rather than looping forever.
+FALLBACK_COMMAND = "LOOK"
+MAX_CONSECUTIVE_TURN_FAILURES = 3
+
+
 @dataclass
 class PendingDecision:
     """Stores all decision data from the previous turn for report synchronization.
@@ -111,20 +121,59 @@ class GameSession:
             # Initialize the game state.
             await self.zork_service.play_turn("verbose")
 
-            # Bootstrap inventory from game INVENTORY command
-            await self._bootstrap_inventory()
+            # Bootstrap inventory from game INVENTORY command. A failure here
+            # costs us the starting inventory, not the run.
+            try:
+                await self._bootstrap_inventory()
+            except Exception as e:
+                self.logger.logger.error(
+                    f"Inventory bootstrap failed; continuing with empty inventory: {e}",
+                    exc_info=True,
+                )
 
-            adventurer_response = await self.__play_turn("look", display)
+            # Run indefinitely until user interrupts.
+            # A failed turn is contained here: it costs one command, not the
+            # session (see issue #1). KeyboardInterrupt and CancelledError are
+            # BaseExceptions, so they propagate past `except Exception`.
+            next_command = "look"
+            consecutive_failures = 0
 
-            # Run indefinitely until user interrupts
             while True:
-                adventurer_response = await self.__play_turn(adventurer_response, display)
+                try:
+                    next_command = await self.__play_turn(next_command, display)
+                    consecutive_failures = 0
+                except Exception as e:
+                    consecutive_failures += 1
+                    self.logger.logger.error(
+                        f"Turn {self.turn_number} failed "
+                        f"({consecutive_failures}/{MAX_CONSECUTIVE_TURN_FAILURES}): {e}",
+                        exc_info=True,
+                    )
+                    if consecutive_failures >= MAX_CONSECUTIVE_TURN_FAILURES:
+                        print(
+                            f"\n{consecutive_failures} consecutive turn failures "
+                            f"(last: {e}). Ending session."
+                        )
+                        break
+                    print(
+                        f"\nTurn failed ({e}). "
+                        f"Recovering with '{FALLBACK_COMMAND}' "
+                        f"(failure {consecutive_failures}/{MAX_CONSECUTIVE_TURN_FAILURES})."
+                    )
+                    # The failed turn produced no decision, so the next report
+                    # must not attribute the previous turn's reasoning to the
+                    # fallback command.
+                    self.pending_decision = PendingDecision(
+                        reasoning=f"Recovery: previous turn failed ({e})"
+                    )
+                    next_command = FALLBACK_COMMAND
 
         except KeyboardInterrupt:
             # Clean exit on Ctrl+C - let main.py handle the message
             raise
         except Exception as e:
             print(f"\nAn error occurred during gameplay: {e}")
+            self.logger.logger.error(f"Gameplay ended on error: {e}", exc_info=True)
         finally:
             # Drain pending post-turn analyzers/reports so we don't lose the
             # final turns' output. Failures are logged but do not block exit.
@@ -169,7 +218,8 @@ class GameSession:
              issue_closed_response, observer_response, decision_prompt,
              research_tool_calls, decision_tool_calls) = await self.adventurer_service.handle_user_input(
                 zork_response,
-                self.turn_number
+                self.turn_number,
+                input_text,
             )
 
             # Extract closed issues and new issue from responses
@@ -240,8 +290,9 @@ class GameSession:
 
         except Exception as e:
             self.logger.log_error(str(e))
-            print(f"\nAn error occurred while processing turn: {e}")
-            raise  # Re-raise to be caught by play() method
+            # play() decides whether to recover with a fallback command or end
+            # the session; it owns the user-facing message.
+            raise
 
     def _dispatch_post_turn_io(
         self,

@@ -17,6 +17,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_core.prompts import ChatPromptTemplate
 from .interaction_response import InteractionResponse
+from .tool_execution import invoke_tool_safely, TOOL_ERROR_PREFIX
 from adventurer.prompt_library import PromptLibrary
 
 
@@ -126,9 +127,16 @@ class InteractionAgent:
                         tool_name = tool_call['name']
                         tool_args = tool_call.get('args', {})
 
-                        if tool_name == "get_inventory" and tool_name in tools_map:
+                        if tool_name == "get_inventory":
                             logger.info(f"[InteractionAgent]   -> {tool_name}()")
-                            tool_result = tools_map[tool_name].invoke(tool_args)
+                            # Never raises; a failure comes back as "Error: ..." (#1)
+                            tool_result = invoke_tool_safely(
+                                tools_map,
+                                tool_name,
+                                tool_args,
+                                label="InteractionAgent",
+                                log=logger,
+                            )
                             logger.info(f"[InteractionAgent]      Result: {str(tool_result)}")
 
                             # Store tool call history for reporting
@@ -138,9 +146,15 @@ class InteractionAgent:
                                 "output": str(tool_result)
                             })
 
-                            # Parse inventory (comma-separated list or "empty" message)
-                            if tool_result and "empty" not in tool_result.lower():
-                                inventory_list = [item.strip() for item in tool_result.split(',')]
+                            # Parse inventory (comma-separated list or "empty" message).
+                            # An "Error: ..." result is not an inventory listing.
+                            result_text = str(tool_result) if tool_result else ""
+                            if (
+                                result_text
+                                and "empty" not in result_text.lower()
+                                and not result_text.startswith(TOOL_ERROR_PREFIX)
+                            ):
+                                inventory_list = [item.strip() for item in result_text.split(',')]
                             break
             except Exception as e:
                 logger.warning(f"[InteractionAgent] Failed to get inventory: {e}")

@@ -58,7 +58,9 @@ Game backends (`GAME_BACKENDS` in config.py): Zork I and Planetfall are hosted A
 - Expensive: decisions, agent proposals, observation, history summarization
 - Ollama uses `qwen2.5:14b` for both tiers (stays warm, no model swap); temperature 0 throughout
 
-Timeouts: `LLM_TIMEOUT_SECONDS` (per LLM call, retried up to `LLM_MAX_RETRIES` with exponential backoff via `llm_utils.invoke_with_retry` / `ainvoke_with_retry`) and `TURN_BUDGET_SECONDS` (wall-clock cap on the whole per-turn decision graph).
+**Timeouts (coupled — don't tune one alone):** `LLM_TIMEOUT_SECONDS` (per *attempt*, default 180, `PLAYZORK_LLM_TIMEOUT_SECONDS`) × `LLM_MAX_RETRIES` (default 3, `PLAYZORK_LLM_MAX_RETRIES`) plus exponential backoff = `LLM_RETRY_ENVELOPE_SECONDS`, the worst case for one guarded call (`llm_utils.invoke_with_retry` / `ainvoke_with_retry`). `TURN_BUDGET_SECONDS` (default 1200, `PLAYZORK_TURN_BUDGET_SECONDS`) is the wall-clock cap on the whole per-turn decision graph and must exceed that envelope, or retries 2..N are unreachable — config enforces a floor of `2 ×` the envelope and logs a warning when it raises a configured value. `config.retry_envelope_seconds()` must stay in sync with the backoff schedule in `llm_utils`.
+
+**Failure containment:** a failed turn is not a failed run. `invoke_tool_safely` (`tools/agent_graph/tool_execution.py`) turns any model-supplied tool call error into an `"Error: ..."` string fed back as the tool result; spawn uses `gather(return_exceptions=True)` and neutralizes failed agents; `close_issues`/`observe`/`persist` are individually guarded so post-decision failures can't discard a chosen command; `GameSession.play()` recovers a failed turn with `FALLBACK_COMMAND` and only gives up after `MAX_CONSECUTIVE_TURN_FAILURES`. Memory closures are **staged** by `IssueClosedAgent` and applied by `persist_node` last, so a cancelled turn never half-applies memory state.
 
 ## Architecture
 

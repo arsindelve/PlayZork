@@ -1,19 +1,16 @@
-"""
-Configuration for LLM models used throutry weghout the application.
-
-CHANGE PROVIDER HERE TO SWITCH BETWEEN OPENAI AND OLLAMA
-"""
+"""Runtime configuration for the game backend and LLM provider."""
 from functools import lru_cache
+import logging
+import os
+from pathlib import Path
 
-# ═══════════════════════════════════════════════════════════
-# GAME CONFIGURATION
-# ═══════════════════════════════════════════════════════════
-GAME_NAME = "Planetfall"
-GAME_OBJECTIVE = "Reach a score of 80 points"
-GAME_OBJECTIVE_SCORE = 80  # Numeric value for scoring logic
+from dotenv import load_dotenv
 
-# Session ID for tracking game sessions
-SESSION_ID = "E9"
+
+# Load repository-local configuration before evaluating module constants. This
+# also makes direct imports (tests, scripts, and IDE runs) behave like main.py.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
 
 # ═══════════════════════════════════════════════════════════
 # GAME BACKEND CONFIGURATION
@@ -42,8 +39,8 @@ GAME_BACKENDS = {
     }
 }
 
-# Active game backend - change this to switch games
-ACTIVE_GAME = "escaperoom"  # Options: "zork", "planetfall", or "escaperoom"
+# Active game backend. Override in .env without editing source.
+ACTIVE_GAME = os.getenv("PLAYZORK_GAME", "zork").strip().lower()
 
 # Helper function to get the current game config
 def get_game_config():
@@ -52,21 +49,83 @@ def get_game_config():
         raise ValueError(f"Invalid ACTIVE_GAME: {ACTIVE_GAME}. Must be one of {list(GAME_BACKENDS.keys())}")
     return GAME_BACKENDS[ACTIVE_GAME]
 
+
+# Game-facing prompts and scoring must describe the selected backend.
+_ACTIVE_GAME_CONFIG = get_game_config()
+GAME_NAME = _ACTIVE_GAME_CONFIG["name"]
+GAME_OBJECTIVE = _ACTIVE_GAME_CONFIG["objective"]
+GAME_OBJECTIVE_SCORE = _ACTIVE_GAME_CONFIG["target_score"]
+
+# Session ID for both the game backend and local persistence.
+SESSION_ID = os.getenv("PLAYZORK_SESSION_ID", "local-zork-session").strip()
+if not SESSION_ID:
+    raise ValueError("PLAYZORK_SESSION_ID must not be empty")
+
 # ═══════════════════════════════════════════════════════════
-# CHANGE THIS ONE LINE TO SWITCH PROVIDERS
+# LLM PROVIDER CONFIGURATION
 # ═══════════════════════════════════════════════════════════
-LLM_PROVIDER = "ollama"  # Options: "openai" or "ollama"
+LLM_PROVIDER = os.getenv("PLAYZORK_LLM_PROVIDER", "ollama").strip().lower()
+if LLM_PROVIDER not in {"openai", "ollama"}:
+    raise ValueError("PLAYZORK_LLM_PROVIDER must be 'openai' or 'ollama'")
 
 # ═══════════════════════════════════════════════════════════
 # TIMEOUT AND RETRY CONFIGURATION
 # ═══════════════════════════════════════════════════════════
-LLM_TIMEOUT_SECONDS = 300  # Timeout for each LLM call
-LLM_MAX_RETRIES = 5       # Maximum retry attempts
+# These numbers are coupled, not independent (GitHub issue #3). The turn budget
+# wraps the entire decision graph, and each guarded LLM call's retry envelope
+# lives *inside* it. If the envelope is larger than the budget, retry attempts
+# 2..N can never run: the outer deadline always fires first and the retry policy
+# is dead code. The old values (300s x 5 = ~1530s envelope inside a 600s budget)
+# had exactly that defect.
+#
+# The per-attempt timeout is sized from measured latency, not guessed. On the
+# 2026-08-21 smoke run, individual qwen2.5:14b calls took 43-113s under agent
+# contention, so the 60-90s cap suggested in #3 would abort healthy calls — and
+# per #27 each abort piles another request onto the server that was already
+# slow. 180s clears the measured worst case with headroom while still catching
+# a genuine hang.
+LLM_TIMEOUT_SECONDS = int(os.getenv("PLAYZORK_LLM_TIMEOUT_SECONDS", "180"))
+LLM_MAX_RETRIES = int(os.getenv("PLAYZORK_LLM_MAX_RETRIES", "3"))
+
+
+def retry_envelope_seconds(timeout_seconds: int = None, max_retries: int = None) -> int:
+    """Worst-case wall clock for ONE guarded LLM call.
+
+    Every attempt times out, plus the exponential backoff llm_utils sleeps
+    between attempts (2**attempt after attempts 1..n-1). Keep this in sync with
+    `llm_utils.invoke_with_retry` / `ainvoke_with_retry`.
+    """
+    timeout_seconds = LLM_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    attempts = max(1, LLM_MAX_RETRIES if max_retries is None else max_retries)
+    backoff = sum(2 ** attempt for attempt in range(1, attempts))
+    return attempts * timeout_seconds + backoff
+
+
+LLM_RETRY_ENVELOPE_SECONDS = retry_envelope_seconds()
 
 # Wall-clock budget for the full per-turn decision graph
 # (spawn_agents → research → decide → close → observe → persist).
-# A turn that exceeds this raises asyncio.TimeoutError instead of stalling.
-TURN_BUDGET_SECONDS = 600
+# A turn that exceeds this raises asyncio.TimeoutError; GameSession catches it
+# and recovers with a fallback command rather than ending the run (#1).
+#
+# Floor: the budget must hold at least one full retry envelope plus room for
+# the rest of the turn's work, or retries are unreachable. A configured value
+# below the floor is raised to it.
+TURN_BUDGET_FLOOR_SECONDS = LLM_RETRY_ENVELOPE_SECONDS * 2
+_CONFIGURED_TURN_BUDGET = int(os.getenv("PLAYZORK_TURN_BUDGET_SECONDS", "1200"))
+TURN_BUDGET_SECONDS = max(_CONFIGURED_TURN_BUDGET, TURN_BUDGET_FLOOR_SECONDS)
+
+if TURN_BUDGET_SECONDS > _CONFIGURED_TURN_BUDGET:
+    logging.getLogger(__name__).warning(
+        "PLAYZORK_TURN_BUDGET_SECONDS=%ss is below the retry envelope floor "
+        "(%ss for %s attempts x %ss); raising it to %ss so LLM retries are "
+        "reachable.",
+        _CONFIGURED_TURN_BUDGET,
+        TURN_BUDGET_FLOOR_SECONDS,
+        LLM_MAX_RETRIES,
+        LLM_TIMEOUT_SECONDS,
+        TURN_BUDGET_SECONDS,
+    )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -79,7 +138,7 @@ MODELS = {
     },
     "openai": {
         "cheap": "gpt-5-nano-2025-08-07",
-        "expensive": "gpt-5-mini-2025-08-07",
+        "expensive": "gpt-5.6-sol",
     }
 }
 
@@ -94,7 +153,14 @@ MODELS = {
 def _build_llm(provider: str, tier: str, temperature: float):
     if provider == "ollama":
         from langchain_ollama import ChatOllama
-        return ChatOllama(model=MODELS["ollama"][tier], temperature=temperature)
+        kwargs = {}
+        if ollama_host := os.getenv("OLLAMA_HOST"):
+            kwargs["base_url"] = ollama_host
+        return ChatOllama(
+            model=MODELS["ollama"][tier],
+            temperature=temperature,
+            **kwargs,
+        )
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=MODELS["openai"][tier], temperature=temperature)

@@ -22,6 +22,7 @@ from .issue_closed_agent import IssueClosedAgent
 from .issue_closed_response import IssueClosedResponse
 from .observer_agent import ObserverAgent
 from .observer_response import ObserverResponse
+from .tool_execution import invoke_tool_safely
 
 
 class DecisionState(TypedDict):
@@ -29,6 +30,7 @@ class DecisionState(TypedDict):
 
     # Input
     game_response: ZorkApiResponse
+    player_command: str
 
     # Spawn phase output
     issue_agents: List[IssueAgent]
@@ -47,12 +49,41 @@ class DecisionState(TypedDict):
 
     # Issue closing phase output
     issue_closed_response: Optional[IssueClosedResponse]
+    # Closures decided by close_issues but APPLIED by persist, so a turn
+    # cancelled by the turn budget can't half-apply memory state (see #3).
+    pending_closures: List[dict]
 
     # Observation phase output
     observer_response: Optional[ObserverResponse]
 
     # Persistence tracking
     memory_persisted: bool
+
+
+def _neutralize_failed_agent(agent, error: BaseException) -> None:
+    """Reset an agent that raised during research so it cannot advocate.
+
+    Each agent type has its own "I have no proposal" representation, and both
+    the proposal formatter and the report writer key off it:
+      * InteractionAgent / LoopDetectionAgent use confidence == 0 (their
+        confidence is typed int and compared with `> 0`, so it must never
+        become None).
+      * IssueAgent / ExplorerAgent use proposed_action None + confidence None.
+    The failure reason is left on the agent so it surfaces in the HTML report
+    instead of vanishing.
+    """
+    if isinstance(agent, (InteractionAgent, LoopDetectionAgent)):
+        agent.proposed_action = "nothing"
+        agent.confidence = 0
+        if isinstance(agent, InteractionAgent):
+            agent.detected_objects = []
+            agent.inventory_items = []
+        else:
+            agent.loop_detected = False
+    else:
+        agent.proposed_action = None
+        agent.confidence = None
+    agent.reason = f"Agent failed during research: {error}"
 
 
 def create_spawn_agents_node(
@@ -247,10 +278,34 @@ def create_spawn_agents_node(
         all_agents = [a for a in issue_agents + [explorer_agent, loop_detection_agent, interaction_agent] if a is not None]
 
         # Run all agents in parallel — pure async, no threads.
+        # return_exceptions=True isolates failures: one agent blowing up must
+        # not cancel its siblings or end the turn (see #1). A failed agent is
+        # neutralized so it cannot contribute a proposal, but is kept in state
+        # so the HTML report still shows what it attempted and why it failed.
+        failed_agents = 0
         if all_agents:
-            await asyncio.gather(*(agent_coroutine(a) for a in all_agents))
+            results = await asyncio.gather(
+                *(agent_coroutine(a) for a in all_agents),
+                return_exceptions=True,
+            )
+            for agent, result in zip(all_agents, results):
+                if not isinstance(result, BaseException):
+                    continue
+                if isinstance(result, asyncio.CancelledError):
+                    # Turn budget expired / task cancelled — must propagate.
+                    raise result
+                failed_agents += 1
+                agent_label = type(agent).__name__
+                logger.error(
+                    f"{agent_label} failed during research/proposal: {result}",
+                    exc_info=result,
+                )
+                _neutralize_failed_agent(agent, result)
 
-        logger.info(f"All {len(all_agents)} agents completed research in PARALLEL")
+        logger.info(
+            f"All {len(all_agents)} agents completed research in PARALLEL "
+            f"({failed_agents} failed and were excluded from proposals)"
+        )
         logger.info("=" * 80)
         logger.info("SPAWN AGENTS COMPLETE")
         logger.info("=" * 80)
@@ -265,7 +320,12 @@ def create_spawn_agents_node(
     return spawn_agents_node
 
 
-def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolkit):
+def create_research_node(
+    research_agent: Runnable,
+    history_toolkit: HistoryToolkit,
+    mapper_toolkit: MapperToolkit,
+    inventory_toolkit,
+):
     """
     Create the research node that calls history tools.
 
@@ -304,12 +364,21 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
         logger.info(f"Current location: {zork_response.LocationName}")
         logger.info(f"Current game response (first 100): {zork_response.Response[:100]}...")
 
+        # Research is advisory: the specialist agents have already done their
+        # own research, so a failure here degrades the decision instead of
+        # ending the turn (see #1).
         from llm_utils import ainvoke_with_retry
-        response = await ainvoke_with_retry(
-            research_agent,
-            research_input,
-            operation_name="Research Agent"
-        )
+        try:
+            response = await ainvoke_with_retry(
+                research_agent,
+                research_input,
+                operation_name="Research Agent"
+            )
+        except Exception as e:
+            logger.error(f"[ResearchAgent] Research failed, continuing without it: {e}", exc_info=True)
+            state["research_context"] = f"Research unavailable this turn ({e})."
+            state["research_tool_calls"] = []
+            return state
 
         # Track tool calls for HTML report
         research_tool_calls = []
@@ -317,9 +386,14 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
         # Execute tool calls if present
         if hasattr(response, 'tool_calls') and response.tool_calls:
             tool_results = []
-            # Include analysis tools alongside history tools
+            # Execute any tool schema bound by AdventurerService.
             from tools.analysis import get_analysis_tools
-            all_research_tools = history_toolkit.get_tools() + get_analysis_tools()
+            all_research_tools = (
+                history_toolkit.get_tools()
+                + mapper_toolkit.get_tools()
+                + inventory_toolkit.get_tools()
+                + get_analysis_tools()
+            )
             tools_map = {tool.name: tool for tool in all_research_tools}
 
             logger.info(f"[ResearchAgent] Made {len(response.tool_calls)} tool calls:")
@@ -331,18 +405,25 @@ def create_research_node(research_agent: Runnable, history_toolkit: HistoryToolk
 
                 logger.info(f"[ResearchAgent]   -> {tool_name}({tool_args})")
 
-                if tool_name in tools_map:
-                    tool_result = tools_map[tool_name].invoke(tool_args)
-                    result_str = str(tool_result)
-                    logger.info(f"[ResearchAgent]      Result: {result_str[:150]}...")
-                    tool_results.append(f"{tool_name} result: {tool_result}")
+                # Never raises: a bad tool name or malformed model-supplied
+                # args come back as an "Error: ..." string (see #1).
+                tool_result = invoke_tool_safely(
+                    tools_map,
+                    tool_name,
+                    tool_args,
+                    label="ResearchAgent",
+                    log=logger,
+                )
+                result_str = str(tool_result)
+                logger.info(f"[ResearchAgent]      Result: {result_str[:150]}...")
+                tool_results.append(f"{tool_name} result: {tool_result}")
 
-                    # Track for HTML report
-                    research_tool_calls.append({
-                        "tool_name": tool_name,
-                        "input": str(tool_args) if tool_args else "",
-                        "output": result_str
-                    })
+                # Track for HTML report
+                research_tool_calls.append({
+                    "tool_name": tool_name,
+                    "input": str(tool_args) if tool_args else "",
+                    "output": result_str
+                })
 
             # Combine tool results into summary
             research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
@@ -539,18 +620,27 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit, memo
         # Create IssueClosedAgent to analyze recent history
         issue_closer = IssueClosedAgent()
 
-        # Analyze recent history and close resolved issues
-        issue_closed_response = issue_closer.analyze(
-            game_response=zork_response.Response,
-            location=zork_response.LocationName or "Unknown",
-            score=zork_response.Score,
-            moves=zork_response.Moves,
-            decision_llm=decision_llm,
-            history_toolkit=history_toolkit,
-            memory_toolkit=memory_toolkit
-        )
+        # Bookkeeping runs AFTER the decision is already made: a failure here
+        # must not throw away a usable command (see #1). Downstream consumers
+        # all treat a None response as "nothing closed this turn".
+        try:
+            issue_closed_response, pending_closures = issue_closer.analyze(
+                game_response=zork_response.Response,
+                location=zork_response.LocationName or "Unknown",
+                score=zork_response.Score,
+                moves=zork_response.Moves,
+                decision_llm=decision_llm,
+                history_toolkit=history_toolkit,
+                memory_toolkit=memory_toolkit
+            )
+        except Exception as e:
+            logger.error(f"CLOSE ISSUES failed, skipping this turn: {e}", exc_info=True)
+            issue_closed_response = None
+            pending_closures = []
 
         state["issue_closed_response"] = issue_closed_response
+        # Staged, not applied: persist_node commits these last (#3).
+        state["pending_closures"] = pending_closures
 
         logger.info("=" * 80)
         logger.info("CLOSE ISSUES COMPLETE")
@@ -596,17 +686,23 @@ def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit:
         # Get history tools
         history_tools = history_toolkit.get_tools()
 
-        # Analyze game response and identify new issues (with full context)
-        observer_response = observer.observe(
-            game_response=zork_response.Response,
-            location=zork_response.LocationName or "Unknown",
-            score=zork_response.Score,
-            moves=zork_response.Moves,
-            decision_llm=decision_llm,
-            research_agent=research_agent,
-            history_tools=history_tools,
-            memory_toolkit=memory_toolkit
-        )
+        # Post-decision bookkeeping: a failure here must not discard the
+        # command already chosen (see #1). persist_node and GameSession both
+        # handle a None observer_response as "no new issue this turn".
+        try:
+            observer_response = observer.observe(
+                game_response=zork_response.Response,
+                location=zork_response.LocationName or "Unknown",
+                score=zork_response.Score,
+                moves=zork_response.Moves,
+                decision_llm=decision_llm,
+                research_agent=research_agent,
+                history_tools=history_tools,
+                memory_toolkit=memory_toolkit
+            )
+        except Exception as e:
+            logger.error(f"OBSERVE failed, skipping this turn: {e}", exc_info=True)
+            observer_response = None
 
         state["observer_response"] = observer_response
 
@@ -637,26 +733,44 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
         import logging
         logger = logging.getLogger(__name__)
 
-        observer_response = state["observer_response"]
+        observer_response = state.get("observer_response")
         zork_response = state["game_response"]
 
         logger.info("\n" + "=" * 80)
         logger.info("PERSIST - Saving new issues to memory and decaying old ones")
         logger.info("=" * 80)
-        logger.info(f"Observer.remember: '{observer_response.remember}'")
-        logger.info(f"Observer.rememberImportance: {observer_response.rememberImportance}")
-        logger.info(f"Observer.item: '{observer_response.item}'")
 
-        if observer_response.remember and observer_response.remember.strip():
+        state["memory_persisted"] = False
+
+        if observer_response is None:
+            # Observation failed or was skipped this turn (see #1). Nothing to
+            # store, but the inventory update below must still run.
+            logger.info("NO OBSERVER RESPONSE - nothing to store this turn")
+        else:
+            logger.info(f"Observer.remember: '{observer_response.remember}'")
+            logger.info(f"Observer.rememberImportance: {observer_response.rememberImportance}")
+            logger.info(f"Observer.item: '{observer_response.item}'")
+
+        has_memory = bool(
+            observer_response is not None
+            and observer_response.remember
+            and observer_response.remember.strip()
+        )
+
+        if has_memory:
             logger.info(f"ATTEMPTING TO STORE MEMORY: [{observer_response.rememberImportance}/1000] {observer_response.remember}")
-            was_added = memory_toolkit.add_memory(
-                content=observer_response.remember,
-                importance=observer_response.rememberImportance or 500,
-                turn_number=turn_number_ref["current"],
-                location=zork_response.LocationName or "Unknown",
-                score=zork_response.Score,
-                moves=zork_response.Moves
-            )
+            try:
+                was_added = memory_toolkit.add_memory(
+                    content=observer_response.remember,
+                    importance=observer_response.rememberImportance or 500,
+                    turn_number=turn_number_ref["current"],
+                    location=zork_response.LocationName or "Unknown",
+                    score=zork_response.Score,
+                    moves=zork_response.Moves
+                )
+            except Exception as e:
+                logger.error(f"MEMORY STORAGE RAISED, continuing turn: {e}", exc_info=True)
+                was_added = False
             state["memory_persisted"] = was_added
 
             # Log summary
@@ -666,9 +780,8 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
             else:
                 logger.info(f"MEMORY STORAGE FAILED (duplicate?): [{observer_response.rememberImportance}/1000] {observer_response.remember}")
             logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        else:
+        elif observer_response is not None:
             logger.info("NO MEMORY TO STORE (remember field empty or whitespace)")
-            state["memory_persisted"] = False
 
         # Decay is now applied lazily on read (see MemoryState.get_top_memories);
         # no per-turn UPDATE is needed here.
@@ -678,37 +791,76 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
         logger.info("UPDATING INVENTORY")
         logger.info("-" * 80)
 
-        decision = state["decision"]
-        if decision and decision.command:
+        player_command = state.get("player_command")
+        if player_command:
             from tools.inventory import InventoryAnalyzer
             from config import get_cheap_llm
 
-            # Use cheap LLM for inventory analysis
-            analyzer = InventoryAnalyzer(get_cheap_llm(temperature=0))
+            # Inventory analysis is post-decision bookkeeping: a failed LLM
+            # call or malformed structured output must not cost us the turn
+            # (see #1). Stale inventory is recoverable; a dead session is not.
+            try:
+                # Use cheap LLM for inventory analysis
+                analyzer = InventoryAnalyzer(get_cheap_llm(temperature=0))
 
-            # Analyze turn for inventory changes
-            changes = analyzer.analyze_turn(
-                player_command=decision.command,
-                game_response=zork_response.Response
-            )
+                # Analyze turn for inventory changes
+                changes = analyzer.analyze_turn(
+                    player_command=player_command,
+                    game_response=zork_response.Response
+                )
 
-            logger.info(f"Items added: {changes.items_added}")
-            logger.info(f"Items removed: {changes.items_removed}")
-            logger.info(f"Reasoning: {changes.reasoning}")
+                logger.info(f"Items added: {changes.items_added}")
+                logger.info(f"Items removed: {changes.items_removed}")
+                logger.info(f"Reasoning: {changes.reasoning}")
 
-            # Apply changes to inventory state
-            for item in changes.items_added:
-                inventory_toolkit.state.add_item(item, turn_number_ref["current"])
+                # Apply changes to inventory state
+                for item in changes.items_added:
+                    inventory_toolkit.state.add_item(item, turn_number_ref["current"])
 
-            for item in changes.items_removed:
-                inventory_toolkit.state.remove_item(item, turn_number_ref["current"])
+                for item in changes.items_removed:
+                    inventory_toolkit.state.remove_item(item, turn_number_ref["current"])
 
-            current_inventory = inventory_toolkit.state.get_items()
-            logger.info(f"Current inventory ({len(current_inventory)} items): {current_inventory}")
+                current_inventory = inventory_toolkit.state.get_items()
+                logger.info(f"Current inventory ({len(current_inventory)} items): {current_inventory}")
+            except Exception as e:
+                logger.error(f"INVENTORY UPDATE FAILED, inventory may be stale: {e}", exc_info=True)
         else:
             logger.info("No command to analyze (decision was None)")
 
         logger.info("-" * 80)
+
+        # Apply the closures staged by close_issues_node — LAST, after every
+        # cancellable LLM call in this turn (#3). Closing an issue is the only
+        # destructive memory write in the graph; doing it here means a turn
+        # killed by the budget leaves memory untouched instead of half-applied.
+        # Anything not closed stays open and is simply re-detected next turn.
+        pending_closures = state.get("pending_closures") or []
+        issue_closed_response = state.get("issue_closed_response")
+        if pending_closures:
+            logger.info("\n" + "-" * 80)
+            logger.info(f"APPLYING {len(pending_closures)} STAGED ISSUE CLOSURE(S)")
+            logger.info("-" * 80)
+
+            closed_contents = []
+            for closure in pending_closures:
+                issue_id = closure.get("id")
+                display = closure.get("display")
+                try:
+                    success = memory_toolkit.state.remove_memory(issue_id)
+                except Exception as e:
+                    logger.error(f"CLOSE FAILED for ID {issue_id}: {e}", exc_info=True)
+                    continue
+
+                if success:
+                    logger.info(f"[OK] CLOSED ID {issue_id}: '{display}'")
+                    if display:
+                        closed_contents.append(display)
+                else:
+                    logger.warning(f"[FAIL] Database close failed for ID {issue_id}: '{display}'")
+
+            # Report only what actually committed.
+            if issue_closed_response is not None:
+                issue_closed_response.closed_issue_contents = closed_contents
 
         logger.info("=" * 80)
         logger.info("PERSIST COMPLETE")
@@ -758,7 +910,15 @@ def create_decision_graph(
         history_toolkit,
         turn_number_ref,
     ))
-    graph.add_node("research", create_research_node(research_agent, history_toolkit))
+    graph.add_node(
+        "research",
+        create_research_node(
+            research_agent,
+            history_toolkit,
+            mapper_toolkit,
+            inventory_toolkit,
+        ),
+    )
     graph.add_node("decide", create_decision_node(decision_chain))
     graph.add_node("close_issues", create_close_issues_node(decision_llm, history_toolkit, memory_toolkit))
     graph.add_node("observe", create_observe_node(decision_llm, research_agent, history_toolkit, memory_toolkit))
