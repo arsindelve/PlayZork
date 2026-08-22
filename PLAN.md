@@ -59,20 +59,30 @@ Turn 1 of the 2026-08-21 smoke run took **7m25s** with only 2 subagents and zero
 - **#20**'s arithmetic in the issue was wrong: the decay crossover is **11 turns** of relative age, not 44 — the inversion arrives 4× sooner than reported. It also needs >30 open memories to bite, which no live session has reached yet.
 - **#9**'s read-side collapse has a trap worth remembering: a legacy DB can hold both `('A','BLOCKED','N')` and `('A','B','NORTH')`, so the collapse must prefer a real passage or it would hide a known exit from the pathfinder.
 
-## Milestone 3 — Trustworthy world state *(~2–3 days)*
+## Milestone 3 — Trustworthy world state *(~2–3 days)* — ✅ COMPLETE
 
-[#11](https://github.com/arsindelve/PlayZork/issues/11) goes first: while corrections are impossible, every other mapper bug is permanent.
+Applied in dependency order, which the investigation revised from the original plan: **#11 → #12 → #10 → #14**, with #8, #13, #21 independent.
 
-| # | Issue | Task |
-|---|---|---|
-| 10 | [#11](https://github.com/arsindelve/PlayZork/issues/11) | Upsert map transitions: success overwrites BLOCKED (the keystone) |
-| 11 | [#10](https://github.com/arsindelve/PlayZork/issues/10) | Tokenized direction extraction (drop `MOVE`, require standalone direction word); record BLOCKED only when the response text indicates a failed move (also mitigates [#15](https://github.com/arsindelve/PlayZork/issues/15)) |
-| 12 | [#13](https://github.com/arsindelve/PlayZork/issues/13) | Casefold location lookups (do before M4 — the TurnContext calls these tools directly) |
-| 13 | [#14](https://github.com/arsindelve/PlayZork/issues/14) | Record raw-command edges (`CLIMB TREE`) for non-cardinal movement |
-| 14 | [#12](https://github.com/arsindelve/PlayZork/issues/12) | Gate mapper update on death detection |
-| 15 | [#8](https://github.com/arsindelve/PlayZork/issues/8) | Word-boundary alias matching in explorer spawn |
-| 16 | [#21](https://github.com/arsindelve/PlayZork/issues/21) | Inventory: DB as single source of truth, dedupe adds, fuzzy removals, periodic `INVENTORY` resync |
-| — | [#15](https://github.com/arsindelve/PlayZork/issues/15) | Accept #10's mitigation; park full room-identity (description fingerprinting) as future work |
+| # | Issue | Task | Status |
+|---|---|---|---|
+| 10 | [#11](https://github.com/arsindelve/PlayZork/issues/11) | Upsert map transitions: success overwrites BLOCKED (the keystone) | ✅ done |
+| 11 | [#10](https://github.com/arsindelve/PlayZork/issues/10) | Tokenized direction extraction; record BLOCKED only on an explicit refusal | ✅ done |
+| 12 | [#13](https://github.com/arsindelve/PlayZork/issues/13) | Casefold location lookups (before M4 — the TurnContext calls these tools directly) | ✅ done |
+| 13 | [#14](https://github.com/arsindelve/PlayZork/issues/14) | Record raw-command edges (`CLIMB TREE`) for non-cardinal movement | ✅ done |
+| 14 | [#12](https://github.com/arsindelve/PlayZork/issues/12) | Gate mapper update on death detection | ✅ done |
+| 15 | [#8](https://github.com/arsindelve/PlayZork/issues/8) | Word-boundary alias matching in explorer spawn | ✅ done |
+| 16 | [#21](https://github.com/arsindelve/PlayZork/issues/21) | Inventory: DB as source of truth, dedupe adds, conservative fuzzy removals | ✅ done |
+| — | [#15](https://github.com/arsindelve/PlayZork/issues/15) | Half-fixed by #10 — stays open for room identity | open |
+
+**Ordering was wrong in the original plan.** #11 had to land with #12, not before it: the upsert treats a respawn room as observed evidence, so after #11 an ungated death turn stopped merely *adding* a bad edge and started *destroying* a correct one. And #10 had to precede #14, because the substring extractor stole commands (`GO IN` → `N`) before #14's branch could ever see them.
+
+**What M3 turned up beyond the issue text:**
+
+- **The backend already answers two of these questions.** `ZorkApiResponse` declares `PreviousLocationName` and `LastMovementDirection`, populated on both hosted games and read *nowhere* in the codebase. `LastMovementDirection` resolves #14's entire vocabulary natively (`climb tree` → `"Up"`, `in` → `"In"`). It is sticky on non-movement turns so it is not a drop-in replacement, but it should be consumed before M4. There is also an undeclared `exits` array (N=0, S=1, E=2, W=3, Up=10, Down=11) — though it lists non-traversable exits, so it is not a walkable-exit oracle.
+- **#15 was upgraded from PLAUSIBLE to CONFIRMED on live data**: a *successful* EAST between two rooms both named "Forest", which the old code recorded as a permanent wall. #10 turns that from *actively wrong* into *silently incomplete*. Room identity still needs fingerprinting — and the `exits` array is a concrete signal for it, since the two Forests differ (`[3,2,1]` vs `[3,0,1]`).
+- **A docstring in `locations.py` was empirically false.** It claimed death sequences return an empty LocationName; live probing shows a death reports the *respawn* room, so #7's guard never covered #12. Corrected.
+- **`INVENTORY` does not cost a move** on either hosted backend (verified by probe) — so a periodic resync would not pollute the score@moves metric the thesis experiment depends on. That removes the main objection to deferring it.
+- **The two response-text predicates need opposite biases** and are deliberately kept as separate functions in `response_signals.py`: death must *over*-detect (a false negative writes an edge that now also destroys the true one), a movement refusal must *under*-detect (a false positive fabricates a wall the explorer treats as explored and never retries).
 
 **Checkpoint:** one supervised 20–30 turn session; read the HTML reports before starting M4.
 

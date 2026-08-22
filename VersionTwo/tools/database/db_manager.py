@@ -502,7 +502,7 @@ class DatabaseManager:
             cursor.execute(
                 """SELECT content, importance, turn_number
                    FROM memories
-                   WHERE session_id = ? AND location = ? AND (closed = 0 OR closed IS NULL)
+                   WHERE session_id = ? AND location = ? COLLATE NOCASE AND (closed = 0 OR closed IS NULL)
                    ORDER BY importance DESC, turn_number DESC
                    LIMIT ?""",
                 (session_id, location, limit)
@@ -613,22 +613,55 @@ class DatabaseManager:
         turn_number: int
     ) -> bool:
         """
-        Add a map transition (movement from one location to another).
-        Returns True if this is a new transition, False if already known.
+        Add or correct a map transition (movement from one location to another).
+
+        UNIQUE(session_id, from_location, direction) means there is exactly one
+        row per passage. A plain INSERT made the FIRST observation permanent: a
+        direction recorded BLOCKED before the trap door was opened could never
+        be corrected once the move succeeded, so the whole underground stayed
+        unreachable for the rest of the session. The map could only degrade
+        (GitHub issue #11).
+
+        Write rule, asymmetric on purpose:
+
+          * A real destination ALWAYS overwrites what is stored — BLOCKED or a
+            wrong room. It is *observed* evidence, and it is the newest.
+          * BLOCKED never overwrites a real destination. BLOCKED is *inferred*
+            ("the room name did not change"), and that inference is wrong for
+            same-named rooms and mis-extracted directions (#10, #13, #15).
+            Losing a real edge to a bad inference is near-unrecoverable: the
+            ExplorerAgent counts a BLOCKED direction as explored and never
+            retries it, so nothing in the system would ever disprove the row.
+          * Re-walking a known passage is a no-op, so turn_discovered keeps
+            meaning "when this passage was discovered".
+
+        A passage that genuinely closes again (trap door, grating, troll) is
+        still modelled correctly: "a passage exists here and may need opening"
+        keeps the route plannable, where "there is no passage" would not. The
+        closure itself is visible to the agent in the room prose.
+
+        NOTE for #12: if death gating adopts a "DEATH" sentinel destination
+        rather than skipping the write, add it to the guard below —
+        `excluded.to_location NOT IN ('BLOCKED', 'DEATH')`.
+
+        Returns True if the stored map changed (row inserted or corrected).
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            try:
-                cursor.execute(
-                    """INSERT INTO map_transitions
+            cursor.execute(
+                """INSERT INTO map_transitions
                        (session_id, from_location, to_location, direction, turn_discovered)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (session_id, from_location, to_location, direction, turn_number)
-                )
-                return True  # New transition discovered
-            except Exception:
-                # Transition already exists (UNIQUE constraint)
-                return False
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(session_id, from_location, direction) DO UPDATE SET
+                       to_location = excluded.to_location,
+                       turn_discovered = excluded.turn_discovered
+                   WHERE map_transitions.to_location <> excluded.to_location
+                     AND excluded.to_location <> 'BLOCKED'""",
+                (session_id, from_location, to_location, direction, turn_number)
+            )
+            # rowcount is 1 for an insert, 1 for an applied correction, and 0
+            # when the DO UPDATE guard rejects the write.
+            return cursor.rowcount > 0
 
     def get_all_transitions(
         self,
@@ -668,7 +701,7 @@ class DatabaseManager:
             cursor.execute(
                 """SELECT direction, to_location
                    FROM map_transitions
-                   WHERE session_id = ? AND from_location = ?
+                   WHERE session_id = ? AND from_location = ? COLLATE NOCASE
                    ORDER BY direction ASC""",
                 (session_id, location)
             )
@@ -704,20 +737,41 @@ class DatabaseManager:
                 (session_id, item_name, turn_number)
             )
 
-    def remove_inventory_item(self, session_id: str, item_name: str, turn_number: int) -> bool:
+    def get_open_inventory_rows(self, session_id: str) -> List[Tuple[int, str]]:
         """
-        Remove an item from inventory (mark as dropped).
+        Get (row_id, item_name) for every item still held, oldest first.
+
+        Callers match on the names themselves and then drop rows by id, so a
+        removal can never affect more rows than intended. The old
+        remove_inventory_item closed EVERY row matching the name while the
+        in-memory mirror removed just one, which is how the two drifted apart
+        permanently (GitHub issue #21).
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT id, item_name
+                   FROM inventory
+                   WHERE session_id = ? AND dropped_turn IS NULL
+                   ORDER BY acquired_turn ASC, id ASC""",
+                (session_id,)
+            )
+            return [(row[0], row[1]) for row in cursor.fetchall()]
+
+    def drop_inventory_row(self, row_id: int, turn_number: int) -> bool:
+        """
+        Mark exactly one inventory row as dropped.
 
         Returns:
-            True if item was found and removed, False otherwise
+            True if that row was open and is now dropped, False otherwise
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """UPDATE inventory
                    SET dropped_turn = ?
-                   WHERE session_id = ? AND item_name = ? AND dropped_turn IS NULL""",
-                (turn_number, session_id, item_name)
+                   WHERE id = ? AND dropped_turn IS NULL""",
+                (turn_number, row_id)
             )
             return cursor.rowcount > 0
 

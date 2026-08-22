@@ -1209,6 +1209,11 @@ CRITICAL RULES FOR INVENTORY TRACKING
    - "brass lantern" → use "brass lantern" (not "lantern")
    - "rusty key" → use "rusty key" (not "key")
    - Keep adjectives and full descriptions as game provides them
+   - EXCEPTION for items_removed: name the item using the EXACT string it has
+     in CURRENTLY CARRYING. If the player types "DROP LAMP" and CURRENTLY
+     CARRYING lists "brass lantern", return "brass lantern", not "lamp".
+   - Never list an item in items_removed unless it appears in CURRENTLY CARRYING
+   - Never list an item in items_added if it already appears in CURRENTLY CARRYING
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT
@@ -1225,7 +1230,9 @@ Respond with structured JSON output."""
 
   @staticmethod
   def get_inventory_analyzer_human_prompt():
-    return """PLAYER COMMAND: {player_command}
+    return """CURRENTLY CARRYING: {current_inventory}
+
+PLAYER COMMAND: {player_command}
 
 GAME RESPONSE: {game_response}
 

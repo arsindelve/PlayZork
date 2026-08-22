@@ -21,7 +21,7 @@ def test_persist_analyzes_command_that_produced_game_response(monkeypatch):
         def __init__(self, llm):
             pass
 
-        def analyze_turn(self, player_command, game_response):
+        def analyze_turn(self, player_command, game_response, current_inventory=None):
             captured["player_command"] = player_command
             captured["game_response"] = game_response
             return SimpleNamespace(items_added=[], items_removed=[], reasoning="none")
@@ -272,7 +272,7 @@ def test_persist_handles_missing_observer_response(monkeypatch):
         def __init__(self, llm):
             pass
 
-        def analyze_turn(self, player_command, game_response):
+        def analyze_turn(self, player_command, game_response, current_inventory=None):
             captured["player_command"] = player_command
             return SimpleNamespace(items_added=[], items_removed=[], reasoning="none")
 
@@ -304,7 +304,7 @@ def test_persist_survives_inventory_analysis_failure(monkeypatch):
         def __init__(self, llm):
             pass
 
-        def analyze_turn(self, player_command, game_response):
+        def analyze_turn(self, player_command, game_response, current_inventory=None):
             raise RuntimeError("ollama connection reset")
 
     monkeypatch.setattr("tools.inventory.InventoryAnalyzer", ExplodingInventoryAnalyzer)

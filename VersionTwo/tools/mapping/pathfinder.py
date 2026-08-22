@@ -2,6 +2,8 @@
 from typing import Optional, List, Dict, Tuple, TYPE_CHECKING
 from collections import deque
 
+from .locations import normalize_location
+
 if TYPE_CHECKING:
     from .mapper_state import MapperState
 
@@ -35,14 +37,18 @@ class PathFinder:
 
         for trans in transitions:
             # Skip BLOCKED transitions (failed movement attempts)
-            if trans.to_location == "BLOCKED":
+            if normalize_location(trans.to_location) == normalize_location("BLOCKED"):
                 continue
 
-            if trans.from_location not in graph:
-                graph[trans.from_location] = []
+            # Graph keys are case-folded so a room entered under one casing and
+            # left under another is ONE node (#13). Only directions are ever
+            # returned, so nothing the LLM or the HTML map displays changes.
+            from_key = normalize_location(trans.from_location)
+            if from_key not in graph:
+                graph[from_key] = []
 
-            graph[trans.from_location].append(
-                (trans.direction, trans.to_location)
+            graph[from_key].append(
+                (trans.direction, normalize_location(trans.to_location))
             )
 
         return graph
@@ -63,6 +69,11 @@ class PathFinder:
             List of directions to follow (e.g., ["NORTH", "EAST"])
             or None if no path exists
         """
+        # These arrive straight from an LLM tool call, so their casing is not
+        # necessarily the backend's (#13).
+        from_location = normalize_location(from_location)
+        to_location = normalize_location(to_location)
+
         # Handle same location case
         if from_location == to_location:
             return []

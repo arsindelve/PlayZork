@@ -13,7 +13,11 @@ from adventurer.adventurer_response import AdventurerResponse
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
-from tools.mapping.directions import CANONICAL_DIRECTIONS, normalize_direction
+from tools.mapping.directions import (
+    CANONICAL_DIRECTIONS,
+    find_mentioned_directions,
+    normalize_direction,
+)
 from tools.mapping.locations import UNKNOWN_LOCATION, is_known_location
 from langchain_core.runnables import Runnable
 from .issue_agent import IssueAgent
@@ -170,29 +174,16 @@ def create_spawn_agents_node(
             if d not in known_directions
         ]
 
-        # Parse game text to see which directions are mentioned
-        game_text_upper = current_game_text.upper()
-        mentioned_directions = []
-
-        # Direction alias mapping
-        DIRECTION_ALIASES = {
-            "NORTH": ["NORTH", "NORTHERN", " N "],
-            "SOUTH": ["SOUTH", "SOUTHERN", " S "],
-            "EAST": ["EAST", "EASTERN", " E "],
-            "WEST": ["WEST", "WESTERN", " W "],
-            "NORTHEAST": ["NORTHEAST", "NE"],
-            "NORTHWEST": ["NORTHWEST", "NW"],
-            "SOUTHEAST": ["SOUTHEAST", "SE"],
-            "SOUTHWEST": ["SOUTHWEST", "SW"],
-            "UP": ["UP", "ABOVE", "UPWARD"],
-            "DOWN": ["DOWN", "BELOW", "DOWNWARD"],
-        }
-
-        for direction in unexplored_directions:
-            for alias in DIRECTION_ALIASES.get(direction, [direction]):
-                if alias in game_text_upper:
-                    mentioned_directions.append(direction)
-                    break  # Only count each direction once
+        # Which unexplored directions does the room prose actually name?
+        # Whole-word matching only: substring containment scored "NE" inside
+        # CORNER and "SE" inside HOUSE, and a fabricated mention both outranks
+        # every real exit and adds +20 confidence (#8). It also matched
+        # "NORTH" inside "NORTHEAST", sending the agent north when the room
+        # said northeast.
+        mentioned_directions = find_mentioned_directions(
+            current_game_text,
+            unexplored_directions,
+        )
 
         # Create ONE ExplorerAgent if there are unexplored directions
         explorer_agent = None
@@ -823,9 +814,13 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
                 analyzer = InventoryAnalyzer(get_cheap_llm(temperature=0))
 
                 # Analyze turn for inventory changes
+                # Give the analyzer the held items so it can name a removal
+                # using the string we actually store: the player types
+                # "DROP LAMP" while the DB holds "brass lantern" (#21).
                 changes = analyzer.analyze_turn(
                     player_command=player_command,
-                    game_response=zork_response.Response
+                    game_response=zork_response.Response,
+                    current_inventory=inventory_toolkit.state.get_items(),
                 )
 
                 logger.info(f"Items added: {changes.items_added}")

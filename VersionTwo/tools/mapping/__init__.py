@@ -31,7 +31,8 @@ class MapperToolkit:
         self,
         current_location: str,
         player_command: str,
-        turn_number: int
+        turn_number: int,
+        game_response: Optional[str] = None
     ) -> None:
         """
         Update map state after a game turn completes.
@@ -41,6 +42,8 @@ class MapperToolkit:
             current_location: Current location name
             player_command: Command that was executed
             turn_number: Current turn number
+            game_response: This turn's game text, used to detect a death or a
+                refused move before either is mistaken for a passage (#12, #10)
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -49,7 +52,8 @@ class MapperToolkit:
             self.state.update_from_turn(
                 current_location=current_location,
                 player_command=player_command,
-                turn_number=turn_number
+                turn_number=turn_number,
+                game_response=game_response
             )
         except Exception as e:
             logger.error(f"ERROR in mapper update_after_turn: {e}", exc_info=True)

@@ -209,7 +209,8 @@ class GameSession:
             self.mapper_toolkit.update_after_turn(
                 current_location=zork_response.LocationName,
                 player_command=input_text,
-                turn_number=self.turn_number
+                turn_number=self.turn_number,
+                game_response=zork_response.Response
             )
 
             # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)
@@ -445,6 +446,17 @@ class GameSession:
         # Parse inventory from game response using LLM
         items = self._parse_inventory_response(game_inventory_text)
 
+        # A parse failure is indistinguishable from "carrying nothing" once it
+        # becomes an empty list, and sync_with_game treats the list as ground
+        # truth — on a RESUMED session that would mark every held item dropped.
+        # Skip the sync instead and keep what the database already knows (#21).
+        if items is None:
+            self.logger.logger.warning(
+                "Inventory bootstrap: could not parse the game's INVENTORY reply; "
+                "keeping stored inventory unchanged"
+            )
+            return
+
         self.logger.logger.info(f"Parsed items: {items}")
 
         # Sync with our tracking (turn 0 = bootstrap)
@@ -452,7 +464,7 @@ class GameSession:
 
         self.logger.logger.info("Inventory bootstrap complete")
 
-    def _parse_inventory_response(self, response: str) -> list:
+    def _parse_inventory_response(self, response: str) -> Optional[list]:
         """
         Parse game's INVENTORY response into list of items using LLM.
 
@@ -483,7 +495,12 @@ Output ONLY the JSON array, nothing else."""
         try:
             result = llm.invoke(prompt)
             items = json.loads(result.content)
-            return items if isinstance(items, list) else []
+            if not isinstance(items, list):
+                self.logger.logger.error(
+                    f"Inventory parse returned {type(items).__name__}, not a list"
+                )
+                return None
+            return [str(i).strip() for i in items if str(i).strip()]
         except Exception as e:
             self.logger.logger.error(f"Failed to parse inventory: {e}")
-            return []
+            return None

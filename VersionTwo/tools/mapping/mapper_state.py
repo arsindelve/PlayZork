@@ -2,8 +2,14 @@
 from typing import Optional, List, Tuple, TYPE_CHECKING
 from pydantic import BaseModel
 from tools.database import DatabaseManager
-from .directions import normalize_direction
-from .locations import is_known_location
+from .directions import (
+    extract_direction,
+    is_probable_movement_command,
+    normalize_direction,
+    normalize_movement_command,
+)
+from .locations import is_known_location, normalize_location
+from .response_signals import is_movement_refusal, looks_like_death
 
 if TYPE_CHECKING:
     from .pathfinder import PathFinder
@@ -66,7 +72,7 @@ class MapperState:
             turn_number: Turn when this movement occurred
 
         Returns:
-            True if this is a new transition, False if already known
+            True if the stored map changed (new passage or a correction)
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -78,7 +84,7 @@ class MapperState:
         direction = normalize_direction(direction)
 
         # Add to database
-        is_new = self.db.add_map_transition(
+        changed = self.db.add_map_transition(
             session_id=self.session_id,
             from_location=from_location,
             to_location=to_location,
@@ -86,18 +92,19 @@ class MapperState:
             turn_number=turn_number
         )
 
-        if is_new:
-            logger.info(f"[MAPPER] NEW TRANSITION: {from_location} --[{direction}]--> {to_location}")
+        if changed:
+            logger.info(f"[MAPPER] RECORDED: {from_location} --[{direction}]--> {to_location}")
         else:
-            logger.debug(f"[MAPPER] Known transition: {from_location} --[{direction}]--> {to_location}")
+            logger.debug(f"[MAPPER] No map change: {from_location} --[{direction}]--> {to_location}")
 
-        return is_new
+        return changed
 
     def update_from_turn(
         self,
         current_location: str,
         player_command: str,
-        turn_number: int
+        turn_number: int,
+        game_response: Optional[str] = None
     ) -> None:
         """
         Update the map based on the current turn.
@@ -107,6 +114,8 @@ class MapperState:
             current_location: Current location name
             player_command: Command that was executed
             turn_number: Current turn number
+            game_response: This turn's game text. Optional so existing callers
+                keep working; without it the death gate cannot fire.
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -128,9 +137,43 @@ class MapperState:
             self.previous_location = None
             return
 
+        # Death is not movement. The game kills the player and TELEPORTS them
+        # (Zork respawns you in the Forest), yet reports the respawn room as
+        # this turn's LocationName — so the "name changed => passage" rule
+        # fabricates an edge from where we died to where we respawned, and BFS
+        # then routes future journeys through the fatal move (#12).
+        #
+        # Record nothing. A missing edge is self-healing: the next survivable
+        # move records it. A fabricated one is not — since #11 a real
+        # destination overwrites what is stored, so an ungated death turn
+        # actively DESTROYS a correct `Cellar --NORTH--> The Troll Room`.
+        #
+        # This gates the BLOCKED branch too: dying in a room whose name matches
+        # the respawn room's would otherwise write a wall that is not there.
+        if looks_like_death(game_response):
+            logger.info(
+                f"[MAPPER] Death detected; not mapping '{player_command}' as a "
+                f"passage into '{current_location}'"
+            )
+            # Keep the chain, unlike the unnamed-room guard above: the player
+            # really is standing in the respawn room, so the NEXT turn's move
+            # out of it is a genuine edge worth recording.
+            self.previous_location = current_location
+            return
+
         if self.previous_location and is_known_location(self.previous_location):
             if self.previous_location != current_location:
                 # Location CHANGED - successful movement
+                if not direction and is_probable_movement_command(player_command):
+                    # Zork moves the player with plain commands too: CLIMB
+                    # TREE, ENTER HOUSE, IN, OUT, CROSS BRIDGE, TOUCH MIRROR.
+                    # Dropping those left the destination reachable-FROM but
+                    # never reachable-TO — an orphan node BFS can leave and
+                    # never plan a route into (#14). The raw command is the
+                    # edge label, which makes what the pathfinder hands back
+                    # directly executable by the agent.
+                    direction = normalize_movement_command(player_command)
+
                 if direction:
                     self.record_movement(
                         from_location=self.previous_location,
@@ -140,15 +183,32 @@ class MapperState:
                     )
                 else:
                     logger.debug(f"[MAPPER] Location changed but no direction detected: '{player_command}'")
-            elif direction:
-                # Location SAME but direction command was issued - BLOCKED direction
-                logger.info(f"[MAPPER] BLOCKED: {self.previous_location} --[{direction}]--> (failed)")
+            elif direction and is_movement_refusal(game_response):
+                # Cardinals ONLY: `direction` here is always an extracted
+                # compass point, never a raw command. Every EXAMINE/TAKE/READ
+                # also leaves the location unchanged, so recording raw commands
+                # as BLOCKED would add one junk row per non-movement command,
+                # and get_map dumps every row into the LLM prompt (#14).
+                # Location SAME *and* the game explicitly refused the move.
+                # Inferring BLOCKED from the room name alone wrote permanent
+                # walls between Zork's several identically-named "Forest"
+                # rooms, where the move actually SUCCEEDED (#10, #15).
+                logger.info(f"[MAPPER] BLOCKED: {self.previous_location} --[{direction}]--> (refused)")
                 # Record as transition to "BLOCKED" so ExplorerAgent knows not to try it
                 self.record_movement(
                     from_location=self.previous_location,
                     to_location="BLOCKED",
                     direction=direction,
                     turn_number=turn_number
+                )
+            elif direction:
+                # Same room name, but nothing said the move failed. It may have
+                # SUCCEEDED between two same-named rooms. Record nothing: an
+                # incomplete map beats a false wall, which the explorer would
+                # treat as explored and never retry (#10, #15).
+                logger.debug(
+                    f"[MAPPER] '{player_command}' left the room name unchanged and "
+                    f"the game did not refuse it; recording nothing"
                 )
 
         # Update previous location for next turn
@@ -158,39 +218,33 @@ class MapperState:
         """
         Extract movement direction from a command.
 
+        Delegates to `directions.extract_direction`, which matches whole
+        TOKENS. The previous implementation asked `if direction in
+        command_upper` under a `startswith("MOVE ")` guard, so the "E" inside
+        the verb MOVE itself matched: every `MOVE <noun>` reported EAST-ish
+        movement, and since object manipulation leaves the room unchanged the
+        mapper then wrote a false `--[E]--> BLOCKED` edge (#10).
+
         Args:
             command: Player command
 
         Returns:
-            Direction string or None if not a movement command
+            Canonical direction string, or None if this is not a movement command
         """
-        command_upper = command.upper().strip()
+        return extract_direction(command)
 
-        # Direct direction commands
-        # IMPORTANT: Order matters! Longer compound directions must come BEFORE simple directions
-        # to avoid substring matching (e.g., "SOUTH" would match in "SOUTHEAST" if checked first)
-        directions = [
-            # Compound directions FIRST
-            "NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST",
-            # Simple directions SECOND
-            "NORTH", "SOUTH", "EAST", "WEST",
-            "UP", "DOWN",
-            # Abbreviations LAST (after checking full names)
-            "NE", "NW", "SE", "SW",  # Compound abbreviations first
-            "N", "S", "E", "W", "U", "D"  # Simple abbreviations last
-        ]
+    def resolve_location(self, name: str) -> str:
+        """Return the map's own spelling of `name`, else `name` unchanged.
 
-        for direction in directions:
-            if command_upper == direction:
-                return direction
-            if command_upper.startswith("GO ") and direction in command_upper:
-                return direction
-            if command_upper.startswith("MOVE ") and direction in command_upper:
-                return direction
-            if command_upper.startswith("WALK ") and direction in command_upper:
-                return direction
-
-        return None
+        Lookups are case-insensitive, but OUTPUT keeps the backend's casing so
+        prompts and the HTML map never read "WEST OF HOUSE" (#13).
+        """
+        target = normalize_location(name)
+        for from_loc, to_loc, _, _ in self.db.get_all_transitions(self.session_id):
+            for stored in (from_loc, to_loc):
+                if normalize_location(stored) == target:
+                    return stored
+        return name
 
     def get_all_transitions(self) -> List[LocationTransition]:
         """
@@ -242,7 +296,7 @@ class MapperState:
         order = []
         for from_loc, to_loc, direction, turn in rows:
             direction = normalize_direction(direction)
-            key = (from_loc, direction)
+            key = (normalize_location(from_loc), direction)
             if key not in best:
                 best[key] = (from_loc, to_loc, direction, turn)
                 order.append(key)
