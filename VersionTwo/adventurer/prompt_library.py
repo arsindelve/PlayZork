@@ -1213,7 +1213,22 @@ CRITICAL RULES FOR INVENTORY TRACKING
      in CURRENTLY CARRYING. If the player types "DROP LAMP" and CURRENTLY
      CARRYING lists "brass lantern", return "brass lantern", not "lamp".
    - Never list an item in items_removed unless it appears in CURRENTLY CARRYING
-   - Never list an item in items_added if it already appears in CURRENTLY CARRYING
+
+7. ALREADY-HELD ITEMS ARE A NO-OP, NEVER A REMOVAL:
+   If the item is ALREADY in CURRENTLY CARRYING, return EMPTY LISTS for that
+   item: do not add it again, and NEVER put it in items_removed.
+   ✓ "TAKE LEAFLET" + "Taken." + CURRENTLY CARRYING already lists leaflet
+     → items_added: [], items_removed: []   (nothing changed)
+   ✗ NEVER reason "it was already held, so it was removed" — taking something
+     you already hold changes nothing. Removal requires the player to have
+     LOST the item: dropped, given away, stolen, destroyed or consumed.
+
+8. REVEALING AN ITEM IS NOT TAKING IT:
+   Opening or moving a container shows what is inside; it does not put it in
+   your hands. Only an explicit take succeeds in acquiring it.
+   ✓ "Opening the small mailbox reveals a leaflet." → items_added: []
+   ✓ "TAKE LEAFLET" → "Taken." → items_added: ["leaflet"]
+   ✗ "reveals a leaflet" → items_added: ["leaflet"]   (WRONG - not held yet)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT

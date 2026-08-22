@@ -262,3 +262,65 @@ def test_analyzer_renders_an_empty_inventory_readably():
     analyzer.analyze_turn(player_command="LOOK", game_response="You see nothing.")
 
     assert captured["current_inventory"] == "(empty)"
+
+
+# ---------------------------------------------------------------------------
+# Prompt rules derived from an observed live failure (GitHub issue #21)
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_forbids_treating_an_already_held_item_as_a_removal():
+    """Observed live on 2026-08-22, session m3-checkpoint:
+
+        TAKE LEAFLET -> "Taken."
+        [InventoryAnalyzer] Items removed: ['leaflet']
+        Reasoning: "The player took the leaflet, which was already in their
+                    inventory, so it was removed from the inventory despite
+                    the action being a take command."
+
+    The earlier rule said only what NOT to do ("never list an item in
+    items_added if it already appears in CURRENTLY CARRYING") and the 14B
+    model filled the gap by inverting the operation, emptying the inventory
+    of an item the player had just picked up. The rule must state the no-op
+    explicitly.
+    """
+    from adventurer.prompt_library import PromptLibrary
+
+    prompt = PromptLibrary.get_inventory_analyzer_system_prompt()
+
+    assert "NO-OP" in prompt.upper()
+    assert "items_removed" in prompt
+    # The worked example that pins the behaviour:
+    assert "already lists leaflet" in prompt
+    # And the explicit prohibition on the observed reasoning:
+    assert "already held, so it was removed" in prompt
+
+
+def test_prompt_distinguishes_revealing_an_item_from_taking_it():
+    """Also observed live: "Opening the small mailbox reveals a leaflet."
+    was recorded as items_added: ['leaflet'], reasoning "which was taken
+    automatically". Revealing is not acquiring."""
+    from adventurer.prompt_library import PromptLibrary
+
+    prompt = PromptLibrary.get_inventory_analyzer_system_prompt()
+
+    assert "REVEALING AN ITEM IS NOT TAKING IT" in prompt
+    assert "reveals a leaflet" in prompt
+
+
+def test_a_take_of_an_already_held_item_cannot_change_the_inventory(tmp_path):
+    """The code-level guarantee behind the prompt: even if the model re-emits
+    the add (which it still sometimes does), dedupe makes it a no-op — so the
+    observed failure cannot recur through this path."""
+    from tools.database import DatabaseManager
+    from tools.inventory.inventory_state import InventoryState
+
+    db = DatabaseManager(str(tmp_path / "t.db"))
+    db.create_session("s")
+    inventory = InventoryState(session_id="s", db=db)
+
+    inventory.add_item("leaflet", 2)
+    inventory.add_item("leaflet", 3)
+    inventory.add_item("A Leaflet", 4)
+
+    assert inventory.get_items() == ["leaflet"]
