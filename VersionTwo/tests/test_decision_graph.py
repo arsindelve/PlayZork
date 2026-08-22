@@ -92,7 +92,7 @@ class FakeMemory:
         self.moves = 1
 
 
-def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors):
+def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors, exits=None):
     """Wire a spawn node whose IssueAgents behave per `agent_behaviors`.
 
     agent_behaviors maps issue content -> None (succeed) or an Exception to raise.
@@ -144,7 +144,10 @@ def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors):
         get_tools=lambda: [],
         # All directions already known => no ExplorerAgent spawned.
         state=SimpleNamespace(
-            get_exits_from=lambda loc: [(d, "Somewhere") for d in ALL_DIRECTIONS]
+            get_exits_from=lambda loc: (
+                exits if exits is not None
+                else [(d, "Somewhere") for d in ALL_DIRECTIONS]
+            )
         ),
     )
 
@@ -220,6 +223,7 @@ def test_close_issues_failure_does_not_discard_the_decision(monkeypatch):
         decision_llm=object(),
         history_toolkit=SimpleNamespace(get_tools=lambda: []),
         memory_toolkit=object(),
+        turn_number_ref={"current": 7},
     )
     state = {
         "game_response": SimpleNamespace(
@@ -326,3 +330,71 @@ def test_persist_survives_inventory_analysis_failure(monkeypatch):
 
     # The memory was still stored even though inventory analysis blew up.
     assert result["memory_persisted"] is True
+
+
+def test_close_issues_node_passes_the_current_turn(monkeypatch):
+    """#20: the closer must rank by the same decayed importance as the spawner,
+    or actively-worked issues fall outside its window and become un-closable."""
+    captured = {}
+
+    class RecordingCloser:
+        def analyze(self, **kwargs):
+            captured.update(kwargs)
+            return (
+                SimpleNamespace(closed_issue_ids=[], closed_issue_contents=[], reasoning=""),
+                [],
+            )
+
+    monkeypatch.setattr(dg, "IssueClosedAgent", RecordingCloser)
+
+    node = create_close_issues_node(
+        object(),
+        SimpleNamespace(get_tools=lambda: []),
+        object(),
+        {"current": 42},
+    )
+    node({
+        "game_response": SimpleNamespace(
+            LocationName="West Of House", Response="ok", Score=0, Moves=1
+        ),
+    })
+
+    assert captured["current_turn"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Explored-check uses canonical directions (GitHub issue #9)
+# ---------------------------------------------------------------------------
+
+ABBREVIATED_DIRECTIONS = ["N", "S", "E", "W", "NE", "NW", "SE", "SW", "U", "D"]
+
+
+def test_explorer_not_spawned_when_known_exits_are_abbreviated(monkeypatch):
+    """#9: every direction is explored, just recorded in short form."""
+    node, state, _ = _spawn_node_fixtures(
+        monkeypatch,
+        memories=[],
+        agent_behaviors={},
+        exits=[(d, "Somewhere") for d in ABBREVIATED_DIRECTIONS],
+    )
+
+    result = asyncio.run(node(state))
+
+    assert result["explorer_agent"] is None, "explorer re-proposed already-explored directions"
+
+
+def test_abbreviated_exit_is_not_reproposed(monkeypatch):
+    """The infinite exploration loop: N was walked, NORTH still looks unexplored."""
+    node, state, _ = _spawn_node_fixtures(
+        monkeypatch,
+        memories=[],
+        agent_behaviors={},
+        exits=[("N", "North Of House")],
+    )
+
+    result = asyncio.run(node(state))
+
+    explorer = result["explorer_agent"]
+    assert explorer is not None  # nine directions genuinely remain
+    assert "NORTH" not in explorer.unexplored_directions
+    assert explorer.best_direction != "NORTH"

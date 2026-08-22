@@ -9,7 +9,7 @@ the turn budget cannot leave memory half-applied (GitHub issue #3).
 Responsibility: Aggressively close resolved issues to keep memory clean.
 Runs BEFORE ObserverAgent to avoid confusion with stale issues.
 """
-from typing import List
+from typing import List, Optional
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from .issue_closed_response import IssueClosedResponse
@@ -47,7 +47,8 @@ class IssueClosedAgent:
         moves: int,
         decision_llm: BaseChatModel,
         history_toolkit: HistoryToolkit,
-        memory_toolkit: MemoryToolkit
+        memory_toolkit: MemoryToolkit,
+        current_turn: Optional[int] = None,
     ) -> tuple[IssueClosedResponse, List[dict]]:
         """
         Analyze recent history and decide which issues are resolved.
@@ -65,6 +66,8 @@ class IssueClosedAgent:
             decision_llm: The LLM to use for analysis
             history_toolkit: HistoryToolkit for accessing recent turns
             memory_toolkit: MemoryToolkit for accessing and removing tracked issues
+            current_turn: Current turn number, for the same lazy importance
+                decay the spawn node applies (None disables decay)
 
         Returns:
             Tuple of (IssueClosedResponse, pending_closures), where
@@ -80,7 +83,16 @@ class IssueClosedAgent:
 
         # Phase 1: Get tracked issues
         self.logger.info(f"[IssueClosedAgent] Phase 1: Retrieving tracked issues...")
-        tracked_issues = memory_toolkit.state.get_top_memories(limit=30)  # Get top 30
+        # Rank by the SAME lazily-decayed importance the spawn node uses
+        # (decision_graph.create_spawn_agents_node). Identical ORDER BY plus a
+        # larger limit makes this window a strict superset of the spawner's top
+        # 5, so every issue an agent can work on stays closable (issue #20).
+        # Ranking here undecayed let ancient high-importance issues crowd out
+        # actively-worked ones, which then could never be closed.
+        tracked_issues = memory_toolkit.state.get_top_memories(
+            limit=30,
+            current_turn=current_turn,
+        )
 
         if not tracked_issues:
             self.logger.info(f"[IssueClosedAgent] No tracked issues to analyze")
@@ -144,26 +156,33 @@ class IssueClosedAgent:
         # which applies them last, after all cancellable LLM work.
         self.logger.info(f"[IssueClosedAgent] Phase 4: Staging closures for persist...")
 
-        pending_closures = []
-        if response.closed_issue_ids:
-            for issue_id in response.closed_issue_ids:
-                # Find the memory with this ID to get its content for display
-                mem_content = None
-                mem_importance = None
-                for mem in tracked_issues:
-                    if mem.id == issue_id:
-                        mem_content = mem.content
-                        mem_importance = mem.importance
-                        break
+        # An ID the model never saw is a hallucination, not a decision. A local
+        # 14B model routinely echoes the prompt's own example IDs, and closing
+        # is the only destructive memory write in the graph — irreversible in
+        # practice, because check_duplicate_memory matches closed rows, so the
+        # Observer can never re-create a wrongly-closed issue (#19).
+        # Ground truth is exactly the list rendered into the prompt above.
+        shown_issues = {mem.id: mem for mem in tracked_issues}
 
-                display = (
-                    f"[ID:{issue_id}, {mem_importance}/1000] {mem_content}"
-                    if mem_content and mem_importance is not None
-                    else None
+        pending_closures = []
+        # dict.fromkeys drops repeated IDs while keeping the model's ordering.
+        for issue_id in dict.fromkeys(response.closed_issue_ids or []):
+            mem = shown_issues.get(issue_id)
+            if mem is None:
+                self.logger.warning(
+                    f"[IssueClosedAgent] DROPPED unknown issue ID {issue_id}: not among "
+                    f"the {len(shown_issues)} issues shown to the model {sorted(shown_issues)}. "
+                    f"Model reasoning: {response.reasoning!r}"
                 )
-                pending_closures.append({"id": issue_id, "display": display})
-                self.logger.info(f"[IssueClosedAgent] STAGED close of ID {issue_id}: '{mem_content}'")
-        else:
+                continue
+
+            # Always a string for a validated ID: persist_node treats a missing
+            # display as "did not come from this path" and refuses the write.
+            display = f"[ID:{mem.id}, {mem.importance}/1000] {mem.content}"
+            pending_closures.append({"id": mem.id, "display": display})
+            self.logger.info(f"[IssueClosedAgent] STAGED close of ID {mem.id}: '{mem.content}'")
+
+        if not pending_closures:
             self.logger.info(f"[IssueClosedAgent] No issues to close this turn")
 
         # closed_issue_contents stays empty until persist_node confirms the

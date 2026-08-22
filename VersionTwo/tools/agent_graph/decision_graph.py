@@ -13,6 +13,8 @@ from adventurer.adventurer_response import AdventurerResponse
 from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
+from tools.mapping.directions import CANONICAL_DIRECTIONS, normalize_direction
+from tools.mapping.locations import UNKNOWN_LOCATION, is_known_location
 from langchain_core.runnables import Runnable
 from .issue_agent import IssueAgent
 from .explorer_agent import ExplorerAgent
@@ -140,25 +142,31 @@ def create_spawn_agents_node(
 
         # Extract current game state
         game_response = state["game_response"]
-        current_location = game_response.LocationName or "Unknown"
+        # "Unknown" is prose for the prompts only. Anything that indexes the
+        # map, routes, or gets stored must go through is_known_location (#7).
+        current_location = game_response.LocationName or UNKNOWN_LOCATION
+        location_is_known = is_known_location(game_response.LocationName)
         current_game_text = game_response.Response
         current_score = game_response.Score
         current_moves = game_response.Moves
 
         # ========== NEW: Spawn ONE ExplorerAgent (if unexplored directions exist) ==========
-        # Get known exits from current location
-        known_exits = mapper_toolkit.state.get_exits_from(current_location)
-        known_directions = {direction.upper() for direction, _ in known_exits}
-
-        # Determine unexplored directions
-        CARDINAL_DIRECTIONS = [
-            "NORTH", "SOUTH", "EAST", "WEST",
-            "NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST",
-            "UP", "DOWN"
-        ]
+        # Get known exits from current location. With no room name there is no
+        # map node to explore *from*: querying exits for the fake room
+        # "Unknown" returned nothing, so the explorer confidently reported all
+        # ten directions unexplored and proposed a move it could not map (#7).
+        known_exits = (
+            mapper_toolkit.state.get_exits_from(current_location)
+            if location_is_known
+            else []
+        )
+        # Canonicalize so a passage recorded as "N" counts as NORTH explored
+        # (#9). Without this the explorer re-proposed the same direction every
+        # turn, forever.
+        known_directions = {normalize_direction(direction) for direction, _ in known_exits}
 
         unexplored_directions = [
-            d for d in CARDINAL_DIRECTIONS
+            d for d in CANONICAL_DIRECTIONS
             if d not in known_directions
         ]
 
@@ -188,7 +196,12 @@ def create_spawn_agents_node(
 
         # Create ONE ExplorerAgent if there are unexplored directions
         explorer_agent = None
-        if unexplored_directions:
+        if unexplored_directions and not location_is_known:
+            logger.info(
+                "NO ExplorerAgent spawned - current location is unknown, so there "
+                "is no map node to explore from"
+            )
+        elif unexplored_directions:
             explorer_agent = ExplorerAgent(
                 current_location=current_location,
                 unexplored_directions=unexplored_directions,
@@ -588,7 +601,8 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, 
     return "\n".join(lines) if lines else "No proposals available. Choose LOOK to observe the current situation."
 
 
-def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit):
+def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit,
+                            memory_toolkit: MemoryToolkit, turn_number_ref: dict):
     """
     Create the issue closing node that identifies and removes resolved issues.
 
@@ -599,6 +613,8 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit, memo
         decision_llm: The LLM to use for analysis
         history_toolkit: HistoryToolkit for accessing recent game history
         memory_toolkit: MemoryToolkit for removing resolved issues
+        turn_number_ref: Mutable {"current": int} carrying the current turn for
+            lazy importance decay (must match the spawn node — see #20)
 
     Returns:
         Node function for the graph
@@ -631,7 +647,8 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit, memo
                 moves=zork_response.Moves,
                 decision_llm=decision_llm,
                 history_toolkit=history_toolkit,
-                memory_toolkit=memory_toolkit
+                memory_toolkit=memory_toolkit,
+                current_turn=turn_number_ref.get("current"),
             )
         except Exception as e:
             logger.error(f"CLOSE ISSUES failed, skipping this turn: {e}", exc_info=True)
@@ -764,7 +781,9 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
                     content=observer_response.remember,
                     importance=observer_response.rememberImportance or 500,
                     turn_number=turn_number_ref["current"],
-                    location=zork_response.LocationName or "Unknown",
+                    # Empty, not "Unknown": a memory anchored to a fake room
+                    # sends every later IssueAgent pathfinding to nowhere (#7).
+                    location=zork_response.LocationName or "",
                     score=zork_response.Score,
                     moves=zork_response.Moves
                 )
@@ -845,6 +864,14 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
             for closure in pending_closures:
                 issue_id = closure.get("id")
                 display = closure.get("display")
+                # IssueClosedAgent stages a display string for every ID it
+                # validated against what the model was shown (#19). No display
+                # means this closure bypassed that path — refuse the write.
+                if not display:
+                    logger.warning(
+                        f"SKIPPED unvalidated closure for ID {issue_id} (no display text)"
+                    )
+                    continue
                 try:
                     success = memory_toolkit.state.remove_memory(issue_id)
                 except Exception as e:
@@ -920,7 +947,8 @@ def create_decision_graph(
         ),
     )
     graph.add_node("decide", create_decision_node(decision_chain))
-    graph.add_node("close_issues", create_close_issues_node(decision_llm, history_toolkit, memory_toolkit))
+    graph.add_node("close_issues", create_close_issues_node(
+        decision_llm, history_toolkit, memory_toolkit, turn_number_ref))
     graph.add_node("observe", create_observe_node(decision_llm, research_agent, history_toolkit, memory_toolkit))
     graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit, turn_number_ref))
 

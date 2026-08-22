@@ -113,7 +113,7 @@ class FakeInventoryState:
         return []
 
 
-def _analyze_with_stub_llm(monkeypatch, state, closed_ids):
+def _analyze_with_stub_llm(monkeypatch, state, closed_ids, current_turn=None):
     """Run IssueClosedAgent.analyze with the LLM and history tool stubbed."""
     agent = IssueClosedAgent()
     memory_toolkit = SimpleNamespace(state=state)
@@ -140,6 +140,7 @@ def _analyze_with_stub_llm(monkeypatch, state, closed_ids):
         decision_llm=decision_llm,
         history_toolkit=history_toolkit,
         memory_toolkit=memory_toolkit,
+        current_turn=current_turn,
     )
 
 
@@ -241,3 +242,102 @@ def test_persist_skips_closures_that_fail_to_write():
     # The healthy closure still applied; the broken one didn't stop the turn.
     assert memory_state.closed == [1]
     assert issue_closed_response.closed_issue_contents == ["one"]
+
+
+# ---------------------------------------------------------------------------
+# 3. Closure IDs are validated against what the model was shown (#19)
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_example_ids_are_never_staged(monkeypatch):
+    """#19: the model echoes the prompt's own worked example, [5, 12]."""
+    state = FakeMemoryState()  # shows only IDs 1 and 2
+
+    _, pending = _analyze_with_stub_llm(monkeypatch, state, [5, 12])
+
+    assert pending == []
+    assert state.closed == []
+
+
+def test_hallucinated_id_dropped_but_valid_one_kept(monkeypatch):
+    """Per-ID, not all-or-nothing: one bogus ID must not void a real closure."""
+    _, pending = _analyze_with_stub_llm(monkeypatch, FakeMemoryState(), [1, 999])
+
+    assert pending == [{"id": 1, "display": "[ID:1, 600/1000] open the mailbox"}]
+
+
+def test_duplicate_ids_are_staged_once(monkeypatch):
+    _, pending = _analyze_with_stub_llm(monkeypatch, FakeMemoryState(), [2, 2, 2])
+
+    assert [closure["id"] for closure in pending] == [2]
+
+
+def test_every_staged_closure_carries_display_text(monkeypatch):
+    """The invariant persist_node's guard relies on."""
+    _, pending = _analyze_with_stub_llm(monkeypatch, FakeMemoryState(), [1, 2, 77])
+
+    assert pending
+    assert all(closure["display"] for closure in pending)
+
+
+def test_persist_refuses_a_closure_without_display():
+    """Defence in depth: an unvalidated closure must not reach remove_memory."""
+    memory_state = FakeMemoryState()
+    persist = create_persist_node(
+        SimpleNamespace(state=memory_state, add_memory=lambda **kwargs: True),
+        SimpleNamespace(state=FakeInventoryState()),
+        {"current": 5},
+    )
+    persist({
+        "game_response": SimpleNamespace(
+            Response="ok", LocationName="West Of House", Score=0, Moves=1
+        ),
+        "player_command": "",
+        "decision": SimpleNamespace(command="LOOK"),
+        "observer_response": None,
+        "pending_closures": [{"id": 5, "display": None}],
+        "issue_closed_response": SimpleNamespace(
+            closed_issue_ids=[5], closed_issue_contents=[], reasoning=""
+        ),
+    })
+
+    assert memory_state.closed == []
+
+
+def test_prompt_contains_no_plausible_real_ids():
+    """Static guard on the prompt itself: real memory IDs start at 1, so any
+    example ID in that range is echoable onto a live issue."""
+    import re
+
+    from adventurer.prompt_library import PromptLibrary
+
+    prompt = PromptLibrary.get_issue_closed_analysis_prompt(
+        "(none)", "history", "West Of House", "Opened."
+    )
+    ids = [
+        int(number)
+        for block in re.findall(r'"closed_issue_ids"\s*:\s*\[([^\]]*)\]', prompt)
+        for number in re.findall(r"\d+", block)
+    ]
+    ids += [int(number) for number in re.findall(r"\[ID:(\d+)", prompt)]
+
+    assert ids, "expected the prompt to contain at least one example ID"
+    assert all(i >= 9000 for i in ids), f"prompt contains echoable real-looking IDs: {ids}"
+
+
+def test_closer_ranks_by_decayed_importance(monkeypatch):
+    """#20: the closer's window must use the same decay as the spawner's."""
+
+    class RecordingMemoryState(FakeMemoryState):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def get_top_memories(self, limit=10, **kwargs):
+            self.calls.append({"limit": limit, **kwargs})
+            return super().get_top_memories(limit=limit, **kwargs)
+
+    state = RecordingMemoryState()
+    _analyze_with_stub_llm(monkeypatch, state, [1], current_turn=42)
+
+    assert state.calls == [{"limit": 30, "current_turn": 42}]

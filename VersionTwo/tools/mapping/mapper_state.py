@@ -2,6 +2,8 @@
 from typing import Optional, List, Tuple, TYPE_CHECKING
 from pydantic import BaseModel
 from tools.database import DatabaseManager
+from .directions import normalize_direction
+from .locations import is_known_location
 
 if TYPE_CHECKING:
     from .pathfinder import PathFinder
@@ -69,8 +71,11 @@ class MapperState:
         import logging
         logger = logging.getLogger(__name__)
 
-        # Normalize direction to uppercase
-        direction = direction.upper()
+        # Normalize to the canonical full name (N -> NORTH, SE -> SOUTHEAST).
+        # map_transitions is UNIQUE(session_id, from_location, direction), so
+        # storing both "N" and "NORTH" would create two rows for one passage
+        # and leave the explored-check believing NORTH is unexplored (#9).
+        direction = normalize_direction(direction)
 
         # Add to database
         is_new = self.db.add_map_transition(
@@ -109,7 +114,21 @@ class MapperState:
         # Try to extract direction from command FIRST
         direction = self._extract_direction(player_command)
 
-        if self.previous_location:
+        # With no room name there is nothing to connect the edge to. The DB
+        # column is NOT NULL, so the insert was doomed and its IntegrityError
+        # was swallowed as "already known" — a silent no-op that also polluted
+        # previous_location for the next turn (#7).
+        if not is_known_location(current_location):
+            logger.debug(
+                f"[MAPPER] No location name this turn; skipping transition for "
+                f"'{player_command}'"
+            )
+            # Drop the chain rather than guessing: carrying an unnamed room
+            # forward would let the NEXT turn record an edge out of nowhere.
+            self.previous_location = None
+            return
+
+        if self.previous_location and is_known_location(self.previous_location):
             if self.previous_location != current_location:
                 # Location CHANGED - successful movement
                 if direction:
@@ -188,7 +207,7 @@ class MapperState:
                 direction=direction,
                 turn_discovered=turn
             )
-            for from_loc, to_loc, direction, turn in db_transitions
+            for from_loc, to_loc, direction, turn in self._collapse(db_transitions)
         ]
 
     def get_exits_from(self, location: str) -> List[Tuple[str, str]]:
@@ -201,4 +220,32 @@ class MapperState:
         Returns:
             List of (direction, destination) tuples
         """
-        return self.db.get_transitions_from_location(self.session_id, location)
+        rows = [
+            (location, destination, direction, 0)
+            for direction, destination in
+            self.db.get_transitions_from_location(self.session_id, location)
+        ]
+        return [(direction, destination) for _, destination, direction, _ in self._collapse(rows)]
+
+    def _collapse(self, rows):
+        """Canonicalize legacy direction tokens and merge rows that collide.
+
+        Sessions recorded before #9 can hold both "N" and "NORTH" from the same
+        location — the UNIQUE constraint accepted both because the strings
+        differ. Normalizing on read makes a resumed session self-heal without a
+        SQL migration.
+
+        Collision rule: a real passage always beats a stale BLOCKED row. Keeping
+        the BLOCKED one would hide a known passage from the pathfinder.
+        """
+        best = {}
+        order = []
+        for from_loc, to_loc, direction, turn in rows:
+            direction = normalize_direction(direction)
+            key = (from_loc, direction)
+            if key not in best:
+                best[key] = (from_loc, to_loc, direction, turn)
+                order.append(key)
+            elif best[key][1] == "BLOCKED" and to_loc != "BLOCKED":
+                best[key] = (from_loc, to_loc, direction, turn)
+        return [best[key] for key in order]

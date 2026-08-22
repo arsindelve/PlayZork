@@ -42,15 +42,22 @@ Turn 1 of the 2026-08-21 smoke run took **7m25s** with only 2 subagents and zero
 
 **Correction to the #3 plan (2026-08-21):** this milestone originally called for a 60–90s per-attempt timeout. The measured smoke run contradicts that — individual qwen2.5:14b calls took 43–113s under agent contention, so a 90s cap would abort *healthy* calls and (per [#27](https://github.com/arsindelve/PlayZork/issues/27)) pile retries onto an already-slow server. Taken instead: per-attempt 180s × 3 attempts (envelope 546s) inside a turn budget raised to 1200s, with the invariant `TURN_BUDGET_SECONDS ≥ 2 × retry envelope` enforced in `config.py` and covered by a test. M4 should revisit the budget downward once turn latency drops.
 
-## Milestone 2 — Five-minute fixes that restore designed behavior *(~half day)*
+## Milestone 2 — Five-minute fixes that restore designed behavior *(~half day)* — ✅ COMPLETE
 
-| # | Issue | Task | Effort |
-|---|---|---|---|
-| 5 | [#6](https://github.com/arsindelve/PlayZork/issues/6) | Rename phantom `get_current_inventory` → `get_inventory` (IssueAgents see inventory again) | XS |
-| 6 | [#20](https://github.com/arsindelve/PlayZork/issues/20) | Pass `current_turn` in the issue closer (closer and spawner agree) | XS |
-| 7 | [#9](https://github.com/arsindelve/PlayZork/issues/9) | Normalize direction abbreviations (kills N-vs-NORTH explorer loop) | XS |
-| 8 | [#19](https://github.com/arsindelve/PlayZork/issues/19) | Validate closed IDs ⊆ shown list; neutralize `[5, 12]` prompt example | S |
-| 9 | [#7](https://github.com/arsindelve/PlayZork/issues/7) | Treat `"Unknown"` location as no-location | XS |
+| # | Issue | Task | Effort | Status |
+|---|---|---|---|---|
+| 5 | [#6](https://github.com/arsindelve/PlayZork/issues/6) | Rename phantom `get_current_inventory` → `get_inventory` (IssueAgents see inventory again) | XS | ✅ done |
+| 6 | [#20](https://github.com/arsindelve/PlayZork/issues/20) | Pass `current_turn` in the issue closer (closer and spawner agree) | XS | ✅ done |
+| 7 | [#9](https://github.com/arsindelve/PlayZork/issues/9) | Normalize direction abbreviations (kills N-vs-NORTH explorer loop) | XS | ✅ done |
+| 8 | [#19](https://github.com/arsindelve/PlayZork/issues/19) | Validate closed IDs ⊆ shown list; neutralize `[5, 12]` prompt example | S | ✅ done |
+| 9 | [#7](https://github.com/arsindelve/PlayZork/issues/7) | Treat `"Unknown"` location as no-location | XS | ✅ done |
+
+**What M2 actually turned up.** Three of the five were worse than filed, and one was a regression M1 introduced:
+
+- **#6** was *made worse* by M1. Once `invoke_tool_safely` stopped silently dropping unknown tools, the `"Error: unknown tool ..."` string was split on commas into phantom carried items — injecting the name of every available tool into the proposal prompt as inventory. Prompt poisoning, not just a missing capability. The lesson generalizes: every consumer of `tool_calls_history` must treat an `Error:` result as a non-result.
+- **#7** was broader than filed. `"Unknown"` was fabricated in two roles, and the second (`current_location` for the whole turn) is worse: it zeroes *every* IssueAgent (pathfinding from a nonexistent node → NO PATH → mandatory confidence 0) while handing the ExplorerAgent its maximum possible EV of 47.5 — the arbiter gets exactly one non-zero proposal, an arbitrary direction from an empty exit set, precisely when the agent knows least.
+- **#20**'s arithmetic in the issue was wrong: the decay crossover is **11 turns** of relative age, not 44 — the inversion arrives 4× sooner than reported. It also needs >30 open memories to bite, which no live session has reached yet.
+- **#9**'s read-side collapse has a trap worth remembering: a legacy DB can hold both `('A','BLOCKED','N')` and `('A','B','NORTH')`, so the collapse must prefer a real passage or it would hide a known exit from the pathfinder.
 
 ## Milestone 3 — Trustworthy world state *(~2–3 days)*
 

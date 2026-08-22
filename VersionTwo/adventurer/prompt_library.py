@@ -843,21 +843,28 @@ Return JSON with:
 - closed_issue_ids: List of memory IDs (integers) for issues that should be closed
 - reasoning: Brief explanation of why these issues were closed
 
-CRITICAL: Return the ID number from each tracked issue.
-Example: If tracked issue is "- [ID:5, Importance:405/1000] Climbable cliff above Rocky Ledge"
-Return in closed_issue_ids: 5
+CRITICAL - IDs ARE COPIED, NEVER INVENTED:
+Every ID you return MUST be copied from the "CURRENTLY TRACKED ISSUES" list above:
+the number that appears after "ID:" on the line you are closing.
+An ID that is not in that list is DISCARDED and the issue stays open.
+The IDs in the example below are placeholders. NEVER return them.
 
-Example output:
-{{{{
-  "closed_issue_ids": [5, 12],
-  "reasoning": "Issue ID 5 (mailbox) was opened and leaflet taken. Issue ID 12 (grating) was unlocked and opened."
-}}}}
-
-If no issues should be closed:
+DEFAULT ANSWER - use this whenever no issue was actually resolved this turn:
 {{{{
   "closed_issue_ids": [],
   "reasoning": "No tracked issues have been resolved in recent history."
 }}}}
+
+FORMAT EXAMPLE ONLY - the placeholder IDs 9001/9002 do not exist, never copy them:
+Suppose the tracked list above had contained exactly these two lines:
+  - [ID:9001, Importance:405/1000] Small mailbox at West Of House - open it
+  - [ID:9002, Importance:310/1000] Locked grating at Clearing - find key and unlock it
+and recent history showed the mailbox opened and the grating unlocked. You would return:
+{{{{
+  "closed_issue_ids": [9001, 9002],
+  "reasoning": "ID 9001 (mailbox) was opened. ID 9002 (grating) was unlocked with the key."
+}}}}
+Use the real ID numbers from the tracked list above - not 9001 or 9002.
 
 Analyze the tracked issues against recent history and identify which to close:
 """

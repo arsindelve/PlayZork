@@ -3,6 +3,7 @@ from typing import List, Optional
 from tools.database import DatabaseManager
 
 from .mapper_state import MapperState, LocationTransition
+from .directions import CANONICAL_DIRECTIONS, normalize_direction
 from .mapper_tools import initialize_mapper_tools, get_mapper_tools
 from .pathfinder import PathFinder
 
@@ -98,4 +99,5 @@ class MapperToolkit:
 
 
 # Export public API
-__all__ = ['MapperToolkit', 'MapperState', 'LocationTransition', 'PathFinder']
+__all__ = ['MapperToolkit', 'MapperState', 'LocationTransition', 'PathFinder',
+           'CANONICAL_DIRECTIONS', 'normalize_direction']

@@ -6,7 +6,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_core.language_models import BaseChatModel
 from adventurer.prompt_library import PromptLibrary
-from .tool_execution import invoke_tool_safely
+from .tool_execution import invoke_tool_safely, TOOL_ERROR_PREFIX
+from tools.mapping.locations import UNKNOWN_LOCATION, is_known_location
 import logging
 
 
@@ -109,13 +110,14 @@ class IssueAgent:
         else:
             is_same_location = True
 
-        # Build research instruction based on location
-        if not is_same_location and self.location:
+        # Build research instruction based on location. Routing FROM a location
+        # the game never named always returns NO PATH, so don't ask (#7).
+        if not is_same_location and self.location and is_known_location(current_location):
             research_instruction = (
                 f"You are investigating this strategic issue: '{self.issue_content}'. "
                 f"The issue is at '{self.location}' but you are at '{current_location}'. "
                 f"REQUIRED: 1) Call get_direction_to_location(from_location='{current_location}', to_location='{self.location}') to find path. "
-                f"2) Call get_current_inventory() to check if you have items that could solve this issue. "
+                f"2) Call get_inventory() to check if you have items that could solve this issue. "
                 f"3) Call get_full_summary() for context."
             )
         else:
@@ -191,15 +193,24 @@ class IssueAgent:
             output = tool_call.get("output", "")
 
             if tool_name == "get_direction_to_location":
-                if output in ["NO PATH", "ALREADY THERE"] or output.startswith("Error"):
-                    navigation_direction = output
+                # A failed tool call is not a direction. Passing the raw
+                # "Error: ..." string through would render it verbatim as
+                # NAVIGATION DIRECTION in the proposal prompt, which the
+                # prompt's routing rules cannot interpret.
+                if output.startswith(TOOL_ERROR_PREFIX):
+                    navigation_direction = "NOT AVAILABLE"
                 else:
-                    navigation_direction = output  # e.g., "SOUTH"
+                    navigation_direction = output  # e.g. "SOUTH", "NO PATH", "ALREADY THERE"
 
-            elif tool_name == "get_current_inventory":
-                # Parse inventory output
-                if "empty" not in output.lower() and "no items" not in output.lower():
-                    # Try to extract items from the inventory output
+            elif tool_name == "get_inventory":
+                # An "Error: ..." result is not an inventory listing (see #1):
+                # splitting one on commas would inject the names of every
+                # available tool into the prompt as phantom carried items.
+                if (
+                    not output.startswith(TOOL_ERROR_PREFIX)
+                    and "empty" not in output.lower()
+                    and "no items" not in output.lower()
+                ):
                     inventory_items = [item.strip() for item in output.replace("\n", ",").split(",") if item.strip()]
 
         logger.info(f"[IssueAgent ID:{self.memory.id}] Navigation direction: {navigation_direction}")
@@ -219,7 +230,7 @@ class IssueAgent:
         logger.info(f"[IssueAgent ID:{self.memory.id}] Calling proposal_chain.invoke()...")
 
         # Calculate location status for spatial reasoning
-        if self.location and current_location:
+        if self.location and is_known_location(current_location):
             issue_loc_normalized = self.location.strip().lower()
             current_loc_normalized = current_location.strip().lower()
             location_status = "SAME LOCATION" if issue_loc_normalized == current_loc_normalized else "DIFFERENT LOCATION"
