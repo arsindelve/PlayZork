@@ -2,6 +2,7 @@ from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTempla
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import Runnable
 
+from llm_utils import ainvoke_with_retry
 from .history_state import HistoryState, GameTurn
 
 
@@ -45,9 +46,12 @@ class HistorySummarizer:
 
         return chat_prompt_template | self.llm
 
-    def generate_summary(self, history_state: HistoryState, latest_turn: GameTurn) -> str:
+    async def agenerate_summary(self, history_state: HistoryState, latest_turn: GameTurn) -> str:
         """
         Generate a new RECENT summary (last 15 turns only)
+
+        Async so it can run concurrently with the long-running summary
+        (GitHub issue #24); the two are independent until they are saved.
 
         Args:
             history_state: Current history state
@@ -76,10 +80,17 @@ class HistorySummarizer:
         logger.info(f"Latest location: {latest_turn.location}")
         logger.info(f"Latest game response (first 100 chars): {latest_turn.game_response[:100]}...")
 
-        # Invoke the LLM to get a summary with descriptive LangSmith name
-        result = self.chain.with_config(
-            run_name=f"Summary Generation: Turn {latest_turn.turn_number} @ {latest_turn.location}"
-        ).invoke(prompt_variables)
+        # Invoke the LLM to get a summary with descriptive LangSmith name.
+        # These calls run BEFORE the decision graph, so TURN_BUDGET_SECONDS
+        # does not cover them — the per-attempt timeout in ainvoke_with_retry
+        # is what stops a hung summarizer from stalling the run forever.
+        result = await ainvoke_with_retry(
+            self.chain.with_config(
+                run_name=f"Summary Generation: Turn {latest_turn.turn_number} @ {latest_turn.location}"
+            ),
+            prompt_variables,
+            operation_name=f"Recent Summary: Turn {latest_turn.turn_number}",
+        )
 
         # Extract content from AIMessage
         new_summary = result.content if hasattr(result, 'content') else str(result)
@@ -88,10 +99,12 @@ class HistorySummarizer:
 
         return new_summary
 
-    def generate_long_running_summary(self, history_state: HistoryState, latest_turn: GameTurn) -> str:
+    async def agenerate_long_running_summary(self, history_state: HistoryState, latest_turn: GameTurn) -> str:
         """
         Generate a comprehensive long-running summary of all game history.
         This is more detailed and comprehensive than the recent summary.
+
+        Async so it can run concurrently with the recent summary (#24).
 
         Args:
             history_state: Current history state
@@ -120,8 +133,12 @@ class HistorySummarizer:
             "moves": latest_turn.moves
         }
 
-        result = (prompt | self.llm).with_config(
-            run_name=f"Long-Running Summary: Turn {latest_turn.turn_number} @ {latest_turn.location}"
-        ).invoke(prompt_variables)
+        result = await ainvoke_with_retry(
+            (prompt | self.llm).with_config(
+                run_name=f"Long-Running Summary: Turn {latest_turn.turn_number} @ {latest_turn.location}"
+            ),
+            prompt_variables,
+            operation_name=f"Long-Running Summary: Turn {latest_turn.turn_number}",
+        )
 
         return result.content if hasattr(result, 'content') else str(result)

@@ -69,7 +69,7 @@ Game backends (`GAME_BACKENDS` in config.py): Zork I and Planetfall are hosted A
 `GameSession.play()` (VersionTwo/game_session.py) loops indefinitely:
 
 1. **ZorkService** POSTs the command to the game API → `ZorkApiResponse` (Response, LocationName, Score, Moves)
-2. **HistoryToolkit.update_after_turn** - stores the turn, regenerates two LLM summaries (recent + long-running)
+2. **HistoryToolkit.update_after_turn** (`async`, must be awaited) - stores the turn, then regenerates the two LLM summaries (recent + long-running) **concurrently** via `asyncio.gather`. They are independent until `save_both_summaries`; if either fails neither is committed, so the previous turn's summaries stay in place. This still runs *before* the decision graph and so is outside `TURN_BUDGET_SECONDS` — `ainvoke_with_retry`'s per-attempt timeout is what bounds it. Moving it off the critical path entirely is [#24](https://github.com/arsindelve/PlayZork/issues/24) option 2 (M4).
 3. **MapperToolkit.update_after_turn** - records the location transition; a movement command with no location change is recorded as `location --[DIR]--> BLOCKED` so the explorer never re-suggests it
 4. **AdventurerService.handle_user_input** runs the LangGraph decision graph (below) and returns the next command
 5. Display update (Rich terminal UI via **DisplayManager**)

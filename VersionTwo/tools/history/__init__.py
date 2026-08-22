@@ -29,15 +29,22 @@ class HistoryToolkit:
         # Initialize the module-level state for tools
         initialize_history_tools(self.state)
 
-    def update_after_turn(self,
-                         game_response: str,
-                         player_command: str,
-                         location: str,
-                         score: int,
-                         moves: int) -> None:
+    async def update_after_turn(self,
+                                game_response: str,
+                                player_command: str,
+                                location: str,
+                                score: int,
+                                moves: int) -> None:
         """
         Update history after a game turn completes.
         This should be called by the game loop after each turn.
+
+        The two summaries are generated CONCURRENTLY (GitHub issue #24). They
+        are independent — each reads its own previous summary from the DB and
+        uses its own prompt, and they only meet at `save_both_summaries` — but
+        they used to run serially at the head of every turn, blocking all agent
+        work behind them (86s measured on turn 1, 113s for the recent summary
+        alone by turn 2).
 
         Args:
             game_response: Text response from the game
@@ -46,7 +53,9 @@ class HistoryToolkit:
             score: Current game score
             moves: Current move count
         """
+        import asyncio
         import logging
+        import time
         logger = logging.getLogger(__name__)
 
         try:
@@ -61,31 +70,45 @@ class HistoryToolkit:
 
             logger.info(f"Added turn {turn.turn_number}: {player_command}")
 
-            # Generate RECENT summary (last 15 turns only)
-            # If we have more than 15 turns, reset and summarize from scratch
-            if self.state.get_turn_count() > 15:
-                # Get last 15 turns
-                recent_turns = self.state.get_recent_turns(15)
-                # Build a summary from just these turns
-                temp_summary = ""
-                for t in recent_turns:
-                    # Simple concatenation for now, LLM will summarize
-                    temp_summary += f"Turn {t.turn_number}: {t.player_command} -> {t.game_response[:100]}... "
+            # RECENT summary (incremental, last-15-turns framing) and
+            # LONG-RUNNING summary (comprehensive) in parallel.
+            logger.info(
+                f"Generating recent + long-running summaries CONCURRENTLY "
+                f"(turn {turn.turn_number})..."
+            )
+            started = time.monotonic()
 
-                # Use the summarizer to condense
-                logger.info("Generating recent summary (15+ turns)...")
-                new_recent_summary = self.summarizer.generate_summary(self.state, turn)
-            else:
-                # Normal incremental update
-                logger.info(f"Generating recent summary (turn {turn.turn_number})...")
-                new_recent_summary = self.summarizer.generate_summary(self.state, turn)
+            # return_exceptions=True so a failure in one doesn't leave the
+            # other running orphaned after gather re-raises.
+            new_recent_summary, new_long_summary = await asyncio.gather(
+                self.summarizer.agenerate_summary(self.state, turn),
+                self.summarizer.agenerate_long_running_summary(self.state, turn),
+                return_exceptions=True,
+            )
+
+            elapsed = time.monotonic() - started
+
+            for label, result in (
+                ("recent", new_recent_summary),
+                ("long-running", new_long_summary),
+            ):
+                if isinstance(result, BaseException):
+                    logger.error(
+                        f"{label} summary failed after {elapsed:.1f}s: {result}",
+                        exc_info=result,
+                    )
+
+            if isinstance(new_recent_summary, BaseException) or isinstance(
+                new_long_summary, BaseException
+            ):
+                # Same outcome as before: neither summary is committed, so the
+                # previous turn's summaries remain in place for this turn.
+                logger.error("Summaries NOT saved this turn (see errors above)")
+                return
 
             logger.info(f"Recent summary generated: {new_recent_summary[:100]}...")
-
-            # Generate LONG-RUNNING summary (all history, comprehensive)
-            logger.info("Generating long-running summary...")
-            new_long_summary = self.summarizer.generate_long_running_summary(self.state, turn)
             logger.info(f"Long-running summary generated: {new_long_summary[:100]}...")
+            logger.info(f"Both summaries generated in {elapsed:.1f}s (concurrent)")
 
             # Save BOTH summaries together in a single operation to avoid race condition
             # Previously, we saved them separately which could cause stale data issues

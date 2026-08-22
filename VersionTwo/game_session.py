@@ -197,7 +197,7 @@ class GameSession:
             self.logger.log_game_response(zork_response.Response)
 
             # Step 2: Update history BEFORE decision (so research sees current turn)
-            self.history_toolkit.update_after_turn(
+            await self.history_toolkit.update_after_turn(
                 game_response=zork_response.Response,
                 player_command=input_text,  # The command that was just executed
                 location=zork_response.LocationName,

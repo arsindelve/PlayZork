@@ -34,7 +34,9 @@ Turn 1 of the 2026-08-21 smoke run took **7m25s** with only 2 subagents and zero
 | 1 | [#1](https://github.com/arsindelve/PlayZork/issues/1) | Tool-invoke guards, `gather(return_exceptions=True)`, game-loop fallback command | S | ✅ done |
 | 2 | [#2](https://github.com/arsindelve/PlayZork/issues/2) | Wrap dedup LLM call in retry; fail open | XS | ✅ done |
 | 3 | [#3](https://github.com/arsindelve/PlayZork/issues/3) | Budget coherence; catch `TimeoutError` per turn; stage memory closures until persist | S | ✅ done |
-| 4 | [#24](https://github.com/arsindelve/PlayZork/issues/24) *(option 1 only)* | Run the two summaries concurrently (~10 lines, −40s+/turn); full fix in M4 | XS | |
+| 4 | [#24](https://github.com/arsindelve/PlayZork/issues/24) *(option 1 only)* | Run the two summaries concurrently (−40s+/turn); full fix in M4 | XS | ✅ done |
+
+**Milestone 1 complete.** Runs now survive single-turn failures, the turn budget is coherent, and turn start is ~40–60s faster. Issues [#1](https://github.com/arsindelve/PlayZork/issues/1), [#2](https://github.com/arsindelve/PlayZork/issues/2), [#3](https://github.com/arsindelve/PlayZork/issues/3) closed; [#24](https://github.com/arsindelve/PlayZork/issues/24) stays open for options 2–3 in M4.
 
 *Rationale: every later fix is validated by long runs; today any single malformed LLM response ends the run.*
 
