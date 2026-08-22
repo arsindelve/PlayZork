@@ -872,3 +872,90 @@ Milestone-ordered roadmap: **M1** runs survive (exception handling, budget coher
 ## Testing
 
 All tests pass: 48 pathfinder + 1 new persist-node test.
+
+
+# Development Log: 2026-08-22 — Milestones 2 & 3, and the M3 checkpoint run
+
+## Shipped
+
+- **Milestone 2** (`7c7266b`) — #6, #7, #9, #19, #20 closed.
+- **Milestone 3** (`f03856f`) — #8, #10, #11, #12, #13, #14, #21 closed; #15 half-fixed and updated.
+- **Inventory analyzer fix** (`17a4354`) — found by the checkpoint run, three turns in.
+- Tests: **145 → 463**. New issues filed: #28–#32.
+
+Both milestones were investigated by parallel read-only subagents (one per issue) and applied serially, because the issues overlap heavily on the same files.
+
+## The checkpoint run
+
+Session `m3-checkpoint-20260822`, 15 turns, Zork I, qwen2.5:14b via local Ollama.
+Stopped at 15 rather than 30 — see "the deadlock" below; the information saturated.
+
+### What the run validated
+
+| Issue | Evidence from live play |
+|---|---|
+| #1 | **15 turns, 0 exceptions, 0 turn failures.** |
+| #3 | `Attempt 1/3 (timeout: 180s)` — the coherent retry envelope. |
+| #8 | West Of House logged `['WEST']`. The 2026-08-21 log for the same room: `['WEST', 'SOUTHEAST']` (fabricated from HOU**SE**). |
+| #10 | `GO SOUTH` → canonical `SOUTH`. `MOVE RUG` wrote **no** map row (the old code extracted `E` from the verb). |
+| #12 | Probed a real grue/troll death: died in Cellar, respawned Forest, **no edge recorded**, `previous_location` correctly kept as the respawn room. |
+| #13 | `West **Of** House` and `North **of** House` both appeared in one map — the exact inconsistency that made this corrective rather than defensive. |
+| #14 | Two raw-command edges recorded: `Forest Path --[CLIMB TREE]--> Up A Tree`, `Behind House --[ENTER WINDOW]--> Kitchen`. Both were previously dropped, orphaning those rooms. |
+| #24 (opt 1) | `Both summaries generated in 13.9s (concurrent)`. |
+
+The mapper produced 5 edges, all correct Zork geography, and **zero** BLOCKED rows.
+
+Probing also confirmed #10's deliberate *exclusion*: "The door is boarded and you can't remove the boards." contains "can't" but is object-specific — a temporary puzzle state — and correctly wrote nothing, while "You cannot go that way." correctly wrote BLOCKED. A naive deny-list would have burned the boarded door permanently.
+
+### Finding 1 — a regression the tests could not reach
+
+Turn 3, `TAKE LEAFLET` → `"Taken."` → **`Items removed: ['leaflet']`**. Successfully picking something up emptied it from inventory. The model's reasoning named the cause: *"it was already in their inventory, so it was removed... despite the action being a take command."*
+
+Two chained defects: a pre-existing one (`"reveals a leaflet"` recorded as acquired) put the leaflet in inventory early, and then the M3 rule *"never list an item in items_added if it already appears in CURRENTLY CARRYING"* — which said only what **not** to do — left the model to invent an alternative, and it chose removal.
+
+Fixed in `17a4354` by stating the no-op explicitly. **This is the checkpoint's whole justification**: 463 unit tests and seven parallel investigations missed it, because it exists only in the interaction between a prompt rule and one model's reasoning. Three turns of real play found it.
+
+### Finding 2 — turn latency grows superlinearly, and summaries drive it
+
+```
+turn   1    3    5    7    9   11   13
+secs  79   83  148  187  194  208  225
+summ  13.9 26.6 52.4 67.0 65.9  ...
+```
+
+Turn time **more than doubled in nine turns**, and roughly half the growth is the summary phase (13.9s → 65.9s, ~34% of a turn), on a fixed model and machine with the concurrency fix already applied.
+
+This is #24 option 3 confirmed and quantified. Option 1 halved a constant; it did nothing to the growth *rate*. Extrapolating ~6s/turn, the summary phase alone reaches minutes by turn 50 — and Zork is hundreds of turns.
+
+**This changes M4's ordering.** #24 options 2 and 3 should precede #25's TurnContext: moving summarization off the critical path removes it from turn latency entirely, which is a larger and cheaper win than shaving research round-trips. For a thesis where latency is experimental throughput and the protocol needs N seeded runs per condition, this is the binding constraint on whether the experiment is runnable.
+
+### Finding 3 — the deadlock
+
+```
+turn 11  EXAMINE PILE OF LEAVES  -> "There is nothing special about the pile of leaves."
+turn 12  NORTH                   -> "The forest becomes impenetrable to the north."
+turn 13  EXAMINE PILE OF LEAVES  -> (repeat)
+turn 14  NORTH                   -> (repeat)
+turn 15  EXAMINE PILE OF LEAVES  -> (repeat)
+```
+
+Two known-refused actions, alternating. Three gaps compound:
+
+1. **The map never learned the wall.** "The forest becomes impenetrable to the north." is a genuine topological refusal outside #10's allow-list, so no BLOCKED row was written and the explorer still counts NORTH as unexplored. The under-detect bias is working as designed (no false wall) but the explorer learns nothing. Filed as a follow-up.
+2. **Nothing suppresses repetition** — both negative results were in recent history. This is #18 (M5), now with a real trace.
+3. **The loop detector is disabled** (#22).
+
+The #22 "keep disabled?" decision now has data: the capability is needed. #18 looks like the better vehicle — deterministic, no LLM call, and it addresses the cause rather than detecting the symptom.
+
+Encouraging counter-observation: before deadlocking, the agent broke a wander loop on its own to issue `EXAMINE PILE OF LEAVES`, acting on a strategic issue the ObserverAgent had stored eight turns earlier. The memory → IssueAgent → arbiter path closes end to end.
+
+## Caveats
+
+- The 78s turn-1 time is **not** comparable to the 2026-08-21 baseline of 445s. The summary phase alone went 86s → 13.9s, a 6x change where parallelising two calls can buy at most 2x, so the rest is machine load or history length. M4's before/after must be measured on one machine in one session.
+- This session's *inventory* data is poisoned from turn 3 by Finding 1 and should not be used. The fix was verified directly against the model instead.
+
+## Next
+
+1. #24 options 2 and 3 (summaries off the critical path, bound the growth) — promoted ahead of #25 on Finding 2.
+2. #30 — consume `LastMovementDirection` / `exits`, before TurnContext is designed around command parsing.
+3. Then the rest of M4, and M5's #18 with Finding 3 as its justification.

@@ -84,7 +84,12 @@ Applied in dependency order, which the investigation revised from the original p
 - **`INVENTORY` does not cost a move** on either hosted backend (verified by probe) — so a periodic resync would not pollute the score@moves metric the thesis experiment depends on. That removes the main objection to deferring it.
 - **The two response-text predicates need opposite biases** and are deliberately kept as separate functions in `response_signals.py`: death must *over*-detect (a false negative writes an edge that now also destroys the true one), a movement refusal must *under*-detect (a false positive fabricates a wall the explorer treats as explored and never retries).
 
-**Checkpoint:** one supervised 20–30 turn session; read the HTML reports before starting M4.
+**Checkpoint:** ✅ run 2026-08-22 (session `m3-checkpoint-20260822`, 15 turns) — see STATUS.md. Validated #1, #3, #8, #10, #12, #13, #14, #24-opt1 on live play; found and fixed an inventory regression no unit test could reach (`17a4354`); filed [#33](https://github.com/arsindelve/PlayZork/issues/33).
+
+**Two checkpoint findings change what comes next:**
+
+1. **Turn latency grows superlinearly, and summaries drive it.** Turn time more than doubled in nine turns (79s → 194s), roughly half of it the summary phase (13.9s → 65.9s, ~34% of a turn) — on a fixed model and machine, with option 1 already applied. Option 1 halved a constant and did nothing to the growth *rate*. **[#24](https://github.com/arsindelve/PlayZork/issues/24) options 2 and 3 are therefore promoted ahead of [#25](https://github.com/arsindelve/PlayZork/issues/25)** in M4: taking summarization off the critical path removes it from turn latency entirely, a larger and cheaper win than shaving research round-trips. This is the binding constraint on whether the thesis protocol (N seeded runs × several conditions) is runnable at all.
+2. **The agent deadlocked**, alternating two known-refused actions for five turns. Three gaps compound: the map could not learn the wall ([#33](https://github.com/arsindelve/PlayZork/issues/33), [#31](https://github.com/arsindelve/PlayZork/issues/31)), nothing suppressed repetition ([#18](https://github.com/arsindelve/PlayZork/issues/18), M5), and loop detection is off ([#22](https://github.com/arsindelve/PlayZork/issues/22)). **#22's "keep disabled?" question now has data: the capability is needed** — but #18 is the better vehicle, being deterministic, LLM-free, and aimed at the cause rather than the symptom.
 
 ## Milestone 4 — Turn engine restructure *(~3–5 days)*
 
@@ -92,7 +97,7 @@ Applied in dependency order, which the investigation revised from the original p
 |---|---|---|
 | 17 | [#25](https://github.com/arsindelve/PlayZork/issues/25) | Deterministic TurnContext (deletes research node + per-agent research calls; **closes [#4](https://github.com/arsindelve/PlayZork/issues/4), [#5](https://github.com/arsindelve/PlayZork/issues/5), [#17](https://github.com/arsindelve/PlayZork/issues/17) as side effects** — verify, then close) |
 | 18 | [#23](https://github.com/arsindelve/PlayZork/issues/23) + [#26](https://github.com/arsindelve/PlayZork/issues/26) | One refactor: graph ends at `decide`; bookkeeping (`close/observe/persist`) off the critical path; async-ify Observer/IssueClosedAgent; `turn_number` into graph state |
-| 19 | [#24](https://github.com/arsindelve/PlayZork/issues/24) *(full)* | Summaries off the critical path |
+| 19 | [#24](https://github.com/arsindelve/PlayZork/issues/24) *(full)* | Summaries off the critical path **— promoted to first in M4, see checkpoint finding 1** |
 | 20 | [#27](https://github.com/arsindelve/PlayZork/issues/27) | Client-side semaphore sized to `OLLAMA_NUM_PARALLEL`; fix/retire the sync retry path. Batched proposals = thesis ablation arm, not default |
 
 *Expected outcome: measured 7m25s turn → ~2–3 min, with the architecture more faithful to the design, not less.*
