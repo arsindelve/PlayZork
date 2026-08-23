@@ -67,158 +67,48 @@ class IssueAgent:
             f"Discovered: Turn {self.turn_number}"
         )
 
-    async def research_and_propose(
+    async def propose(
         self,
-        research_agent: Runnable,
         decision_llm: BaseChatModel,
-        history_tools: list,
-        current_location: str,
-        current_game_response: str,
-        current_score: int,
-        current_moves: int
+        context,
     ) -> IssueProposal:
-        """
-        Execute research cycle and generate a proposal for solving this issue.
+        """Generate a proposal for solving this issue.
+
+        The old phase-1 "research" LLM round-trip is gone (#25). It asked a
+        14B model for permission to run SQLite queries whose arguments the
+        code already knew, executed them once, never fed results back for a
+        second round, and discarded `response.content` whenever tool calls
+        existed. TurnContext now supplies the same facts deterministically —
+        and completely, where the LLM route could silently return any subset
+        (#4, #5, #6).
 
         Args:
-            research_agent: LLM chain with tools for calling history
-            decision_llm: LLM for generating structured proposal
-            history_tools: List of available history tools
-            current_location: Current game location
-            current_game_response: Latest game response text
-            current_score: Current game score
-            current_moves: Current move count
+            decision_llm: LLM for generating the structured proposal
+            context: This turn's TurnContext
 
         Returns:
             IssueProposal with proposed_action and confidence score
         """
         logger = logging.getLogger(__name__)
+        # Function-local import: tests monkeypatch llm_utils.ainvoke_with_retry
+        from llm_utils import ainvoke_with_retry
 
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"[IssueAgent ID:{self.memory.id}] AGENT: IssueAgent")
-        logger.info(f"[IssueAgent ID:{self.memory.id}] ID: {self.memory.id}")
         logger.info(f"[IssueAgent ID:{self.memory.id}] ISSUE: {self.issue_content}")
         logger.info(f"[IssueAgent ID:{self.memory.id}] IMPORTANCE: {self.importance}/1000")
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Phase 1: Research for '{self.issue_content}'")
 
-        # Determine location status for research instructions
-        if self.location and current_location:
-            issue_loc_normalized = self.location.strip().lower()
-            current_loc_normalized = current_location.strip().lower()
-            is_same_location = issue_loc_normalized == current_loc_normalized
-        else:
-            is_same_location = True
+        current_location = context.location
+        current_game_response = context.game_text
 
-        # Build research instruction based on location. Routing FROM a location
-        # the game never named always returns NO PATH, so don't ask (#7).
-        if not is_same_location and self.location and is_known_location(current_location):
-            research_instruction = (
-                f"You are investigating this strategic issue: '{self.issue_content}'. "
-                f"The issue is at '{self.location}' but you are at '{current_location}'. "
-                f"REQUIRED: 1) Call get_direction_to_location(from_location='{current_location}', to_location='{self.location}') to find path. "
-                f"2) Call get_inventory() to check if you have items that could solve this issue. "
-                f"3) Call get_full_summary() for context."
-            )
-        else:
-            research_instruction = (
-                f"You are investigating this strategic issue: '{self.issue_content}'. "
-                f"Use the available tools to gather relevant history context."
-            )
-
-        # Phase 1: Research using history tools
-        # Must match the research agent prompt parameters: score, locationName, moves, game_response
-        research_input = {
-            "input": research_instruction,
-            "score": current_score,
-            "locationName": current_location,
-            "moves": current_moves,
-            "game_response": current_game_response
-        }
-
-        logger.info(f"[IssueAgent] Calling research_agent.ainvoke()...")
-        from llm_utils import ainvoke_with_retry
-        research_response = await ainvoke_with_retry(
-            research_agent.with_config(
-                run_name=f"IssueAgent Research: {self.issue_content[:60]}"
-            ),
-            research_input,
-            operation_name=f"IssueAgent Research: {self.issue_content[:40]}"
-        )
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Research agent responded successfully")
-
-        # Execute tool calls if present
-        if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
-            tool_results = []
-            tools_map = {tool.name: tool for tool in history_tools}
-
-            logger.info(f"[IssueAgent ID:{self.memory.id}] Made {len(research_response.tool_calls)} tool calls:")
-
-            for tool_call in research_response.tool_calls:
-                tool_name = tool_call['name']
-                tool_args = tool_call.get('args', {})
-
-                logger.info(f"[IssueAgent ID:{self.memory.id}]   -> {tool_name}({tool_args})")
-
-                # Never raises: unknown tools and malformed model-supplied args
-                # come back as an "Error: ..." string instead (see #1).
-                tool_result = invoke_tool_safely(
-                    tools_map,
-                    tool_name,
-                    tool_args,
-                    label=f"IssueAgent ID:{self.memory.id}",
-                    log=logger,
-                )
-                logger.info(f"[IssueAgent ID:{self.memory.id}]      Result: {str(tool_result)[:150]}...")
-                tool_results.append(f"{tool_name} result: {tool_result}")
-
-                # Store tool call history for reporting
-                self.tool_calls_history.append({
-                    "tool_name": tool_name,
-                    "input": str(tool_args),
-                    "output": str(tool_result)
-                })
-
-            self.research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
-        else:
-            logger.info(f"[IssueAgent ID:{self.memory.id}] No tool calls made")
-            self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
-
-        # Extract navigation direction and inventory from research
-        navigation_direction = "NOT CHECKED"
-        inventory_items = []
-
-        for tool_call in self.tool_calls_history:
-            tool_name = tool_call.get("tool_name", "")
-            output = tool_call.get("output", "")
-
-            if tool_name == "get_direction_to_location":
-                # A failed tool call is not a direction. Passing the raw
-                # "Error: ..." string through would render it verbatim as
-                # NAVIGATION DIRECTION in the proposal prompt, which the
-                # prompt's routing rules cannot interpret.
-                if output.startswith(TOOL_ERROR_PREFIX):
-                    navigation_direction = "NOT AVAILABLE"
-                else:
-                    navigation_direction = output  # e.g. "SOUTH", "NO PATH", "ALREADY THERE"
-
-            elif tool_name == "get_inventory":
-                # An "Error: ..." result is not an inventory listing (see #1):
-                # splitting one on commas would inject the names of every
-                # available tool into the prompt as phantom carried items.
-                if (
-                    not output.startswith(TOOL_ERROR_PREFIX)
-                    and "empty" not in output.lower()
-                    and "no items" not in output.lower()
-                ):
-                    inventory_items = [item.strip() for item in output.replace("\n", ",").split(",") if item.strip()]
+        # Everything the research phase used to fetch, fetched in code.
+        navigation_direction = context.direction_to(self.location)
+        inventory_summary = context.inventory_summary
+        self.research_context = context.research_context_for(self.location)
 
         logger.info(f"[IssueAgent ID:{self.memory.id}] Navigation direction: {navigation_direction}")
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Inventory items: {inventory_items}")
-
-        # Phase 2: Generate proposal based on research
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Phase 2: Generating proposal for '{self.issue_content}'")
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Research context length: {len(self.research_context)} chars")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Inventory: {inventory_summary}")
 
         proposal_prompt = ChatPromptTemplate.from_messages([
             ("system", PromptLibrary.get_issue_agent_system_prompt()),
@@ -236,9 +126,6 @@ class IssueAgent:
             location_status = "SAME LOCATION" if issue_loc_normalized == current_loc_normalized else "DIFFERENT LOCATION"
         else:
             location_status = "UNKNOWN"
-
-        # Prepare inventory summary for proposal
-        inventory_summary = ", ".join(inventory_items) if inventory_items else "empty"
 
         proposal = await ainvoke_with_retry(
             proposal_chain.with_config(

@@ -111,7 +111,7 @@ def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors, exits=None):
             self.tool_calls_history = []
             created.append(self)
 
-        async def research_and_propose(self, **kwargs):
+        async def propose(self, **kwargs):
             behavior = agent_behaviors.get(self.issue_content)
             if isinstance(behavior, Exception):
                 raise behavior
@@ -128,7 +128,7 @@ def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors, exits=None):
             self.inventory_items = []
             self.tool_calls_history = []
 
-        async def research_and_propose(self, **kwargs):
+        async def propose(self, **kwargs):
             self.proposed_action = "OPEN MAILBOX"
             self.confidence = 80
 
@@ -155,7 +155,6 @@ def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors, exits=None):
         memory_toolkit,
         mapper_toolkit,
         empty_tools,
-        research_agent=object(),
         decision_llm=object(),
         history_toolkit=empty_tools,
         turn_number_ref={"current": 7},
@@ -247,7 +246,6 @@ def test_observe_failure_does_not_discard_the_decision(monkeypatch):
 
     node = create_observe_node(
         decision_llm=object(),
-        research_agent=object(),
         history_toolkit=SimpleNamespace(get_tools=lambda: []),
         memory_toolkit=object(),
     )

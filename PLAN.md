@@ -116,11 +116,19 @@ The backend sends **eleven** fields; the response model declared six and *read* 
 - **`exits`** — an int-enum exit list. Not a walkable-exit oracle (North of House reports `7` while NW and SW are refused), but a usable room **fingerprint**: the two rooms both named "Forest" differ (`[3,2,1]` vs `[3,0,1]`). That is the signal [#15](https://github.com/arsindelve/PlayZork/issues/15) needs.
 - **`actionsAvailableFromLocation`** — object → accepted commands, e.g. `{"window": ["open window", "close window", "examine window"]}`. A deterministic source for the InteractionAgent; folded into #25 below.
 
+### #25 as built
+
+Per-turn LLM calls, with N tracked issues: **10 + 2N → 5 + N**.
+
+`TurnContext` is assembled once per turn in code from local SQLite reads and the turn response, then sliced per agent. Removed: the research node, the per-IssueAgent research call, the ExplorerAgent research call, the InteractionAgent "inventory check" call (106s on the audited turn, to fetch a list the code already had), and the Observer's research call. Each agent now makes exactly one LLM call — the one that requires actual judgement.
+
+A live run caught what the unit tests missed: deleting the research phases also deleted the function-local `from llm_utils import ...` the surviving proposal calls relied on. #1's containment logged `OBSERVE failed, skipping this turn` and kept playing — so the Observer was *silently disabled* rather than crashing. The test that should have caught it only inspected source text; it now executes all four agents.
+
 ### Remaining
 
 | # | Issue | Task |
 |---|---|---|
-| 17 | [#25](https://github.com/arsindelve/PlayZork/issues/25) | Deterministic TurnContext (deletes research node + per-agent research calls; **closes [#4](https://github.com/arsindelve/PlayZork/issues/4), [#5](https://github.com/arsindelve/PlayZork/issues/5), [#17](https://github.com/arsindelve/PlayZork/issues/17) as side effects** — verify, then close). **Now larger in scope and cheaper to build:** #30 showed the backend already supplies inventory, exits, movement direction and per-object available actions, so TurnContext should assemble those directly rather than asking agents to research them. |
+| 17 | [#25](https://github.com/arsindelve/PlayZork/issues/25) | Deterministic TurnContext | ✅ **done** — measured live: turn 1 went **79s → 40s** and **12 → 6 LLM calls**; turn 2 **114s → 98s**, **16 → 10 calls**. Closes [#4](https://github.com/arsindelve/PlayZork/issues/4), [#5](https://github.com/arsindelve/PlayZork/issues/5), [#17](https://github.com/arsindelve/PlayZork/issues/17) — verified: no `bind_tools`/`tool_choice` remains anywhere in the tree, so those failure modes are structurally impossible rather than fixed. |
 | 18 | [#23](https://github.com/arsindelve/PlayZork/issues/23) + [#26](https://github.com/arsindelve/PlayZork/issues/26) | One refactor: graph ends at `decide`; bookkeeping (`close/observe/persist`) off the critical path; async-ify Observer/IssueClosedAgent; `turn_number` into graph state |
 | 19 | [#24](https://github.com/arsindelve/PlayZork/issues/24) *(full)* | Summaries off the critical path **— promoted to first in M4, see checkpoint finding 1** |
 | 20 | [#27](https://github.com/arsindelve/PlayZork/issues/27) | Client-side semaphore sized to `OLLAMA_NUM_PARALLEL`; fix/retire the sync retry path. Batched proposals = thesis ablation arm, not default |

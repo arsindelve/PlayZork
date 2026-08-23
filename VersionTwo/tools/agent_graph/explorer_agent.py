@@ -125,86 +125,29 @@ class ExplorerAgent:
         # Cap at 95 (never 100% certain)
         return min(base + bonus, 95)
 
-    async def research_and_propose(
+    async def propose(
         self,
-        research_agent: Runnable,
         decision_llm: BaseChatModel,
-        history_tools: list,
-        mapper_tools: list,
-        current_game_response: str,
-        current_score: int,
-        current_moves: int
+        context,
     ) -> None:
-        """
-        Phase 1: Research using tools (optional - understand map topology)
-        Phase 2: Generate exploration proposal for best_direction
+        """Generate the exploration proposal for `best_direction`.
+
+        The research round-trip is gone (#25): it asked the model to "use the
+        mapper tools to understand this location", executed whatever came
+        back once, and never iterated. TurnContext already holds the map.
         """
         logger = logging.getLogger(__name__)
+        # Function-local import: tests monkeypatch llm_utils.ainvoke_with_retry
+        from llm_utils import ainvoke_with_retry
 
-        logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"[ExplorerAgent] AGENT: ExplorerAgent")
+        logger.info(f"[ExplorerAgent:{self.best_direction}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"[ExplorerAgent] CURRENT LOCATION: {self.current_location}")
         logger.info(f"[ExplorerAgent] BEST DIRECTION: {self.best_direction}")
         logger.info(f"[ExplorerAgent] UNEXPLORED COUNT: {len(self.unexplored_directions)}")
-        logger.info(f"[ExplorerAgent] UNEXPLORED DIRECTIONS: {', '.join(self.unexplored_directions)}")
-        logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[ExplorerAgent:{self.best_direction}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # Phase 1: Research (call mapper tools to understand geography)
-        research_input = {
-            "input": f"You are planning exploration from '{self.current_location}'. "
-                     f"There are {len(self.unexplored_directions)} unexplored directions: {', '.join(self.unexplored_directions)}. "
-                     f"Use the mapper tools to understand what we know about this location and surrounding areas.",
-            "score": current_score,
-            "locationName": self.current_location,
-            "moves": current_moves,
-            "game_response": current_game_response
-        }
-
-        from llm_utils import ainvoke_with_retry
-        research_response = await ainvoke_with_retry(
-            research_agent.with_config(
-                run_name=f"ExplorerAgent Research: {self.best_direction} from {self.current_location}"
-            ),
-            research_input,
-            operation_name="ExplorerAgent Research"
-        )
-
-        # Execute tool calls if present
-        if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
-            tool_results = []
-            all_tools = history_tools + mapper_tools
-            tools_map = {tool.name: tool for tool in all_tools}
-
-            logger.info(f"[ExplorerAgent:{self.best_direction}] Made {len(research_response.tool_calls)} tool calls:")
-
-            for tool_call in research_response.tool_calls:
-                tool_name = tool_call['name']
-                tool_args = tool_call.get('args', {})
-
-                logger.info(f"[ExplorerAgent:{self.best_direction}]   -> {tool_name}({tool_args})")
-
-                # Never raises: unknown tools and malformed model-supplied args
-                # come back as an "Error: ..." string instead (see #1).
-                tool_result = invoke_tool_safely(
-                    tools_map,
-                    tool_name,
-                    tool_args,
-                    label=f"ExplorerAgent:{self.best_direction}",
-                    log=logger,
-                )
-                logger.info(f"[ExplorerAgent:{self.best_direction}]      Result: {str(tool_result)[:150]}...")
-                tool_results.append(f"{tool_name} result: {tool_result}")
-
-                self.tool_calls_history.append({
-                    "tool_name": tool_name,
-                    "input": str(tool_args),
-                    "output": str(tool_result)
-                })
-
-            self.research_context = "\n\n".join(tool_results) if tool_results else "No tools called"
-        else:
-            logger.info(f"[ExplorerAgent:{self.best_direction}] No tool calls made")
-            self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
+        current_game_response = context.game_text
+        self.research_context = context.research_context_for()
 
         # Calculate confidence for the chosen direction
         self.confidence = self._calculate_confidence(self.best_direction)

@@ -47,118 +47,29 @@ class InteractionAgent:
         # Tool call history (for reporting)
         self.tool_calls_history: list = []
 
-    async def research_and_propose(
+    async def propose(
         self,
-        research_agent: Runnable,
         decision_llm: BaseChatModel,
-        history_tools: list,
-        mapper_tools: list,
-        current_location: str,
-        current_game_response: str,
-        current_score: int,
-        current_moves: int,
-        inventory_tools: list = None  # Optional for backward compatibility
-    ):
-        """
-        Analyze current location for interactive objects and propose action.
+        context,
+    ) -> None:
+        """Propose an interaction with something in this room.
 
-        Phases:
-        1. Get current inventory (via research_agent with tools)
-        2. Parse game response for interactive objects (deterministic)
-        3. If unclear, use LLM to analyze interactions
-        4. Generate proposal with confidence
-
-        Args:
-            research_agent: LLM chain with tools for calling inventory
-            decision_llm: LLM for generating structured proposals
-            history_tools: Available history tools
-            mapper_tools: Available mapper tools
-            current_location: Current game location
-            current_game_response: Latest game response text
-            current_score: Current game score
-            current_moves: Current move count
-            inventory_tools: Inventory toolkit tools (optional)
+        Phase 1 used to be a whole LLM round-trip asking the model to call
+        get_inventory — 106s on the measured turn, to retrieve a list the code
+        already had (#25). TurnContext supplies it, and on the hosted backends
+        it comes from the game itself (#30).
         """
         logger = logging.getLogger(__name__)
+        # Function-local import: tests monkeypatch llm_utils.ainvoke_with_retry
+        from llm_utils import ainvoke_with_retry
 
-        # Store current location for reporting
-        self.current_location = current_location
+        current_location = context.location
+        current_game_response = context.game_text
+        inventory_list = list(context.inventory)
 
         logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"[InteractionAgent] AGENT: InteractionAgent")
-        logger.info(f"[InteractionAgent] PURPOSE: Identify and propose interactions with local objects")
         logger.info(f"[InteractionAgent] CURRENT LOCATION: {current_location}")
         logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"[InteractionAgent] Phase 1: Getting current inventory")
-
-        # Phase 1: Get inventory using research agent with tools
-        inventory_list: List[str] = []
-
-        if inventory_tools:
-            # Combine all available tools
-            all_tools = history_tools + mapper_tools + inventory_tools
-
-            research_input = {
-                "input": "Use get_inventory to list all items currently in inventory.",
-                "score": current_score,
-                "locationName": current_location,
-                "moves": current_moves,
-                "game_response": current_game_response
-            }
-
-            try:
-                from llm_utils import ainvoke_with_retry
-                research_response = await ainvoke_with_retry(
-                    research_agent.with_config(
-                        run_name="InteractionAgent Inventory Check",
-                        configurable={"tools": all_tools}
-                    ),
-                    research_input,
-                    operation_name="InteractionAgent Inventory Check"
-                )
-
-                # Execute any tool calls to get inventory
-                if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
-                    tools_map = {tool.name: tool for tool in all_tools}
-
-                    logger.info(f"[InteractionAgent] Made {len(research_response.tool_calls)} tool calls:")
-
-                    for tool_call in research_response.tool_calls:
-                        tool_name = tool_call['name']
-                        tool_args = tool_call.get('args', {})
-
-                        if tool_name == "get_inventory":
-                            logger.info(f"[InteractionAgent]   -> {tool_name}()")
-                            # Never raises; a failure comes back as "Error: ..." (#1)
-                            tool_result = invoke_tool_safely(
-                                tools_map,
-                                tool_name,
-                                tool_args,
-                                label="InteractionAgent",
-                                log=logger,
-                            )
-                            logger.info(f"[InteractionAgent]      Result: {str(tool_result)}")
-
-                            # Store tool call history for reporting
-                            self.tool_calls_history.append({
-                                "tool_name": tool_name,
-                                "input": str(tool_args),
-                                "output": str(tool_result)
-                            })
-
-                            # Parse inventory (comma-separated list or "empty" message).
-                            # An "Error: ..." result is not an inventory listing.
-                            result_text = str(tool_result) if tool_result else ""
-                            if (
-                                result_text
-                                and "empty" not in result_text.lower()
-                                and not result_text.startswith(TOOL_ERROR_PREFIX)
-                            ):
-                                inventory_list = [item.strip() for item in result_text.split(',')]
-                            break
-            except Exception as e:
-                logger.warning(f"[InteractionAgent] Failed to get inventory: {e}")
-                # Continue without inventory
 
         logger.info(f"[InteractionAgent] Inventory: {inventory_list if inventory_list else 'empty'}")
 
@@ -206,7 +117,7 @@ class InteractionAgent:
             ),
             {
                 "current_location": current_location,
-                "current_score": current_score,
+                "current_score": context.score,
                 "inventory": ", ".join(inventory_list) if inventory_list else "Your inventory is empty.",
                 "game_response": current_game_response[:1000]  # Truncate if too long
             },

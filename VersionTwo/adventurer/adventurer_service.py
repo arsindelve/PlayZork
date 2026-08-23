@@ -21,7 +21,7 @@ class AdventurerService:
         """
         Initializes the AdventurerService with LangGraph-managed flow.
 
-        Flow: Research → Decide → Persist (managed by LangGraph)
+        Flow: SpawnAgents → Decide → CloseIssues → Observe → Persist (LangGraph)
 
         Args:
             history_toolkit: The HistoryToolkit instance for accessing game history
@@ -41,13 +41,12 @@ class AdventurerService:
         # Create LLM for decisions and IssueAgent proposals (using expensive model)
         self.decision_llm = get_expensive_llm(temperature=0)
 
-        # Create research agent and decision chain
-        self.research_agent = self._create_research_agent()
+        # No research agent: the turn's facts are gathered deterministically
+        # by TurnContext now (#25).
         self.decision_chain = self._create_decision_chain()
 
         # Create LangGraph to manage the flow
         self.decision_graph = create_decision_graph(
-            research_agent=self.research_agent,
             decision_chain=self.decision_chain,
             decision_llm=self.decision_llm,
             history_toolkit=self.history_toolkit,
@@ -56,39 +55,6 @@ class AdventurerService:
             inventory_toolkit=self.inventory_toolkit,
             turn_number_ref=self.turn_number_ref
         )
-
-    def _create_research_agent(self) -> Runnable:
-        """
-        Create the research agent that can call history and mapper tools (Phase 1)
-
-        Returns:
-            Runnable chain configured with tools
-        """
-        # Use cheap model for reasoning with tools
-        llm = get_cheap_llm(temperature=0)
-
-        # Bind every tool that research nodes and specialist agents may request.
-        # Passing extra tools only to the execution map is insufficient because
-        # the model must receive their schemas before it can select them.
-        from tools.analysis import get_analysis_tools
-        tools = (
-            self.history_toolkit.get_tools()
-            + self.mapper_toolkit.get_tools()
-            + self.inventory_toolkit.get_tools()
-            + get_analysis_tools()
-        )
-
-        # Bind tools to the LLM and REQUIRE it to call at least one tool
-        llm_with_tools = llm.bind_tools(tools, tool_choice="any")
-
-        # Create prompt for research agent
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", PromptLibrary.get_research_agent_prompt()),
-            ("human", "{input}"),
-        ])
-
-        # Return chain that can call tools
-        return prompt | llm_with_tools
 
     def _create_decision_chain(self) -> Runnable:
         """
@@ -119,15 +85,14 @@ class AdventurerService:
 
     async def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int, player_command: str) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str, List, List]:
         """
-        Execute the LangGraph decision flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
+        Execute the LangGraph decision flow: SpawnAgents → Decide → CloseIssues → Observe → Persist
 
         The graph manages the entire flow:
         1. SpawnAgents node: Creates IssueAgents + ExplorerAgent + LoopDetectionAgent + InteractionAgent
-        2. Research node: Calls history tools to gather context
-        3. Decision node: Generates AdventurerResponse with structured output
-        4. CloseIssues node: Identifies and removes resolved issues from memory
-        5. Observe node: Identifies new strategic issues to track
-        6. Persist node: Stores new strategic issues in memory (if flagged)
+        2. Decision node: Generates AdventurerResponse with structured output
+        3. CloseIssues node: Identifies and removes resolved issues from memory
+        4. Observe node: Identifies new strategic issues to track
+        5. Persist node: Stores new strategic issues in memory (if flagged)
 
         Args:
             last_game_response: The most recent response from the Zork game
@@ -159,7 +124,7 @@ class AdventurerService:
             "memory_persisted": False
         }
 
-        # Execute the graph (SpawnAgents → Research → Decide → CloseIssues → Observe → Persist)
+        # Execute the graph (SpawnAgents → Decide → CloseIssues → Observe → Persist)
         # Each agent logs its own activities and summaries.
         # A per-turn deadline guards against any hung agent stalling the run.
         self.logger.log_research_start()

@@ -1,7 +1,7 @@
 """
 Simple LangGraph for managing the decision-making flow.
 
-Flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist → END
+Flow: SpawnAgents → Decide → CloseIssues → Observe → Persist → END
 
 This introduces graph-based control flow while keeping the existing
 research and decision logic intact.
@@ -29,6 +29,7 @@ from .issue_closed_response import IssueClosedResponse
 from .observer_agent import ObserverAgent
 from .observer_response import ObserverResponse
 from .tool_execution import invoke_tool_safely
+from .turn_context import build_turn_context
 
 
 class DecisionState(TypedDict):
@@ -44,7 +45,11 @@ class DecisionState(TypedDict):
     loop_detection_agent: Optional[LoopDetectionAgent]  # Single agent, always spawned
     interaction_agent: Optional[InteractionAgent]  # Single agent, always spawned
 
-    # Research phase output
+    # Deterministic turn context, built once in code by spawn_agents (#25)
+    turn_context: object
+
+    # Research phase output (legacy; kept so reports and any external reader
+    # that expects the key keep working)
     research_context: str
     research_tool_calls: List[dict]  # Tool calls made by research agent
 
@@ -96,7 +101,6 @@ def create_spawn_agents_node(
     memory_toolkit: MemoryToolkit,
     mapper_toolkit: MapperToolkit,
     inventory_toolkit,
-    research_agent: Runnable,
     decision_llm,
     history_toolkit: HistoryToolkit,
     turn_number_ref: dict,
@@ -108,7 +112,6 @@ def create_spawn_agents_node(
         memory_toolkit: MemoryToolkit for accessing stored strategic issues
         mapper_toolkit: MapperToolkit for accessing map state
         inventory_toolkit: InventoryToolkit for accessing inventory
-        research_agent: Research agent with tools for IssueAgents and ExplorerAgent to use
         decision_llm: LLM for generating proposals
         history_toolkit: HistoryToolkit for accessing tools
         turn_number_ref: Mutable {"current": int} carrying the current turn for lazy decay
@@ -143,6 +146,22 @@ def create_spawn_agents_node(
         issue_agents = [IssueAgent(memory=mem) for mem in memories_sorted]
 
         logger.info(f"SPAWNED {len(issue_agents)} IssueAgents (top 5 by importance)")
+
+        # Build the turn's context ONCE, in code (#25). This replaces the
+        # per-agent research round-trips: each was a full LLM call whose
+        # instruction named the exact tools to run, executed them once, and
+        # never iterated. The data is deterministic, so fetching it directly
+        # is faster AND strictly more reliable — it cannot be partially
+        # fetched (#5), skipped entirely (#4), or aimed at a tool that does
+        # not exist (#6).
+        context = build_turn_context(
+            game_response=state["game_response"],
+            history_toolkit=history_toolkit,
+            mapper_toolkit=mapper_toolkit,
+            inventory_toolkit=inventory_toolkit,
+            issue_locations=[m.location for m in memories_sorted if m.location],
+        )
+        state["turn_context"] = context
 
         # Extract current game state
         game_response = state["game_response"]
@@ -219,64 +238,11 @@ def create_spawn_agents_node(
         num_special_agents = (1 if explorer_agent else 0) + 1  # +1 for Interaction (Loop disabled)
         logger.info(f"Starting PARALLEL research for {len(issue_agents)} IssueAgents + {num_special_agents} special agents...")
 
-        # Get tools (include inventory and analysis for agents to query)
-        history_tools = history_toolkit.get_tools()
-        mapper_tools = mapper_toolkit.get_tools()
-        inventory_tools = inventory_toolkit.get_tools()
-
-        # Get analysis tools (big picture strategic analysis)
-        from tools.analysis import get_analysis_tools
-        analysis_tools = get_analysis_tools()
-
-        # Combine all tools for IssueAgents (they use combined tools)
-        all_tools = history_tools + mapper_tools + inventory_tools + analysis_tools
-
         # Build a coroutine for each agent's research+propose pass. Agents are
         # async-native (chain.ainvoke), so no thread offload is needed.
         def agent_coroutine(agent):
-            if isinstance(agent, ExplorerAgent):
-                return agent.research_and_propose(
-                    research_agent=research_agent,
-                    decision_llm=decision_llm,
-                    history_tools=history_tools,
-                    mapper_tools=mapper_tools,
-                    current_game_response=current_game_text,
-                    current_score=current_score,
-                    current_moves=current_moves,
-                )
-            if isinstance(agent, LoopDetectionAgent):
-                return agent.research_and_propose(
-                    research_agent=research_agent,
-                    decision_llm=decision_llm,
-                    history_tools=history_tools,
-                    mapper_tools=mapper_tools,
-                    current_location=current_location,
-                    current_game_response=current_game_text,
-                    current_score=current_score,
-                    current_moves=current_moves,
-                )
-            if isinstance(agent, InteractionAgent):
-                return agent.research_and_propose(
-                    research_agent=research_agent,
-                    decision_llm=decision_llm,
-                    history_tools=history_tools,
-                    mapper_tools=mapper_tools,
-                    current_location=current_location,
-                    current_game_response=current_game_text,
-                    current_score=current_score,
-                    current_moves=current_moves,
-                    inventory_tools=inventory_tools,
-                )
-            # IssueAgent
-            return agent.research_and_propose(
-                research_agent=research_agent,
-                decision_llm=decision_llm,
-                history_tools=all_tools,
-                current_location=current_location,
-                current_game_response=current_game_text,
-                current_score=current_score,
-                current_moves=current_moves,
-            )
+            # One LLM call per agent now, not two.
+            return agent.propose(decision_llm=decision_llm, context=context)
 
         # Filter out None agents (e.g., loop_detection_agent is disabled)
         all_agents = [a for a in issue_agents + [explorer_agent, loop_detection_agent, interaction_agent] if a is not None]
@@ -324,131 +290,6 @@ def create_spawn_agents_node(
     return spawn_agents_node
 
 
-def create_research_node(
-    research_agent: Runnable,
-    history_toolkit: HistoryToolkit,
-    mapper_toolkit: MapperToolkit,
-    inventory_toolkit,
-):
-    """
-    Create the research node that calls history tools.
-
-    Args:
-        research_agent: The LangChain research agent chain
-        history_toolkit: HistoryToolkit for executing tools
-
-    Returns:
-        Node function for the graph
-    """
-    async def research_node(state: DecisionState) -> DecisionState:
-        """
-        Research phase: Call history tools to gather context.
-        """
-        import logging
-        logger = logging.getLogger(__name__)
-
-        zork_response = state["game_response"]
-
-        research_input = {
-            "input": "Use the available tools to gather relevant history context.",
-            "score": zork_response.Score,
-            "locationName": zork_response.LocationName,
-            "moves": zork_response.Moves,
-            "game_response": zork_response.Response
-        }
-
-        logger.info("\n" + "=" * 80)
-        logger.info("[ResearchAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info("[ResearchAgent] AGENT: ResearchAgent")
-        logger.info("[ResearchAgent] PURPOSE: Gather historical context for decision making")
-        logger.info(f"[ResearchAgent] LOCATION: {zork_response.LocationName}")
-        logger.info("[ResearchAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info("RESEARCH - Gathering historical context")
-        logger.info("=" * 80)
-        logger.info(f"Current location: {zork_response.LocationName}")
-        logger.info(f"Current game response (first 100): {zork_response.Response[:100]}...")
-
-        # Research is advisory: the specialist agents have already done their
-        # own research, so a failure here degrades the decision instead of
-        # ending the turn (see #1).
-        from llm_utils import ainvoke_with_retry
-        try:
-            response = await ainvoke_with_retry(
-                research_agent,
-                research_input,
-                operation_name="Research Agent"
-            )
-        except Exception as e:
-            logger.error(f"[ResearchAgent] Research failed, continuing without it: {e}", exc_info=True)
-            state["research_context"] = f"Research unavailable this turn ({e})."
-            state["research_tool_calls"] = []
-            return state
-
-        # Track tool calls for HTML report
-        research_tool_calls = []
-
-        # Execute tool calls if present
-        if hasattr(response, 'tool_calls') and response.tool_calls:
-            tool_results = []
-            # Execute any tool schema bound by AdventurerService.
-            from tools.analysis import get_analysis_tools
-            all_research_tools = (
-                history_toolkit.get_tools()
-                + mapper_toolkit.get_tools()
-                + inventory_toolkit.get_tools()
-                + get_analysis_tools()
-            )
-            tools_map = {tool.name: tool for tool in all_research_tools}
-
-            logger.info(f"[ResearchAgent] Made {len(response.tool_calls)} tool calls:")
-
-            # Execute each tool call
-            for tool_call in response.tool_calls:
-                tool_name = tool_call['name']
-                tool_args = tool_call.get('args', {})
-
-                logger.info(f"[ResearchAgent]   -> {tool_name}({tool_args})")
-
-                # Never raises: a bad tool name or malformed model-supplied
-                # args come back as an "Error: ..." string (see #1).
-                tool_result = invoke_tool_safely(
-                    tools_map,
-                    tool_name,
-                    tool_args,
-                    label="ResearchAgent",
-                    log=logger,
-                )
-                result_str = str(tool_result)
-                logger.info(f"[ResearchAgent]      Result: {result_str[:150]}...")
-                tool_results.append(f"{tool_name} result: {tool_result}")
-
-                # Track for HTML report
-                research_tool_calls.append({
-                    "tool_name": tool_name,
-                    "input": str(tool_args) if tool_args else "",
-                    "output": result_str
-                })
-
-            # Combine tool results into summary
-            research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
-        else:
-            # If no tool calls, use the content directly
-            logger.info("[ResearchAgent] No tool calls made")
-            research_context = response.content if hasattr(response, 'content') else str(response)
-
-        logger.info(f"Research context length: {len(research_context)} chars")
-        logger.info(f"Research context (first 300): {research_context[:300]}...")
-        logger.info("=" * 80)
-        logger.info("RESEARCH COMPLETE")
-        logger.info("=" * 80)
-
-        state["research_context"] = research_context
-        state["research_tool_calls"] = research_tool_calls
-        return state
-
-    return research_node
-
-
 def create_decision_node(decision_chain: Runnable):
     """
     Create the decision node that generates structured output from agent
@@ -469,7 +310,13 @@ def create_decision_node(decision_chain: Runnable):
         logger = logging.getLogger(__name__)
 
         zork_response = state["game_response"]
-        research_context = state["research_context"]
+        # Assembled in code by the spawn node (#25); the research node that
+        # used to produce this via an LLM round-trip is gone.
+        turn_context = state.get("turn_context")
+        research_context = (
+            turn_context.research_context_for() if turn_context is not None
+            else state.get("research_context", "")
+        )
         issue_agents = state["issue_agents"]
         explorer_agent = state["explorer_agent"]
         loop_detection_agent = state["loop_detection_agent"]
@@ -658,7 +505,7 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit,
     return close_issues_node
 
 
-def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit):
+def create_observe_node(decision_llm, history_toolkit: HistoryToolkit, memory_toolkit: MemoryToolkit):
     """
     Create the observation node that identifies new strategic issues.
 
@@ -667,7 +514,6 @@ def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit:
 
     Args:
         decision_llm: The LLM to use for observation
-        research_agent: Research agent with access to history tools
         history_toolkit: HistoryToolkit for accessing game history
         memory_toolkit: MemoryToolkit for accessing tracked issues
 
@@ -691,9 +537,6 @@ def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit:
         # Create ObserverAgent to analyze the game response
         observer = ObserverAgent()
 
-        # Get history tools
-        history_tools = history_toolkit.get_tools()
-
         # Post-decision bookkeeping: a failure here must not discard the
         # command already chosen (see #1). persist_node and GameSession both
         # handle a None observer_response as "no new issue this turn".
@@ -704,9 +547,8 @@ def create_observe_node(decision_llm, research_agent: Runnable, history_toolkit:
                 score=zork_response.Score,
                 moves=zork_response.Moves,
                 decision_llm=decision_llm,
-                research_agent=research_agent,
-                history_tools=history_tools,
-                memory_toolkit=memory_toolkit
+                memory_toolkit=memory_toolkit,
+                context=state.get("turn_context"),
             )
         except Exception as e:
             logger.error(f"OBSERVE failed, skipping this turn: {e}", exc_info=True)
@@ -922,7 +764,6 @@ def _apply_pending_closures(state, memory_toolkit, logger) -> None:
 
 
 def create_decision_graph(
-    research_agent: Runnable,
     decision_chain: Runnable,
     decision_llm,
     history_toolkit: HistoryToolkit,
@@ -935,10 +776,9 @@ def create_decision_graph(
     Build the decision-making graph.
 
     Flow:
-        SpawnAgents → Research → Decide → CloseIssues → Observe → Persist → END
+        SpawnAgents → Decide → CloseIssues → Observe → Persist → END
 
     Args:
-        research_agent: Research agent that calls history tools
         decision_chain: Decision chain with structured output
         decision_llm: LLM for IssueAgent, ExplorerAgent proposals, Observer, and IssueClosedAgent
         history_toolkit: History toolkit for tool execution
@@ -956,30 +796,21 @@ def create_decision_graph(
         memory_toolkit,
         mapper_toolkit,
         inventory_toolkit,
-        research_agent,
         decision_llm,
         history_toolkit,
         turn_number_ref,
     ))
-    graph.add_node(
-        "research",
-        create_research_node(
-            research_agent,
-            history_toolkit,
-            mapper_toolkit,
-            inventory_toolkit,
-        ),
-    )
     graph.add_node("decide", create_decision_node(decision_chain))
     graph.add_node("close_issues", create_close_issues_node(
         decision_llm, history_toolkit, memory_toolkit, turn_number_ref))
-    graph.add_node("observe", create_observe_node(decision_llm, research_agent, history_toolkit, memory_toolkit))
+    graph.add_node("observe", create_observe_node(decision_llm, history_toolkit, memory_toolkit))
     graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit, turn_number_ref))
 
     # Define flow
     graph.set_entry_point("spawn_agents")
-    graph.add_edge("spawn_agents", "research")
-    graph.add_edge("research", "decide")
+    # No research node: its work is deterministic and now happens in code
+    # inside spawn_agents (#25).
+    graph.add_edge("spawn_agents", "decide")
     graph.add_edge("decide", "close_issues")
     graph.add_edge("close_issues", "observe")
     graph.add_edge("observe", "persist")

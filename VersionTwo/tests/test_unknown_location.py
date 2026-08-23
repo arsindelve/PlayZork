@@ -88,7 +88,7 @@ class FakeExplorerAgent:
         self.confidence = None
         self.tool_calls_history = []
 
-    async def research_and_propose(self, **kwargs):
+    async def propose(self, **kwargs):
         self.proposed_action = self.best_direction
         self.confidence = 95
 
@@ -102,7 +102,7 @@ class FakeInteractionAgent:
         self.inventory_items = []
         self.tool_calls_history = []
 
-    async def research_and_propose(self, **kwargs):
+    async def propose(self, **kwargs):
         self.confidence = 0
 
 
@@ -121,7 +121,6 @@ def _run_spawn(monkeypatch, location_name):
         memory_toolkit,
         mapper_toolkit,
         empty_tools,
-        research_agent=object(),
         decision_llm=object(),
         history_toolkit=empty_tools,
         turn_number_ref={"current": 7},
