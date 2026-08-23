@@ -217,7 +217,8 @@ class GameSession:
                 current_location=zork_response.LocationName,
                 player_command=input_text,
                 turn_number=self.turn_number,
-                game_response=zork_response.Response
+                game_response=zork_response.Response,
+                api_direction=zork_response.LastMovementDirection
             )
 
             # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)
@@ -457,6 +458,18 @@ class GameSession:
 
         # Send INVENTORY command to game
         inventory_response = await self.zork_service.play_turn("INVENTORY")
+
+        # Prefer the backend's own inventory list (#30): it is exact, it costs
+        # no LLM call, and it removes the failure mode where an unparseable
+        # reply looked identical to "carrying nothing" and wiped a resumed
+        # session's items.
+        api_inventory = getattr(inventory_response, "Inventory", None)
+        if api_inventory is not None:
+            self.logger.logger.info(f"Inventory reported by the game: {api_inventory}")
+            self.inventory_toolkit.state.sync_with_game(api_inventory, turn_number=0)
+            self.logger.logger.info("Inventory bootstrap complete (from game)")
+            return
+
         game_inventory_text = inventory_response.Response
 
         self.logger.logger.info(f"Game inventory response: {game_inventory_text}")

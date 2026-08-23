@@ -801,6 +801,30 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
         logger.info("UPDATING INVENTORY")
         logger.info("-" * 80)
 
+        # The backend reports its own inventory (#30). It is ground truth —
+        # a failed TAKE leaves it unchanged, a successful one updates it — so
+        # when it is present we reconcile against it and skip the LLM analyzer
+        # entirely. That removes one cheap-model call from every turn and ends
+        # the whole class of drift #21 was fighting: no name matching, no
+        # add/remove inference, no phantom items.
+        api_inventory = getattr(zork_response, "Inventory", None)
+        if api_inventory is not None:
+            try:
+                inventory_toolkit.state.sync_with_game(
+                    api_inventory, turn_number_ref["current"]
+                )
+                logger.info(
+                    f"Inventory synced from the game itself "
+                    f"({len(api_inventory)} items): {api_inventory}"
+                )
+            except Exception as e:
+                logger.error(f"INVENTORY SYNC FAILED, inventory may be stale: {e}", exc_info=True)
+            _apply_pending_closures(state, memory_toolkit, logger)
+            logger.info("=" * 80)
+            logger.info("PERSIST COMPLETE")
+            logger.info("=" * 80)
+            return state
+
         player_command = state.get("player_command")
         if player_command:
             from tools.inventory import InventoryAnalyzer
@@ -843,6 +867,17 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
 
         logger.info("-" * 80)
 
+        _apply_pending_closures(state, memory_toolkit, logger)
+
+        logger.info("=" * 80)
+        logger.info("PERSIST COMPLETE")
+        logger.info("=" * 80)
+        return state
+
+    return persist_node
+
+
+def _apply_pending_closures(state, memory_toolkit, logger) -> None:
         # Apply the closures staged by close_issues_node — LAST, after every
         # cancellable LLM call in this turn (#3). Closing an issue is the only
         # destructive memory write in the graph; doing it here means a turn
@@ -884,12 +919,6 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
             if issue_closed_response is not None:
                 issue_closed_response.closed_issue_contents = closed_contents
 
-        logger.info("=" * 80)
-        logger.info("PERSIST COMPLETE")
-        logger.info("=" * 80)
-        return state
-
-    return persist_node
 
 
 def create_decision_graph(

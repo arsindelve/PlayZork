@@ -91,11 +91,36 @@ Applied in dependency order, which the investigation revised from the original p
 1. **Turn latency grows superlinearly.** *(Attribution corrected the same day — see STATUS.md. The summaries are not the cause; the call count is constant at 16/turn and each call slows as history-shaped prompt content grows, dominated by BigPictureAnalyzer's 50-turn window on the expensive model. #24 option 3 was therefore NOT implemented. #25 — fewer calls — is the dominant lever.)* Turn time more than doubled in nine turns (79s → 194s), roughly half of it the summary phase (13.9s → 65.9s, ~34% of a turn) — on a fixed model and machine, with option 1 already applied. Option 1 halved a constant and did nothing to the growth *rate*. **[#24](https://github.com/arsindelve/PlayZork/issues/24) option 2 was implemented immediately** (summaries off the critical path), but [#25](https://github.com/arsindelve/PlayZork/issues/25) keeps its priority in M4: taking summarization off the critical path removes it from turn latency entirely, a larger and cheaper win than shaving research round-trips. This is the binding constraint on whether the thesis protocol (N seeded runs × several conditions) is runnable at all.
 2. **The agent deadlocked**, alternating two known-refused actions for five turns. Three gaps compound: the map could not learn the wall ([#33](https://github.com/arsindelve/PlayZork/issues/33), [#31](https://github.com/arsindelve/PlayZork/issues/31)), nothing suppressed repetition ([#18](https://github.com/arsindelve/PlayZork/issues/18), M5), and loop detection is off ([#22](https://github.com/arsindelve/PlayZork/issues/22)). **#22's "keep disabled?" question now has data: the capability is needed** — but #18 is the better vehicle, being deterministic, LLM-free, and aimed at the cause rather than the symptom.
 
-## Milestone 4 — Turn engine restructure *(~3–5 days)*
+## Milestone 4 — Turn engine restructure *(~3–5 days)* — in progress
+
+### Measured starting point (2026-08-22 checkpoint, session `m3-checkpoint-20260822`)
+
+**16 LLM calls per turn, constant.** ~360 call-seconds compressed into ~228s wall clock at ~1.6× effective parallelism against a single Ollama server (`OLLAMA_NUM_PARALLEL` confirmed unset, per [#27](https://github.com/arsindelve/PlayZork/issues/27)). Turn time grew 79s → 228s and then plateaued; the growth is per-call, not per-count, driven by history-shaped prompt content rather than the summaries.
+
+**Reducing the call count is therefore the dominant lever, not reordering the calls.**
+
+| # | Issue | Task | Status |
+|---|---|---|---|
+| — | [#24](https://github.com/arsindelve/PlayZork/issues/24) opt 2 | Summaries off the critical path; `record_turn()` stays inline, `refresh_summaries()` dispatched and coalesced | ✅ done `4c9b18f` |
+| — | [#24](https://github.com/arsindelve/PlayZork/issues/24) opt 3 | Bound summary growth | ❌ **not done — targets a non-cause** (summaries never exceeded 832 chars) |
+| — | — | Instrument `BigPictureAnalyzer` + `DeathAnalyzer` (3 of 16 calls/turn were invisible); bound its window via `BIG_PICTURE_HISTORY_TURNS` | ✅ done `4c9b18f` |
+| — | [#30](https://github.com/arsindelve/PlayZork/issues/30) | Consume the backend's own signals | ✅ done — see below |
+
+### #30 turned out to be much larger than filed
+
+The backend sends **eleven** fields; the response model declared six and *read* four. Probing both hosted backends found four undeclared fields, and one of them changes the architecture:
+
+- **`inventory`** — the game's own item list, verified authoritative (a failed `TAKE` leaves it unchanged, a successful one updates it). **This replaces the LLM `InventoryAnalyzer` entirely**: one fewer cheap-model call every turn, and it retires the whole class of drift [#21](https://github.com/arsindelve/PlayZork/issues/21) was fighting — no name matching, no add/remove inference, no phantom items. The analyzer is kept only as a fallback for backends that omit the field.
+- **`previousLocationName`** — `prev != loc` is an authoritative "did we move?" test, replacing inference from room-name comparison.
+- **`lastMovementDirection`** — the direction the game actually moved us (`climb tree` → `Up`, `enter window` → `In`). Preferred over both the command tokenizer and [#14](https://github.com/arsindelve/PlayZork/issues/14)'s raw-command labels, because it is canonical *and* executable, so the explorer correctly sees `UP` as explored. **Sticky**, so it is gated behind the non-movement deny-list.
+- **`exits`** — an int-enum exit list. Not a walkable-exit oracle (North of House reports `7` while NW and SW are refused), but a usable room **fingerprint**: the two rooms both named "Forest" differ (`[3,2,1]` vs `[3,0,1]`). That is the signal [#15](https://github.com/arsindelve/PlayZork/issues/15) needs.
+- **`actionsAvailableFromLocation`** — object → accepted commands, e.g. `{"window": ["open window", "close window", "examine window"]}`. A deterministic source for the InteractionAgent; folded into #25 below.
+
+### Remaining
 
 | # | Issue | Task |
 |---|---|---|
-| 17 | [#25](https://github.com/arsindelve/PlayZork/issues/25) | Deterministic TurnContext (deletes research node + per-agent research calls; **closes [#4](https://github.com/arsindelve/PlayZork/issues/4), [#5](https://github.com/arsindelve/PlayZork/issues/5), [#17](https://github.com/arsindelve/PlayZork/issues/17) as side effects** — verify, then close) |
+| 17 | [#25](https://github.com/arsindelve/PlayZork/issues/25) | Deterministic TurnContext (deletes research node + per-agent research calls; **closes [#4](https://github.com/arsindelve/PlayZork/issues/4), [#5](https://github.com/arsindelve/PlayZork/issues/5), [#17](https://github.com/arsindelve/PlayZork/issues/17) as side effects** — verify, then close). **Now larger in scope and cheaper to build:** #30 showed the backend already supplies inventory, exits, movement direction and per-object available actions, so TurnContext should assemble those directly rather than asking agents to research them. |
 | 18 | [#23](https://github.com/arsindelve/PlayZork/issues/23) + [#26](https://github.com/arsindelve/PlayZork/issues/26) | One refactor: graph ends at `decide`; bookkeeping (`close/observe/persist`) off the critical path; async-ify Observer/IssueClosedAgent; `turn_number` into graph state |
 | 19 | [#24](https://github.com/arsindelve/PlayZork/issues/24) *(full)* | Summaries off the critical path **— promoted to first in M4, see checkpoint finding 1** |
 | 20 | [#27](https://github.com/arsindelve/PlayZork/issues/27) | Client-side semaphore sized to `OLLAMA_NUM_PARALLEL`; fix/retire the sync retry path. Batched proposals = thesis ablation arm, not default |

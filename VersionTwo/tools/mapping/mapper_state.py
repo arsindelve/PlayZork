@@ -104,7 +104,8 @@ class MapperState:
         current_location: str,
         player_command: str,
         turn_number: int,
-        game_response: Optional[str] = None
+        game_response: Optional[str] = None,
+        api_direction: Optional[str] = None
     ) -> None:
         """
         Update the map based on the current turn.
@@ -116,6 +117,9 @@ class MapperState:
             turn_number: Current turn number
             game_response: This turn's game text. Optional so existing callers
                 keep working; without it the death gate cannot fire.
+            api_direction: The backend's own LastMovementDirection for this
+                turn. The server already knows which way we went, so this is
+                preferred over re-deriving it from the command string (#30).
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -164,6 +168,20 @@ class MapperState:
         if self.previous_location and is_known_location(self.previous_location):
             if self.previous_location != current_location:
                 # Location CHANGED - successful movement
+                if not direction and api_direction and is_probable_movement_command(player_command):
+                    # The backend names the direction it actually moved us:
+                    # "climb tree" -> "Up", "enter window" -> "In" (#30). This
+                    # beats both the command tokenizer and #14's raw-command
+                    # label, because it is canonical AND executable, so the
+                    # explorer correctly sees UP as explored rather than
+                    # hunting it separately.
+                    #
+                    # Gated on is_probable_movement_command because
+                    # LastMovementDirection is STICKY: on a turn where a timed
+                    # event relocated us during "TAKE LAMP", the field still
+                    # holds the previous move's direction.
+                    direction = normalize_direction(api_direction)
+
                 if not direction and is_probable_movement_command(player_command):
                     # Zork moves the player with plain commands too: CLIMB
                     # TREE, ENTER HOUSE, IN, OUT, CROSS BRIDGE, TOUCH MIRROR.
