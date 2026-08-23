@@ -134,7 +134,12 @@ class DeathAnalyzer:
         ]
 
         try:
-            return llm_with_structure.invoke(prompt)
+            from llm_utils import invoke_with_retry
+            return invoke_with_retry(
+                llm_with_structure,
+                prompt,
+                operation_name="DeathAnalyzer: detection",
+            )
         except Exception:
             # If analysis fails, assume no death
             return DeathAnalysis(died=False)

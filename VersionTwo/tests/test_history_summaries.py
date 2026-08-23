@@ -165,10 +165,83 @@ def test_update_after_turn_is_a_coroutine():
     assert asyncio.iscoroutinefunction(HistoryToolkit.update_after_turn)
 
 
-def test_game_session_awaits_the_summary_update():
+def test_game_session_records_the_turn_on_the_critical_path():
+    """record_turn must stay synchronous and inline: this turn's agents
+    research against it through get_recent_turns."""
     import inspect
 
     import game_session
 
     source = inspect.getsource(game_session.GameSession)
-    assert "await self.history_toolkit.update_after_turn(" in source
+    assert "self.history_toolkit.record_turn(" in source
+    assert "await self.history_toolkit.record_turn(" not in source
+
+
+def test_game_session_dispatches_summaries_off_the_critical_path():
+    """#24 option 2: summarization must not block the turn. It cost 65s+ at
+    the head of every turn on the 2026-08-22 checkpoint run."""
+    import inspect
+
+    import game_session
+
+    source = inspect.getsource(game_session.GameSession)
+    assert "_dispatch_summary_refresh" in source
+    # and it must not be awaited inline, or it is still on the critical path
+    assert "await self.history_toolkit.refresh_summaries(" not in source
+
+
+def test_summary_refresh_is_coalesced_against_overlapping_turns():
+    """Turns will overlap once the engine gets faster. Two summarizers racing
+    would let an older result overwrite a newer one via save_both_summaries."""
+    order = []
+
+    class SlowSummarizer:
+        def __init__(self):
+            self.calls = 0
+
+        async def agenerate_summary(self, state, turn):
+            self.calls += 1
+            order.append(f"start{turn.turn_number}")
+            await asyncio.sleep(0.05)
+            order.append(f"end{turn.turn_number}")
+            return f"recent{turn.turn_number}"
+
+        async def agenerate_long_running_summary(self, state, turn):
+            await asyncio.sleep(0.05)
+            return f"long{turn.turn_number}"
+
+    state = FakeHistoryState()
+    toolkit = _make_toolkit(SlowSummarizer(), state)
+
+    async def drive():
+        t1 = SimpleNamespace(turn_number=1)
+        t2 = SimpleNamespace(turn_number=2)
+        await asyncio.gather(
+            toolkit.refresh_summaries(t1),
+            toolkit.refresh_summaries(t2),
+        )
+
+    asyncio.run(drive())
+
+    # Never interleaved: one finishes before the next begins.
+    assert order == ["start1", "end1", "start2", "end2"], order
+    # The newer turn's summaries are what survive.
+    assert state.saved == ("recent2", "long2")
+
+
+def test_a_failing_summary_refresh_never_escapes():
+    """It runs as a background task now; an escaping exception would surface
+    only as a task-failure log, so it is contained at the source."""
+    class BrokenSummarizer:
+        async def agenerate_summary(self, state, turn):
+            raise RuntimeError("boom")
+
+        async def agenerate_long_running_summary(self, state, turn):
+            raise RuntimeError("boom")
+
+    state = FakeHistoryState()
+    toolkit = _make_toolkit(BrokenSummarizer(), state)
+
+    asyncio.run(toolkit.refresh_summaries(SimpleNamespace(turn_number=3)))
+
+    assert state.saved is None

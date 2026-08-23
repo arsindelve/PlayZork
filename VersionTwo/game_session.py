@@ -197,13 +197,20 @@ class GameSession:
             self.logger.log_game_response(zork_response.Response)
 
             # Step 2: Update history BEFORE decision (so research sees current turn)
-            await self.history_toolkit.update_after_turn(
+            # Record the turn synchronously — this turn's agents research
+            # against it via get_recent_turns. Summarization is dispatched off
+            # the critical path (#24 option 2): it cost 65s+ at the head of
+            # every turn while contributing almost nothing to the decision
+            # being made right now, since the previous summary plus the raw
+            # current turn already carry the same information.
+            turn = self.history_toolkit.record_turn(
                 game_response=zork_response.Response,
                 player_command=input_text,  # The command that was just executed
                 location=zork_response.LocationName,
                 score=zork_response.Score,
                 moves=zork_response.Moves
             )
+            self._dispatch_summary_refresh(turn)
 
             # Step 2b: Update mapper to track location transitions
             self.mapper_toolkit.update_after_turn(
@@ -294,6 +301,17 @@ class GameSession:
             # play() decides whether to recover with a fallback command or end
             # the session; it owns the user-facing message.
             raise
+
+    def _dispatch_summary_refresh(self, turn) -> None:
+        """Regenerate the history summaries off the critical path (#24).
+
+        Tracked like the other post-turn work so it is drained at shutdown,
+        and coalesced inside HistoryToolkit so overlapping turns cannot let an
+        older summary overwrite a newer one.
+        """
+        task = asyncio.create_task(self.history_toolkit.refresh_summaries(turn))
+        task.add_done_callback(self._on_background_task_done)
+        self._background_tasks.append(task)
 
     def _dispatch_post_turn_io(
         self,

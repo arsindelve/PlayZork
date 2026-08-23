@@ -128,6 +128,13 @@ if TURN_BUDGET_SECONDS > _CONFIGURED_TURN_BUDGET:
     )
 
 
+# How many turns of raw history the BigPictureAnalyzer folds into its prompt.
+# It runs on the EXPENSIVE model every turn, so this window is the dominant
+# term in per-turn latency growth: turn time on the 2026-08-22 checkpoint run
+# climbed 79s -> 228s and plateaued exactly as this window filled. Lower it to
+# trade strategic depth for throughput when running experiments.
+BIG_PICTURE_HISTORY_TURNS = int(os.getenv("PLAYZORK_BIG_PICTURE_HISTORY_TURNS", "20"))
+
 # ═══════════════════════════════════════════════════════════
 # MODEL CONFIGURATIONS
 # ═══════════════════════════════════════════════════════════

@@ -959,3 +959,63 @@ Encouraging counter-observation: before deadlocking, the agent broke a wander lo
 1. #24 options 2 and 3 (summaries off the critical path, bound the growth) — promoted ahead of #25 on Finding 2.
 2. #30 — consume `LastMovementDirection` / `exits`, before TurnContext is designed around command parsing.
 3. Then the rest of M4, and M5's #18 with Finding 3 as its justification.
+
+
+## Correction to Finding 2 (same day, before implementing)
+
+Finding 2 above attributed the latency growth to the summaries' own text
+growing. **That attribution is wrong**, and the fix it implied (#24 option 3,
+"bound the long-running summary") would have targeted a non-cause. Correcting
+it here rather than editing it away, because the reasoning matters.
+
+Measured from the same run:
+
+| | turn 1 | turn 14 |
+|---|---|---|
+| LLM calls per turn | 16 | 16 (**constant**) |
+| Total LLM call-seconds | 98s | 359s |
+| Wall clock | 79s | 228s |
+| Effective parallelism | 1.24x | 1.57x |
+| Stored summary text | 374-832 chars | never larger |
+
+The call **count** never changes; each call gets slower (~10s -> ~28s mean).
+The summaries are tiny — 832 characters at their largest, a few seconds of
+generation — so their own size cannot explain a 4-9x slowdown.
+
+What actually grows is the *history-shaped* prompt content: `get_recent_turns`
+output, the map, and tool results threaded into research and decision prompts.
+The dominant single contributor is `BigPictureAnalyzer`, which pulled
+`get_recent_turns(50)` into a prompt it runs on the **expensive** model **every
+turn**. It was also invisible: it and `DeathAnalyzer` called `.invoke()`
+directly with no retry wrapper and no log markers, so 3 of the 16 calls per
+turn could not be measured at all.
+
+The summaries merely *looked* worst because they run first in a turn and
+therefore collide head-on with the previous turn's background analyzers. That
+also explains the plateau: turn times flatten near 225s once the 50-turn
+window fills.
+
+**Lesson for the thesis measurement discipline:** the first plausible story
+fit the shape of the data and was still wrong. Every LLM call must be
+instrumented, or analysis silently reasons about two-thirds of the work.
+
+## Acted on
+
+- `BigPictureAnalyzer` and `DeathAnalyzer` now go through `invoke_with_retry`
+  — log markers, timeout and retry, and no more measurement blind spot.
+- The big-picture window is bounded and configurable:
+  `BIG_PICTURE_HISTORY_TURNS` (default 20, was a hardcoded 50).
+- **#24 option 2 implemented.** `HistoryToolkit.record_turn()` stays synchronous
+  on the critical path (this turn's agents research against it via
+  `get_recent_turns`); `refresh_summaries()` is dispatched as a tracked
+  background task, coalesced under a lock so overlapping turns cannot let an
+  older summary overwrite a newer one.
+- **#24 option 3 deliberately NOT implemented** — it targets a non-cause.
+- `OLLAMA_NUM_PARALLEL` is confirmed unset on this machine, exactly as #27
+  warned. Effective parallelism measured at ~1.6x against 16 calls per turn.
+
+The strategic conclusion also flips back: with a constant 16 calls per turn
+against a saturated single server, **reducing the number of calls (#25) is the
+dominant lever**, not reordering them. Moving summaries off the critical path
+still shortens the turn, but on a saturated server it relocates work rather
+than removing it.
