@@ -128,3 +128,92 @@ def test_an_empty_log_does_not_crash(tmp_path):
     assert run.turns == []
     assert run.final_score == 0
     assert "turns              0" in run.summary()
+
+
+# ---------------------------------------------------------------------------
+# Arbitration — the load-bearing question for the architecture
+# ---------------------------------------------------------------------------
+
+ARBITRATION_LOG = """
+2026-08-24 10:00:00,000 - INFO - ###  TURN 1 START - Command: look
+2026-08-24 10:00:01,000 - INFO - Location: West Of House
+2026-08-24 10:00:02,000 - INFO - Score: 0, Moves: 1
+2026-08-24 10:00:03,000 - INFO - Game Response (first 100): West Of House
+2026-08-24 10:00:04,000 - INFO - Agent Proposals:
+InteractionAgent: [Confidence: 80/100]
+  Proposed Action: OPEN mailbox
+ExplorerAgent: [Confidence: 95/100, EV: 47.5]
+  Proposed Action: WEST
+2026-08-24 10:00:05,000 - INFO - DECISION MADE: OPEN mailbox
+2026-08-24 10:00:06,000 - INFO - REASON: there is an object here to interact with
+2026-08-24 10:01:00,000 - INFO - ###  TURN 2 START - Command: OPEN mailbox
+2026-08-24 10:01:01,000 - INFO - Location: West Of House
+2026-08-24 10:01:02,000 - INFO - Score: 0, Moves: 2
+2026-08-24 10:01:03,000 - INFO - Game Response (first 100): Opened.
+2026-08-24 10:01:04,000 - INFO - Agent Proposals:
+IssueAgent #1: [Importance: 630/1000, Confidence: 90/100, EV: 56.7]
+  Proposed Action: TAKE LEAFLET
+ExplorerAgent: [Confidence: 75/100, EV: 30.0]
+  Proposed Action: NORTH
+2026-08-24 10:01:05,000 - INFO - DECISION MADE: TAKE LEAFLET
+2026-08-24 10:01:06,000 - INFO - REASON: highest expected value
+"""
+
+
+def test_proposals_and_the_chosen_command_are_extracted(tmp_path):
+    run = analyse(write_log(tmp_path, ARBITRATION_LOG))
+
+    assert len(run.decisions) == 2
+    first = run.decisions[0]
+    assert [p[0] for p in first.proposals] == ["InteractionAgent", "ExplorerAgent"]
+    assert first.chosen == "OPEN mailbox"
+
+
+def test_an_override_of_the_top_scoring_proposal_is_detected(tmp_path):
+    """Turn 1: the arbiter took the 80-confidence InteractionAgent over the
+    95-confidence, EV 47.5 ExplorerAgent."""
+    run = analyse(write_log(tmp_path, ARBITRATION_LOG))
+
+    assert run.decisions[0].overrode_top_ev is True
+
+
+def test_agreeing_with_the_top_proposal_is_not_an_override(tmp_path):
+    run = analyse(write_log(tmp_path, ARBITRATION_LOG))
+
+    assert run.decisions[1].overrode_top_ev is False
+
+
+def test_only_contested_turns_count_toward_the_override_rate(tmp_path):
+    """A turn with one proposal cannot demonstrate arbitration either way."""
+    log = ARBITRATION_LOG + """
+2026-08-24 10:02:00,000 - INFO - ###  TURN 3 START - Command: TAKE LEAFLET
+2026-08-24 10:02:01,000 - INFO - Location: West Of House
+2026-08-24 10:02:02,000 - INFO - Score: 0, Moves: 3
+2026-08-24 10:02:03,000 - INFO - Game Response (first 100): Taken.
+2026-08-24 10:02:04,000 - INFO - Agent Proposals:
+ExplorerAgent: [Confidence: 75/100, EV: 30.0]
+  Proposed Action: NORTH
+2026-08-24 10:02:05,000 - INFO - DECISION MADE: NORTH
+"""
+    run = analyse(write_log(tmp_path, log))
+
+    assert len(run.decisions) == 3
+    assert len(run.contested_turns) == 2
+    assert run.override_rate == 0.5
+
+
+def test_agent_win_counts_are_attributed(tmp_path):
+    run = analyse(write_log(tmp_path, ARBITRATION_LOG))
+
+    wins = run.agent_win_counts()
+    assert wins["InteractionAgent"] == 1
+    assert wins["IssueAgent #1"] == 1
+    assert wins["ExplorerAgent"] == 0
+
+
+def test_the_summary_states_what_a_zero_override_rate_would_mean(tmp_path):
+    """If the arbiter never overrides, it is a `max()` that costs an LLM call —
+    which is what the arbitration ablation exists to test."""
+    run = analyse(write_log(tmp_path, ARBITRATION_LOG))
+
+    assert "expensive max()" in run.summary()

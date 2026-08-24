@@ -37,6 +37,38 @@ class Turn:
 
 
 @dataclass
+class Decision:
+    """One turn's proposals and what the arbiter did with them."""
+
+    turn: int
+    proposals: List[Tuple[str, str, float]] = field(default_factory=list)  # agent, action, EV
+    chosen: str = ""
+    reason: str = ""
+
+    @property
+    def top_ev(self) -> Optional[Tuple[str, str, float]]:
+        return max(self.proposals, key=lambda p: p[2]) if self.proposals else None
+
+    @property
+    def overrode_top_ev(self) -> bool:
+        """Did the arbiter pass over the highest-scoring proposal?
+
+        This is the load-bearing question for the architecture. If the answer
+        is always no, the LLM arbiter is an expensive `max()` and the
+        deliberation is decorative — which is exactly what the arbitration
+        ablation is meant to test.
+        """
+        top = self.top_ev
+        if not top or not self.chosen:
+            return False
+        return _norm(self.chosen) != _norm(top[1])
+
+
+def _norm(command: str) -> str:
+    return " ".join((command or "").upper().split())
+
+
+@dataclass
 class RunAnalysis:
     session_id: str
     turns: List[Turn] = field(default_factory=list)
@@ -47,6 +79,33 @@ class RunAnalysis:
     suppressions: int = 0
     map_edges: List[Tuple[str, str, str]] = field(default_factory=list)
     tokens: Dict[int, Tuple[int, int, int]] = field(default_factory=dict)
+    decisions: List[Decision] = field(default_factory=list)
+
+    # ---- arbitration ----------------------------------------------------
+
+    @property
+    def contested_turns(self) -> List[Decision]:
+        """Turns where more than one agent proposed — the only turns on which
+        arbitration could possibly have mattered."""
+        return [d for d in self.decisions if len(d.proposals) > 1]
+
+    @property
+    def overrides(self) -> List[Decision]:
+        return [d for d in self.contested_turns if d.overrode_top_ev]
+
+    @property
+    def override_rate(self) -> float:
+        contested = self.contested_turns
+        return len(self.overrides) / len(contested) if contested else 0.0
+
+    def agent_win_counts(self) -> Counter:
+        wins = Counter()
+        for d in self.decisions:
+            for agent, action, _ in d.proposals:
+                if _norm(action) == _norm(d.chosen):
+                    wins[agent] += 1
+                    break
+        return wins
 
     # ---- progress -------------------------------------------------------
 
@@ -117,6 +176,18 @@ class RunAnalysis:
         if self.total_seconds:
             lines.append(f"wall clock         {self.total_seconds/60:.1f} min "
                          f"({self.total_seconds/max(1,len(self.turns)):.0f}s/turn)")
+        if self.contested_turns:
+            lines.append(
+                f"contested turns    {len(self.contested_turns)} "
+                f"(>1 proposal; arbitration could matter)")
+            lines.append(
+                f"arbiter overrides  {len(self.overrides)} "
+                f"({self.override_rate*100:.0f}% of contested) "
+                f"— if 0%, the arbiter is an expensive max()")
+            wins = self.agent_win_counts()
+            if wins:
+                lines.append("agent wins         "
+                             + ", ".join(f"{a}={n}" for a, n in wins.most_common()))
         if self.total_tokens:
             lines.append(f"tokens             {self.total_tokens} "
                          f"({self.total_tokens/max(1,len(self.turns)):.0f}/turn)")
@@ -159,8 +230,28 @@ def analyse(log_path: str, db_path: Optional[str] = None) -> RunAnalysis:
             run.suppressions += 1
         elif re.search(r"Turn \d+ failed", line):
             run.failures += 1
+        elif "Agent Proposals:" in line:
+            decision = Decision(turn=current.number)
+            run.decisions.append(decision)
+        elif run.decisions and (m := re.match(
+                r"(IssueAgent #\d+|ExplorerAgent|InteractionAgent|LoopDetectionAgent):"
+                r".*?(?:EV: ([\d.]+))?\]", line)):
+            run.decisions[-1].proposals.append([m.group(1), "", float(m.group(2) or 0)])
+        elif run.decisions and run.decisions[-1].proposals and (
+                m := re.search(r"Proposed Action: (.*)", line)):
+            last = run.decisions[-1].proposals[-1]
+            if not last[1]:
+                last[1] = m.group(1).strip()
+        elif m := re.search(r"DECISION MADE: (.*)", line):
+            if run.decisions:
+                run.decisions[-1].chosen = m.group(1).strip()
+        elif m := re.search(r"REASON: (.*)", line):
+            if run.decisions and not run.decisions[-1].reason:
+                run.decisions[-1].reason = m.group(1).strip()
     if current:
         run.turns.append(current)
+    for d in run.decisions:
+        d.proposals = [tuple(p) for p in d.proposals]
 
     for a, b in zip(run.turns, run.turns[1:]):
         if a.started and b.started:
