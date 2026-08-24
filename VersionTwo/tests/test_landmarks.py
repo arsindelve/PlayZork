@@ -102,7 +102,7 @@ class TestWiredIntoTurnContext:
     was in the wiring, not the logic. This calls the REAL build_turn_context.
     """
 
-    def _context(self, game_text, location, transitions):
+    def _context(self, game_text, location, transitions, turns=None):
         from types import SimpleNamespace as NS
 
         from tools.agent_graph.turn_context import build_turn_context
@@ -115,7 +115,7 @@ class TestWiredIntoTurnContext:
             get_unexplored_directions=lambda loc: [],
         ))
         history = NS(state=NS(
-            get_recent_turns=lambda *a, **k: [],
+            get_recent_turns=lambda *a, **k: list(turns or []),
             get_full_summary=lambda *a, **k: "",
             get_long_running_summary=lambda *a, **k: "",
         ))
@@ -176,3 +176,44 @@ class TestWiredIntoTurnContext:
         map_leads = [f for f in ctx.frontier if "on the map" in f]
         assert map_leads == [], "map frontier is empty on a linear path — the bug"
         assert any("house" in f for f in ctx.frontier), "text frontier must cover it"
+
+
+class TestScansRawProseNotTheTranscript:
+    """The live failure the unit tests missed.
+
+    `recent_turns` renders as "Turn 1: look -> West Of House\nYou are standing
+    ... white house". With no sentence break between header and description,
+    the location label lands in the same sentence as the landmark and fires the
+    same-sentence retirement rule. Turn 4 of the frontier run reported "no
+    unfollowed leads" with the house sitting in the text being scanned.
+    """
+
+    def test_the_formatted_transcript_would_hide_the_lead(self):
+        from tools.mapping.landmarks import unvisited_landmarks
+        blob = ("Turn 1: look -> West Of House\n"
+                "You are standing in an open field west of a white house.")
+        assert unvisited_landmarks(blob, ["West Of House"]) == [], \
+            "if this ever passes, the transcript format changed and the " \
+            "raw-prose workaround can be simplified"
+
+    def test_real_context_uses_raw_prose_and_finds_it(self):
+        from types import SimpleNamespace as NS
+        turns = [
+            NS(turn_number=1, player_command="look",
+               game_response="You are standing in an open field west of a "
+                             "white house, with a boarded front door."),
+            NS(turn_number=2, player_command="OPEN mailbox",
+               game_response="Opening the small mailbox reveals a leaflet."),
+            NS(turn_number=3, player_command="TAKE leaflet",
+               game_response="Taken."),
+        ]
+        ctx = TestWiredIntoTurnContext()._context(
+            "Taken.", "West Of House",
+            [("West Of House", "NORTH", "North of House")], turns=turns)
+        assert any("house" in f for f in ctx.frontier), ctx.frontier
+
+    def test_current_response_alone_is_not_enough(self):
+        """After TAKE the response is "Taken." and names nothing — exactly
+        when the standing lead matters most."""
+        from tools.mapping.landmarks import unvisited_landmarks
+        assert unvisited_landmarks("Taken.", ["West Of House"]) == []

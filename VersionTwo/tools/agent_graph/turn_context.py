@@ -388,10 +388,23 @@ def build_turn_context(
         visited = {t.from_location for t in transitions} | reached
         if location:
             visited.add(location)
-        # Current description first, then recent turns: a recency window, which
-        # is what actually retires a landmark once the agent is inside it.
-        recent_text = "\n".join(filter(None, [context.game_text, context.recent_turns]))
-        named = unvisited_landmarks(recent_text, visited)
+        # RAW room prose, not the formatted transcript. `recent_turns` renders
+        # as "Turn 1: look -> West Of House\nYou are standing ... white house",
+        # and with no sentence break between the header and the description the
+        # location label lands in the same sentence as the landmark — firing
+        # the same-sentence retirement rule and silently killing the lead. Seen
+        # live: turn 4 reported "no unfollowed leads" while the house sat in
+        # the very text being scanned.
+        #
+        # The current response alone is not enough either: after "TAKE leaflet"
+        # it is just "Taken." and names nothing, which is exactly when the
+        # standing lead matters most.
+        def _prose():
+            turns = history_toolkit.state.get_recent_turns(RECENT_TURNS_FOR_AGENTS)
+            return [t.game_response for t in turns if t.game_response]
+        recent_prose = safe("recent prose", _prose, [])
+        named = unvisited_landmarks(
+            "\n".join(filter(None, [context.game_text, *recent_prose])), visited)
 
         return [f"{room} (on the map, never explored from)" for room in unexplored] + \
                [f"{phrase} (named nearby, never entered)" for phrase in named]
