@@ -252,6 +252,32 @@ Re-run 25 turns and compare against `analysis-run-20260824` as the control:
 - **arbiter override rate** — B should *raise* it, since the objective gives the arbiter a reason to disagree with raw EV
 - **wasted turns** — should fall if aimless frontier-walking drops
 
+### Built and measured (2026-08-24) — two of three components work
+
+Verified against `analysis-run-20260824` as control:
+
+| component | status |
+|---|---|
+| objective in the arbiter prompt | ✅ the arbiter now reasons in objective terms — *"it advances the objective by acquiring a new item"*, where the control cited only confidence and EV |
+| score trajectory | ✅ *"Score: 0 — UNCHANGED FOR 6 TURNS — the current approach is not scoring, prefer a change of direction"* reaches the arbiter as intended |
+| **frontier** | ❌ **structurally empty** |
+
+**The frontier definition was wrong, and the reason generalises.** It was defined as *map nodes reached but not departed from*. On a linear exploration path — A→B→C, which is what the agent actually does — every room reached has also been left, so the set is **always empty**. The one signal intended to redirect the agent toward the objective is unavailable precisely when it is needed.
+
+The useful frontier is **not in the map**. *"You are facing the north side of a white house"* names the most valuable object in the opening, and a house is not a map node — it is a noun in a room description that nothing converts into a destination. A map-derived frontier cannot represent it in principle.
+
+**Trajectory was unchanged for the first 8 turns**, identical to the control. At the decisive turn (5, at North of House), the explorer chose NORTH on genuinely correct evidence — the description says *"a narrow path winds through the trees to the north"* and the game confirms NORTH is a real exit, so NORTH scores 6 against EAST's 4. The evidence points north; EAST to Behind House is a real exit that nothing recommends. **This is not a scoring bug — it is the generation gap.**
+
+### Consequence: arm A is now motivated by evidence, not speculation
+
+B's pre-registered limitation has been demonstrated rather than predicted:
+
+> *"the arbiter can only rank what it is given … B improves selection among existing proposals; it does not close the generation gap. If the measurements show it is insufficient, that is itself the result that motivates arm A."*
+
+That result is in. A GoalAgent's remit should be specifically **to turn nouns in room text into destinations** — the thing no current agent does. Its ablation value is unchanged and its shape is now clearer.
+
+If a cheaper intermediate is wanted first: redefine the frontier as *places named in recent room descriptions that do not appear in the map*, which is deterministic, needs no new LLM call, and would have surfaced "white house" on turn 4.
+
 ### Pre-register arm A as an ablation
 
 Add **`+goal_agent`** as a fourth experimental arm alongside lean single-shot / full single-shot / multi-agent. That way goal-directed *proposal generation* is measured rather than quietly patched in, and the gap between multi-agent and multi-agent+goal_agent is exactly the size of the generation deficit described above.
