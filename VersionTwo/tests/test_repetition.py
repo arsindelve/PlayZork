@@ -145,13 +145,39 @@ def test_repeated_proposals_reach_the_arbiter_at_zero_expected_value():
     assert "ALREADY TRIED HERE" in text
 
 
-def test_the_arbiter_is_told_why_not_merely_that():
+def test_a_dead_proposal_is_withheld_when_a_live_one_exists():
+    """It used to be annotated and left on the ballot, and the arbiter reasoned
+    straight past the zero: in pf3-20260824 three undo demotions fired and TWO
+    were chosen anyway — "Chose ExplorerAgent (confidence 95, EV 0.0) despite
+    the low EV" — with a 70-EV proposal sitting unchosen on the same ballot.
+
+    The reason it is dead is NOT lost; it travels on the other channel, the
+    ALREADY TRIED block of the research context. See the assertion below and
+    test_the_prompt_block_lists_what_is_dead_and_why.
+    """
     ctx = TurnContext(location="Clearing", game_text="", score=0, moves=13,
                       unproductive={"NORTH": "The forest becomes impenetrable to the north."})
 
     text = _proposals(ctx)
 
-    assert "impenetrable" in text
+    assert "ExplorerAgent" not in text, "the dead proposal must not be on the ballot"
+    assert "IssueAgent #1" in text, "the live proposal must remain"
+    # The arbiter still learns WHY north is dead, via the research context.
+    assert "impenetrable" in ctx.research_context_for()
+
+
+def test_everything_dead_means_nothing_is_withheld():
+    """The original intent, now actually enforced: a demoted proposal stays
+    selectable when literally everything else is exhausted."""
+    ctx = TurnContext(location="Clearing", game_text="", score=0, moves=13,
+                      unproductive={"EXAMINE PILE OF LEAVES": "Nothing special.",
+                                    "NORTH": "The forest becomes impenetrable."})
+
+    text = _proposals(ctx)
+
+    assert "ExplorerAgent" in text and "IssueAgent #1" in text
+    assert text.count("EV: 0.0") == 2
+    assert "impenetrable" in text, "with nothing withheld, the reason is on the ballot"
 
 
 def test_fresh_proposals_keep_their_expected_value():

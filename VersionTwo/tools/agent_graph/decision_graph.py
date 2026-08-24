@@ -489,7 +489,17 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
     pick it if literally everything else is exhausted — and can see why it was
     demoted.
     """
-    lines = []
+    # Proposals are collected as BLOCKS carrying their expected value, so a
+    # demoted one can be WITHHELD rather than merely annotated. See the filter
+    # at the end of this function.
+    blocks = []
+
+    def block(ev=None):
+        """Start a new proposal block and return its line list."""
+        blocks.append([ev, []])
+        return blocks[-1][1]
+
+    lines = block()
 
     def repeat_note(action):
         """Marker + EV multiplier for a proposal that should not be chosen."""
@@ -509,6 +519,7 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
 
     # LoopDetectionAgent (FIRST - highest priority if loop detected)
     if loop_detection_agent and loop_detection_agent.confidence > 0:
+        lines = block()  # no EV of its own; never withheld
         lines.append(f"LoopDetectionAgent: [⚠️ LOOP DETECTED, Confidence: {loop_detection_agent.confidence}/100]")
         lines.append(f"  Loop Type: {loop_detection_agent.loop_type}")
         lines.append(f"  Proposed Action: {loop_detection_agent.proposed_action}")
@@ -520,6 +531,7 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
         if agent.proposed_action and agent.confidence is not None:
             note, mult = repeat_note(agent.proposed_action)
             ev = (agent.importance/1000) * (agent.confidence/100) * 100 * mult
+            lines = block(ev)
             lines.append(f"IssueAgent #{i}: [Importance: {agent.importance}/1000, Confidence: {agent.confidence}/100, EV: {ev:.1f}]")
             lines.append(f"  Issue: {agent.issue_content}")
             lines.append(f"  Proposed Action: {agent.proposed_action}")
@@ -549,6 +561,7 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
         base = 100 if confirmed else 50
         ev = (interaction_agent.confidence / 100) * base * mult
         evidence = "game-confirmed" if confirmed else "model-proposed"
+        lines = block(ev)
         lines.append(f"InteractionAgent: [Confidence: {interaction_agent.confidence}/100, "
                      f"EV: {ev:.1f}, {evidence}]")
         if note:
@@ -565,6 +578,7 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
     if explorer_agent and explorer_agent.proposed_action and explorer_agent.confidence is not None:
         note, mult = repeat_note(explorer_agent.proposed_action)
         ev = (len(explorer_agent.unexplored_directions)/10) * (explorer_agent.confidence/100) * 50 * mult
+        lines = block(ev)
         lines.append(f"ExplorerAgent: [Confidence: {explorer_agent.confidence}/100, EV: {ev:.1f}]")
         if note:
             lines.append(note)
@@ -574,7 +588,35 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
         lines.append(f"  Unexplored Directions: {len(explorer_agent.unexplored_directions)} total")
         lines.append("")
 
-    return "\n".join(lines) if lines else "No proposals available. Choose LOOK to observe the current situation."
+    # A zeroed proposal is WITHHELD while any positive-EV proposal exists.
+    #
+    # The docstring above says a demoted proposal is annotated rather than
+    # removed "so the arbiter can still pick it if literally everything else is
+    # exhausted" — but nothing enforced that condition, and the arbiter simply
+    # reasoned past the zero. In pf3-20260824 three undo demotions fired and
+    # TWO were chosen anyway: "Chose ExplorerAgent (confidence 95, EV 0.0)
+    # despite the low EV because the current location is not advancing the
+    # score" — while a 70-EV proposal sat unchosen on the same ballot.
+    #
+    # Milestone 5b's urgency signal is what drives it: told the score has not
+    # moved for N turns, the arbiter wants ANY change of direction, and the
+    # only movement on offer is the way it just came. Two mechanisms were
+    # fighting and the softer one kept winning.
+    #
+    # This implements the original intent rather than overruling it: when
+    # everything else really is exhausted every EV is zero, nothing is
+    # withheld, and the annotated proposals remain visible.
+    if any(ev is not None and ev > 0 for ev, _ in blocks):
+        withheld = [b for b in blocks if b[0] is not None and b[0] <= 0 and b[1]]
+        if withheld:
+            import logging as _logging
+            log = _logging.getLogger(__name__)
+            for _, block_lines in withheld:
+                log.info(f"[Decide] withheld zero-EV proposal: {block_lines[0]}")
+            blocks = [b for b in blocks if b not in withheld]
+
+    rendered = [line for _, block_lines in blocks for line in block_lines]
+    return "\n".join(rendered) if rendered else "No proposals available. Choose LOOK to observe the current situation."
 
 
 def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit,
