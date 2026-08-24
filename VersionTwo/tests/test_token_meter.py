@@ -108,14 +108,87 @@ def test_concurrent_branches_can_report_safely():
     assert s.input_tokens == 1600
 
 
-def test_every_guarded_llm_call_is_metered():
-    """llm_utils is the single choke point both retry helpers pass through."""
+def test_every_guarded_call_labels_its_operation():
+    """llm_utils supplies the LABEL; the metering itself happens in a callback,
+    because a structured-output chain discards the message carrying usage."""
     import inspect
 
     import llm_utils
 
     for fn in (llm_utils.invoke_with_retry, llm_utils.ainvoke_with_retry):
-        assert "_meter(result, operation_name)" in inspect.getsource(fn), fn.__name__
+        assert "_label(operation_name)" in inspect.getsource(fn), fn.__name__
+
+
+def test_structured_output_calls_are_counted_via_the_callback():
+    """The gap this closed: metering the RETURN VALUE missed every agent
+    proposal and the decision, since those return a parsed Pydantic model."""
+    from types import SimpleNamespace
+
+    from token_meter import TokenCallbackHandler, TokenMeter
+
+    meter = TokenMeter()
+    meter.start_turn(1)
+    meter.set_operation("Decision Agent")
+    handler = TokenCallbackHandler(meter)
+
+    handler.on_llm_end(SimpleNamespace(generations=[[SimpleNamespace(
+        message=SimpleNamespace(usage_metadata={"input_tokens": 1500, "output_tokens": 80}))]]))
+
+    snapshot = meter.snapshot()
+    assert snapshot.total_tokens == 1580
+    assert snapshot.by_operation["Decision Agent"] == (1500, 80, 1)
+
+
+def test_the_handler_never_raises_on_a_malformed_result():
+    from token_meter import TokenCallbackHandler, TokenMeter
+
+    handler = TokenCallbackHandler(TokenMeter())
+    handler.on_llm_end(None)
+    handler.on_llm_end(object())
+
+
+def test_operation_labels_survive_the_asyncio_task_boundary():
+    """The graph fans out as asyncio tasks. Each must keep its own label.
+
+    A thread-local fails here twice over: the tasks share one thread so they
+    would overwrite each other, and LangChain may run the callback on a worker
+    thread where a label set on the event loop is invisible — which is exactly
+    what happened, every call came back "unattributed".
+    """
+    import asyncio
+
+    from token_meter import TokenMeter
+
+    meter = TokenMeter()
+    meter.start_turn(1)
+    seen = {}
+
+    async def branch(name, delay):
+        meter.set_operation(name)
+        await asyncio.sleep(delay)          # let the other branch interleave
+        seen[name] = meter._current_operation()
+
+    async def main():
+        await asyncio.gather(branch("spawn", 0.02), branch("observe", 0.01))
+
+    asyncio.run(main())
+
+    assert seen == {"spawn": "spawn", "observe": "observe"}
+
+
+def test_an_unlabelled_call_is_recorded_as_unattributed_not_dropped():
+    """Losing the label must cost attribution, never the count — the total is
+    what the experiment compares."""
+    from token_meter import TokenMeter
+
+    meter = TokenMeter()
+    meter.start_turn(1)
+    meter.set_operation("")          # no label in scope
+    meter.record(_msg(100, 10))
+
+    snapshot = meter.snapshot()
+    assert snapshot.total_tokens == 110
+    assert "unattributed" in snapshot.by_operation
 
 
 def test_the_process_meter_is_a_singleton():

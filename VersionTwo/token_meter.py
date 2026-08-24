@@ -15,6 +15,7 @@ actually costs rather than for how fast the box happens to be.
 Counts come from the provider's own metadata (`usage_metadata` on the LangChain
 response), not from an estimate.
 """
+import contextvars
 import logging
 import threading
 from collections import defaultdict
@@ -22,6 +23,12 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# The operation whose LLM calls are currently in flight. A contextvar so it
+# survives both the asyncio-task boundary (the graph fans out) and the
+# thread-pool boundary (LangChain may run callbacks on a worker).
+_OPERATION: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "playzork_llm_operation", default="")
 
 
 @dataclass
@@ -66,6 +73,23 @@ class TokenMeter:
             self._input = self._output = self._calls = 0
             self._by_op.clear()
 
+    def set_operation(self, name: str) -> None:
+        """Label the operation whose LLM calls follow.
+
+        A CONTEXTVAR, not a thread-local. The graph fans out, so several
+        branches label and call concurrently — but they do so as asyncio tasks
+        sharing one thread, where a thread-local would let them overwrite each
+        other, and LangChain may run the callback on a worker thread, where a
+        thread-local set on the event loop would be invisible entirely (it
+        was: every call came back "unattributed"). Contextvars propagate
+        across both boundaries.
+        """
+        _OPERATION.set(name)
+
+    @staticmethod
+    def _current_operation() -> str:
+        return _OPERATION.get() or "unattributed"
+
     def record(self, response, operation_name: str = "") -> None:
         """Record one LLM response. Never raises — accounting must not be able
         to cost a turn."""
@@ -83,7 +107,7 @@ class TokenMeter:
                 self._input += tin
                 self._output += tout
                 self._calls += 1
-                slot = self._by_op[operation_name or "unnamed"]
+                slot = self._by_op[operation_name or self._current_operation()]
                 slot[0] += tin
                 slot[1] += tout
                 slot[2] += 1
@@ -101,8 +125,47 @@ class TokenMeter:
             )
 
 
+from langchain_core.callbacks import BaseCallbackHandler
+
+
+class TokenCallbackHandler(BaseCallbackHandler):
+    """Meters EVERY LLM call, including structured-output ones.
+
+    `with_structured_output(...)` returns a parsed Pydantic model, which throws
+    away the AIMessage — and with it `usage_metadata`. Metering the return
+    value therefore counted only the calls that hand back a raw message
+    (summaries, big-picture analysis) and missed every agent proposal and the
+    decision itself: precisely the architecture's own work, and precisely what
+    the experiment needs to charge it for.
+
+    A callback sees the raw LLMResult before parsing, so it catches all of
+    them. Attached at the LLM factory, so no call site can opt out by accident.
+    """
+
+    def __init__(self, meter: "TokenMeter"):
+        super().__init__()
+        self._meter = meter
+
+    def on_llm_end(self, response, **kwargs) -> None:
+        try:
+            name = self._meter._current_operation()
+            for generation_list in getattr(response, "generations", []) or []:
+                for generation in generation_list:
+                    message = getattr(generation, "message", None)
+                    if message is not None:
+                        self._meter.record(message, name)
+        except Exception:  # noqa: BLE001 - accounting must never cost a turn
+            pass
+
+
 # One meter per process; the game plays one turn at a time.
 _METER = TokenMeter()
+_CALLBACK = TokenCallbackHandler(_METER)
+
+
+def get_token_callback() -> TokenCallbackHandler:
+    """The handler to attach to every LLM instance."""
+    return _CALLBACK
 
 
 def get_token_meter() -> TokenMeter:

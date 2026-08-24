@@ -188,6 +188,12 @@ MODELS = {
 # keepalive and avoiding per-turn client construction overhead.
 @lru_cache(maxsize=None)
 def _build_llm(provider: str, tier: str, temperature: float):
+    # Attached here rather than at call sites so no path can opt out. A
+    # structured-output chain returns a parsed model and discards the
+    # AIMessage, so metering return values missed every agent proposal and the
+    # decision — the architecture's own work.
+    from token_meter import get_token_callback
+    callbacks = [get_token_callback()]
     if provider == "ollama":
         from langchain_ollama import ChatOllama
         kwargs = {}
@@ -196,11 +202,13 @@ def _build_llm(provider: str, tier: str, temperature: float):
         return ChatOllama(
             model=MODELS["ollama"][tier],
             temperature=temperature,
+            callbacks=callbacks,
             **kwargs,
         )
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model=MODELS["openai"][tier], temperature=temperature)
+        return ChatOpenAI(model=MODELS["openai"][tier], temperature=temperature,
+                          callbacks=callbacks)
     elif provider == "vllm":
         # vLLM speaks the OpenAI API, so the OpenAI client works unchanged.
         # api_key is required by the client but ignored by a local server.
@@ -210,6 +218,7 @@ def _build_llm(provider: str, tier: str, temperature: float):
             temperature=temperature,
             base_url=VLLM_BASE_URL,
             api_key=os.getenv("PLAYZORK_VLLM_API_KEY", "not-needed"),
+            callbacks=callbacks,
         )
     else:
         raise ValueError(f"Invalid LLM_PROVIDER: {provider}")
