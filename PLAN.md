@@ -270,11 +270,60 @@ First live run (`baseline-smoke-20260824`) played sensibly — `EXAMINE MAILBOX`
 
 M1–M4 is the platform. Thesis protocol: same 14B model, N seeded runs each of
 
-- **(a)** single-shot with full history in context (the "big context makes scaffolding redundant" baseline),
-- **(b)** full multi-agent architecture,
+- **(a)** single-shot with full history in context (the "big context makes scaffolding redundant" baseline) — **built**, `PLAYZORK_CONDITION=single_shot`,
+- **(b)** full multi-agent architecture — **built**, `PLAYZORK_CONDITION=multi_agent`,
 - plus component ablations (no map, no issue memory, batched vs per-agent proposals, loop detection on/off),
 
-measured on **score@turns** and **score@wall-clock**. M5 sharpens arm (b) but doesn't block starting (a).
+measured on **score@turns**, **score@wall-clock** *and* **score@tokens**. The third is not optional: on fixed serving, wall-clock is a proxy for token volume, and without tokens no cross-machine comparison means anything.
 
-**Free closures along the way:** #4, #5, #17 (via #25); #15 partially (via #10).
-**Rough total:** 8–12 focused days to a runnable experiment.
+---
+
+## Framing the result before running it
+
+**The experiment can produce three outcomes, and two of them are commonly mistaken for failure. Decide now how each is written up, so the answer is a finding rather than a disappointment.**
+
+The instinct to guard against is treating (b) beating (a) as "success" and anything else as a null result. That framing would waste the most interesting outcomes and creates an incentive to keep tuning arm (b) until it wins — which is how a thesis stops being an experiment.
+
+### Outcome 1 — deliberation wins
+
+Arm (b) reaches a higher score at equal turns. This is the hypothesis as stated, and the write-up is straightforward. **The obligation is to show it is deliberation doing the work**, not extra tokens: report score@tokens, and use the ablations to identify which component carries the effect. A win that disappears once token budget is equalised is a finding about verbosity, not architecture.
+
+### Outcome 2 — the arms are comparable
+
+Entirely plausible, and **not a null result.** The honest reading is that this architecture's value is not decision quality — and that conclusion has direct evidence behind it, because much of what was rebuilt in M1–M5 helps *both* arms:
+
+- deterministic world state (map, inventory, memory correctness)
+- the backend signals the agents were previously guessing at (#30)
+- repetition suppression (#18)
+- room identity (#15)
+
+Both arms consume the same `TurnContext`. If they perform alike, the measurable gain came from **scaffolding correctness**, not from advocacy and arbitration. That is a publishable claim with an unusually clear evidence trail: the audit found 27 defects in the deterministic layer, each with a documented failure mode, several of which silently corrupted agent inputs for whole sessions.
+
+It also directly answers the question that motivated the reframing: *not* "does the framework help a weak model", but **"how much of a weak model's apparent incapacity is actually corrupted input?"** — the open question logged in NOTES.md on 2026-08-21.
+
+### Outcome 3 — the baseline wins
+
+Also a real result, and the most useful one for anybody building these systems. It would say the deliberation overhead costs more than it returns at this model scale, which is a finding about *when* multi-agent architectures are justified — a question the field mostly assumes rather than measures.
+
+If this happens, resist the pull to keep tuning (b). Report it, then investigate *why*: the ablation ladder is designed to localise the cost.
+
+### What this means for design decisions still open
+
+- **The control arm is deliberately generous** — it currently receives the map and tracked issues, which are themselves scaffolding under test. That is the conservative choice (it is harder for the treatment to win), but it also makes Outcome 2 harder to interpret, because both arms then share the scaffolding. **Run the lean variant too** (history + game state only) and the three rungs separate the two variables cleanly:
+
+  | arm | context | isolates |
+  |---|---|---|
+  | single-shot, lean | game state + history | does scaffolding help at all? |
+  | single-shot, full | + map, memory, exits | does scaffolding alone suffice? |
+  | multi-agent | + advocacy and arbitration | does deliberation add anything? |
+
+  The gap between rungs 1 and 2 is the scaffolding effect; between 2 and 3 is the deliberation effect. Without rung 2, those two are confounded and Outcome 2 cannot be attributed.
+
+- **Pre-register the metrics and the number of seeds** before running, and do not change arm (b) after seeing results without re-running everything. This project has an unusually good paper trail — every fix is a commit with a documented failure mode and a regression test — and that credibility is worth protecting.
+
+- **Report the serving configuration.** The measured "concurrency buys nothing" result is a property of this stack, not of the architecture, and it materially affects wall-clock. A reader on batching serving would see different numbers from identical code.
+
+---
+
+**Free closures along the way:** #4, #5, #17 (via #25); #15 (via #10 + the exits fingerprint).
+**Rough total:** 8–12 focused days to a runnable experiment — largely spent, with the platform now built and the remaining work being the runs themselves.
