@@ -1079,3 +1079,51 @@ Every substantial refactor this week has had a defect that the unit suite missed
 4. #26 follow-up — `create_decision_graph()` signature change crashed on startup; **no test constructed the real `AdventurerService`**, so 504 tests passed against code that could not boot.
 
 Each of the four was invisible-by-design rather than loud. A wiring test that constructs the real service now exists (#4 above), and the standing rule stands: **run the thing before believing the suite**.
+
+
+## 2026-08-24, later — M5 correctness, experiment scaffolding, GPU prep
+
+Context: the PC with the 5070 Ti arrives at the weekend, so this block is deliberately all hardware-independent work.
+
+**Shipped:** #28, #23+#26, #30 follow-through, #18, #33, #16, #15, plus token accounting, a vLLM provider and the experiment's control arm. Tests 496 → 587. Issues 23 → 27 closed, 6 open.
+
+### The deadlock is fixed (#18, #33)
+
+The M3 checkpoint ended with the agent alternating two already-refused commands for five turns. Promoted ahead of remaining latency work on the grounds that faster hardware only deadlocks faster, and a run that flatlines at turn 11 cannot produce `score@turns` data.
+
+`TurnContext` now tracks commands already shown to do nothing *in this room*, and the arbiter sees any repeat at **EV 0.0** with the prior response quoted. The demotion is in code, not prompt text — the #21 inventory bug established that a 14B model handed a bare prohibition invents its own way around it.
+
+#33 widened the refusal allow-list from *observed* backend phrasings. A drafted `impassable + mountains` pattern was written and deleted: Zork's Forest room *description* reads "revealing impassible mountains" — scenery on a **successful** move. It escaped the first check only on a spelling coincidence.
+
+### Two fixes that turned out to be "ask the server, not the model"
+
+- **#16** — the InteractionAgent's regex emitted `TAKE NOTHING` at confidence 90 on Zork's standard EXAMINE reply, and short-circuited the LLM on exactly those turns. The real fix was #30's `ActionsAvailableFromLocation`: the game reports, per object, which commands it will accept. The parser is now a hint that can never bypass the LLM.
+- **#15** — same-named rooms merged into one node. #30's `exits` array discriminates them: verified live, `Forest [2,0,1]` and `Forest #2 [3,2,1]` are now separate nodes.
+
+Both follow the pattern established by #30's inventory work: stop inferring what the backend already knows.
+
+### Instrumentation and scaffolding
+
+- **Per-turn token accounting** → `turn_tokens`. Metered in `llm_utils`, the choke point both retry helpers pass through. Totals are a **floor**: structured-output calls carry no usage metadata and are skipped rather than estimated.
+- **vLLM provider** — `PLAYZORK_LLM_PROVIDER=vllm`, so Saturday is a config change.
+- **Control arm** — `PLAYZORK_CONDITION=single_shot`. One inference, full context, same model tier. Live smoke run played sensibly at ~20s/turn vs the treatment's ~70s.
+
+### Baseline for the hardware move
+
+Apple M5, 24GB, qwen2.5:14b: **generation 14 tok/s, prefill 237 tok/s**. A 3.5k-token call takes 14.4s, of which **10.4s is prefill** — which is why a GPU should help disproportionately here, prefill being compute-bound and parallel where generation is bandwidth-bound and sequential.
+
+### Five for five
+
+Every substantial change this week shipped with a green suite and had a defect found by a live run:
+
+1. M2 — inventory analyzer inverted a TAKE into a removal (prompt × model interaction).
+2. #25 — a deleted import left the ObserverAgent silently disabled.
+3. #23/#26 — separate fan-in edges are not a join; `persist` ran twice per turn.
+4. #26 follow-up — a signature change crashed on startup; no test built the real service.
+5. #16 — a greedy quantifier turned "a small mailbox here." into `TAKE HERE`.
+
+Four of the five were *silent*, which is the direct cost of #1's error containment: a broken component logs and continues. The standing rule is now in CLAUDE.md — prefer tests that **execute** over tests that inspect source, and run a session before believing the suite.
+
+### Docs
+
+CLAUDE.md was materially wrong (it still documented the deleted research node and the pre-#30 inventory path) and has been rewritten: new graph topology, the experiment setup, and an **Invariants** section recording the false-negative-beats-false-positive rule that now governs the whole world model. README gained a Measurement Notes section stating plainly that wall-clock on this rig measures token volume.
