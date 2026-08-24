@@ -426,6 +426,126 @@ Planetfall explosion? That is a *timed* objective, unlike entering the house,
 and a lead that arrives too late is worth nothing. See the Planetfall findings
 below.
 
+### GROUNDING: would it help escape the Planetfall explosion? **No.** (2026-08-24)
+
+Run `pf-20260824`. The answer is unambiguous and it invalidates the idea above
+as a priority. Every stage the idea would add **already worked**, and the run
+still failed.
+
+The game hands over the escape route in the STARTING ROOM, turn 1:
+
+```json
+"actionsAvailableFromLocation": {"escape pod bulkhead": ["open bulkhead", "close bulkhead"]}
+```
+
+And the pipeline handled it correctly, at every stage:
+
+1. the parser read it — `actionsAvailableFromLocation` is a declared alias ✓
+2. it reached the prompt — *"THE GAME ACCEPTS THESE COMMANDS HERE: escape pod bulkhead: open bulkhead, close bulkhead"* ✓
+3. the **ObserverAgent stored it**, at importance 900, with the correct sighting room: `"Locked pod bulkhead at Deck Nine — open bulkhead and examine escape pod"` ✓
+4. the **InteractionAgent proposed it**: `OPEN escape pod bulkhead`, confidence 70 ✓
+
+Then the arbiter chose `GO UP` and walked away from the pod.
+
+```
+InteractionAgent: [Confidence: 70/100]             OPEN escape pod bulkhead
+ExplorerAgent:    [Confidence: 95/100, EV: 47.5]   GO UP                     ← chosen
+```
+
+**The InteractionAgent is not given an expected value at all.** From
+`_format_agent_proposals`:
+
+| agent | EV formula |
+|---|---|
+| IssueAgent | `(importance/1000) × (conf/100) × 100 × mult` |
+| ExplorerAgent | `(unexplored/10) × (conf/100) × 50 × mult` |
+| **InteractionAgent** | **none — confidence only** |
+
+The arbiter is instructed to rank by expected value, and the only agent that
+proposes object interactions is structurally unrankable. Worse, the explorer's
+EV scales with `unexplored/10`, which is at its **maximum at the start of every
+game** — exactly when the pod mattered. Turn 2: `(10/10)×(95/100)×50 = 47.5`.
+
+This also explains Zork, where ExplorerAgent won 16 of 26 contested turns. The
+same bias, in a game where it merely wasted turns instead of being fatal.
+
+**So the frontier→issue idea addresses the wrong failure.** Zork's problem was
+generation — the house was never proposed. Planetfall's problem is the exact
+opposite: the correct action *was* proposed, by the right agent, at the right
+turn, and lost the ranking. Adding more proposals to a ballot that
+systematically under-ranks interaction would not have helped, and might have
+hurt by adding more EV-bearing exploration-flavoured entries.
+
+Two further findings from the same run confirm the idea does not transfer:
+
+- **The landmark vocabulary is Zork-shaped.** On *"To starboard is the Ion
+  Reactor ... and to port is an escape pod"* it returns `['corridor']` — the
+  most useless noun on a spaceship, while missing the objective. `pod`,
+  `reactor`, `bay`, `airlock`, `lift`, `deck` are all absent from
+  `LANDMARK_NOUNS`. A closed vocabulary is defensible for precision but does
+  not survive a change of game, and this project runs three backends.
+- **The issue was already stored with a valid map location** ("Deck Nine"), so
+  the sighting-room mechanism the idea depends on was never the blocker.
+  Instead, once the agent had wandered to Deck Eight, `IssueAgent #1` proposed
+  **`nothing` at confidence 0** for a 900-importance issue two rooms away —
+  it does not use its own precomputed `DIRECTION TO` to navigate back.
+
+**Revised priority.** What would actually help escape the explosion, in order:
+
+1. give the InteractionAgent an EV, so the pod proposal is rankable at all
+2. apply the repeat/undo multiplier to it — `note, _ = repeat_note(...)`
+   **discards the multiplier**, so #18's demotion is a cosmetic warning line
+   for this agent rather than a mechanism, which is precisely the
+   "prompt text is not a mechanism" failure the project already learned once
+3. surface the game clock — `Time` is parsed (`alias="time"`, observed
+   advancing 4654 → 4708) and **never read anywhere**. On a timed objective
+   the agents cannot see the deadline they are being judged against
+4. make the objective specific — Planetfall's is configured as
+   `"Complete the mission"`, which is interpolated into every prompt and tells
+   the arbiter nothing about escaping
+5. teach `IssueAgent` to navigate toward its issue's location instead of
+   returning `nothing`
+6. fix movement undo detection and the direction vocabulary (below)
+
+The frontier→issue idea drops to the bottom of that list. It remains a
+reasonable answer to Zork's generation gap; it is not the bottleneck.
+
+### Bugs found by playing Planetfall (2026-08-24)
+
+None of these were visible in Zork.
+
+- **`Time` parsed, never used** — see above. The only `Time` matches in the
+  codebase are `timeout` and `setTimeout`.
+- **Direction vocabulary is compass-only.** Planetfall's ship uses
+  port/starboard/fore/aft. Not fatal for movement — the backend translates
+  (`starboard` → `lastMovementDirection: "E"`) and compass commands are
+  accepted — but `find_mentioned_directions` never matches them, so the
+  explorer's `+2 mentioned` bonus is **systematically unavailable for lateral
+  moves**:
+
+  | direction | game exit | mentioned | cardinal | total |
+  |---|---|---|---|---|
+  | UP | +3 | +2 (*"a gangway leads up"*) | +0 | **5** |
+  | EAST (= starboard) | +3 | **0** (unrecognised) | +1 | **4** |
+
+  The agent climbed the ship — `GO UP, GO UP` — because up was the only axis
+  its vocabulary could see. Teaching it `starboard` makes EAST score 6 and win.
+- **`_INVERSES` contains no compass directions**, so `undoes_recent_progress`
+  cannot tell that EAST undoes WEST, or DOWN undoes UP.
+- **`inverse_of` requires an object after the verb** (`len(tokens) > verb_len`),
+  so a bare `WEST` could never resolve an inverse even if one were listed.
+- **`normalize_command` does not canonicalise movement** — `GO WEST`, `WEST`
+  and `W` are three distinct keys, so repetition suppression and the
+  `succeeded` map miss synonyms. `extract_direction` already maps all three to
+  `WEST` and is strict enough to use here (it returns `None` for `TAKE LAMP`,
+  `OPEN WINDOW`, `PUSH NORTH WALL`).
+
+  Combined effect, observed in Zork `frontier3-20260824`: the agent reached
+  **Behind House** — the room containing the window into the house — and
+  oscillated `GO WEST → EAST → GO WEST` straight back off it, with **zero**
+  suppressions fired across 16 turns. Planetfall reproduced it vertically:
+  `GO UP → GO UP → GO DOWN`.
+
 ### Pre-register arm A as an ablation
 
 Add **`+goal_agent`** as a fourth experimental arm alongside lean single-shot / full single-shot / multi-agent. That way goal-directed *proposal generation* is measured rather than quietly patched in, and the gap between multi-agent and multi-agent+goal_agent is exactly the size of the generation deficit described above.
