@@ -27,6 +27,7 @@ query or an in-memory lookup — milliseconds in total.
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from tools.mapping.landmarks import unvisited_landmarks
 from tools.mapping.locations import is_known_location
 
 # How many recent turns to put in front of an agent. Bounded deliberately:
@@ -170,9 +171,9 @@ class TurnContext:
 
     @property
     def frontier_summary(self) -> str:
-        """Rooms reached but not yet explored from, rendered for a prompt."""
+        """Leads named but not followed up, rendered for a prompt."""
         if not self.frontier:
-            return "Nothing on the map is unexplored — everything reached has been left from."
+            return "No unfollowed leads — nothing named nearby is unvisited."
         return "\n".join(f"  - {room}" for room in self.frontier)
 
     def undoes_recent_progress(self, command: Optional[str]) -> str:
@@ -368,16 +369,32 @@ def build_turn_context(
         return stale
     context.turns_since_score_change = safe("score trajectory", _stale, 0)
 
-    # Rooms we have REACHED but never left from — a building walked past is a
-    # far better lead than more open terrain, and the explorer treats all
-    # unexplored directions as equivalent (Milestone 5b).
+    # Leads the agent has been told about but not followed up (Milestone 5b).
+    # TWO sources, because the map alone measured EMPTY on a live run: on a
+    # linear path A->B->C every room reached was also left, so "reached but
+    # not departed from" is the empty set exactly when a redirect is needed.
+    #
+    # The second source is the room text, and it is the one that matters. "A
+    # white house" is the whole early game and is not a map node — it is a
+    # noun in a description that nothing else converts into a destination.
     def _frontier():
         transitions = mapper_toolkit.state.get_all_transitions()
         reached = {t.to_location for t in transitions if t.to_location != "BLOCKED"}
         departed = {t.from_location for t in transitions}
         here = (location or "").strip().casefold()
-        return sorted(r for r in reached - departed
-                      if r and r.strip().casefold() != here)
+        unexplored = sorted(r for r in reached - departed
+                            if r and r.strip().casefold() != here)
+
+        visited = {t.from_location for t in transitions} | reached
+        if location:
+            visited.add(location)
+        # Current description first, then recent turns: a recency window, which
+        # is what actually retires a landmark once the agent is inside it.
+        recent_text = "\n".join(filter(None, [context.game_text, context.recent_turns]))
+        named = unvisited_landmarks(recent_text, visited)
+
+        return [f"{room} (on the map, never explored from)" for room in unexplored] + \
+               [f"{phrase} (named nearby, never entered)" for phrase in named]
     context.frontier = safe("frontier", _frontier, [])
 
     if is_known_location(location):
