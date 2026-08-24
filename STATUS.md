@@ -1127,3 +1127,102 @@ Four of the five were *silent*, which is the direct cost of #1's error containme
 ### Docs
 
 CLAUDE.md was materially wrong (it still documented the deleted research node and the pre-#30 inventory path) and has been rewritten: new graph topology, the experiment setup, and an **Invariants** section recording the false-negative-beats-false-positive rule that now governs the whole world model. README gained a Measurement Notes section stating plainly that wall-clock on this rig measures token volume.
+
+---
+
+# Development Log: 2026-08-24 (later) — Planetfall, and six defects Zork could not show
+
+Playing a second game was worth more than any amount of further work on the
+first. Zork exercises one shape of failure; Planetfall exercised six others,
+and one of them had been silently costing every Zork run as well.
+
+## The run that made it obvious
+
+`pf-20260824`. Planetfall opens on a doomed ship: escape via the pod or die
+with it. The game hands over the escape route in the **starting room**:
+
+```json
+"actionsAvailableFromLocation": {"escape pod bulkhead": ["open bulkhead", "close bulkhead"]}
+```
+
+Every stage handled it correctly. The parser read it; it reached the prompt
+verbatim; the ObserverAgent stored it at importance 900 with the right
+location; the InteractionAgent proposed `OPEN escape pod bulkhead` at
+confidence 70 on turn 2.
+
+Then the arbiter chose `GO UP` and walked away from it.
+
+```
+InteractionAgent: [Confidence: 70/100]             OPEN escape pod bulkhead
+ExplorerAgent:    [Confidence: 95/100, EV: 47.5]   GO UP                     ← chosen
+```
+
+**The InteractionAgent was never given an expected value**, while the decision
+prompt ranks by expected value. The only agent that proposes object
+interactions was structurally unrankable. And the explorer's EV scales with
+`unexplored/10`, which is maximal at the start of every game — precisely when
+the pod mattered. This had been quietly shaping Zork too, where ExplorerAgent
+won 16 of 26 contested turns.
+
+## Six fixes
+
+1. **InteractionAgent EV.** Evidence-weighted rather than tuned to win this
+   case: a command the *backend* listed for an object present here is
+   guaranteed to parse (#30/#16) — strictly stronger evidence than an
+   advertised exit, which is sometimes refused — so it scores 100, mirroring
+   the explorer's +3 for a game-confirmed exit. A model-invented interaction
+   scores 50, so at confidence 70 it gets 35 and **still loses** to
+   exploration's 47.5. A test pins that, because otherwise this would just be
+   handing the agent a blanket win.
+2. **Its repeat/undo multiplier was discarded** — `note, _ = repeat_note(...)`
+   kept the warning line and threw away the zeroing, making #18 a prohibition
+   in prose for this agent. The #21 lesson, re-learned.
+3. **The game clock was parsed and never read.** `Time` has been on the
+   response model since #30; the only matches in the codebase were `timeout`
+   and `setTimeout`. On a timed objective the agents could not see the deadline
+   they were being judged against. Zork returns 0 by probe, so it renders only
+   where a clock exists.
+4. **Planetfall's objective was "Complete the mission"** — interpolated into
+   every prompt as the arbiter's only statement of what it plays for.
+5. **IssueAgent now walks to its issue.** It returned `nothing` at confidence 0
+   for the 900-importance pod two rooms away, with the route already in its
+   prompt. Confidence 70 describes the reliability of the *action* — one step
+   along a BFS path over edges we recorded — while worth is priced by the
+   importance term: 900 gives EV 63 and outranks exploration, a decayed 300
+   gives 21 and does not.
+6. **Movement was three commands and had no inverse.** `GO WEST` / `WEST` / `W`
+   were distinct keys, and `_INVERSES` held no directions while `inverse_of`
+   required an object after the verb. So nothing detected that EAST reverses
+   WEST. In Zork `frontier3-20260824` the agent reached **Behind House — the
+   room containing the window into the house** — and oscillated
+   `GO WEST → EAST → GO WEST` off it, with **zero** suppressions in 16 turns.
+   Planetfall reproduced it vertically.
+
+   Ship directions (port/starboard/fore/aft) were added as **aliases**, not new
+   canonical directions: EAST and STARBOARD are one passage, and since the
+   explorer's EV scales with the unexplored count, aliasing them separately
+   would inflate its EV and let it re-walk a passage under the other name.
+   Mapping verified by live probe: starboard→E, port→W, fore→N, aft→S.
+
+## Verified in play, not just in the suite
+
+| | turn 2 decision |
+|---|---|
+| control `pf-20260824` | `GO UP` |
+| fixed `pf2-20260824` | **`OPEN escape pod bulkhead`** |
+
+Tests 661 → 736.
+
+## What this cost, and the lesson
+
+Three consecutive Zork runs were spent chasing an empty frontier that turned
+out to be two *different* wiring bugs, and both times the available conclusion
+was "milestone 5b doesn't help" — which would have charged a wiring bug to the
+architecture. The rule that keeps earning its place: **run the thing, and read
+the raw rows rather than guessing.** The third attempt found it in the DB in
+about a minute.
+
+A second rule was added after nearly reporting a 27% token saving that was
+entirely a turn-count artifact (26-turn control vs 11-turn treatment; matched
+on turns 1–10 the honest figure is +4.1%): **never compare a per-turn mean
+across runs of unequal length.**
