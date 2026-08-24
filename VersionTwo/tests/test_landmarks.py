@@ -188,13 +188,20 @@ class TestScansRawProseNotTheTranscript:
     unfollowed leads" with the house sitting in the text being scanned.
     """
 
-    def test_the_formatted_transcript_would_hide_the_lead(self):
+    def test_the_formatted_transcript_is_safe_once_newlines_split(self):
+        """This test previously pinned the OPPOSITE — that the transcript hid
+        the lead — and failing was how the newline fix announced itself.
+
+        Splitting on newlines separates "Turn 1: look -> West Of House" from
+        the description below it, so the transcript no longer triggers a false
+        retirement either. Reading raw prose is still preferred (it avoids the
+        "Turn 3: TAKE leaflet ->" scaffolding entirely), but it is no longer
+        load-bearing, and the newline split was the actual fix.
+        """
         from tools.mapping.landmarks import unvisited_landmarks
         blob = ("Turn 1: look -> West Of House\n"
                 "You are standing in an open field west of a white house.")
-        assert unvisited_landmarks(blob, ["West Of House"]) == [], \
-            "if this ever passes, the transcript format changed and the " \
-            "raw-prose workaround can be simplified"
+        assert "white house" in unvisited_landmarks(blob, ["West Of House"])
 
     def test_real_context_uses_raw_prose_and_finds_it(self):
         from types import SimpleNamespace as NS
