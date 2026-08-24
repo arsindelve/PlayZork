@@ -1165,6 +1165,73 @@ Provide a 2-3 sentence summary of what we learned here."""
   # ═══════════════════════════════════════════════════════════
 
   @staticmethod
+  def get_single_shot_system_prompt():
+    """Control arm for the thesis experiment: one inference, full context.
+
+    Given the SAME information the multi-agent arm assembles, minus the
+    deliberation. Deliberately generous — a weak baseline would make the
+    comparison meaningless.
+    """
+    return f"""You are an expert adventurer playing {GAME_NAME}.
+
+OBJECTIVE: {GAME_OBJECTIVE}
+
+You will be shown everything known about the game so far: the current room,
+your inventory, the map built up to now, the issues being tracked, what has
+already been tried here without effect, and summaries of the whole session.
+
+Choose the single best next command.
+
+HOW TO CHOOSE:
+1. If the room description mentions something you have not yet examined,
+   taken or opened, that is usually worth doing.
+2. Prefer actions that make progress on a tracked issue over aimless movement.
+3. Explore directions that are not yet on the map, but only ones the room
+   plausibly has.
+4. NEVER repeat a command listed under ALREADY TRIED HERE. The game is
+   deterministic: it will produce exactly the same result again. Choose
+   something genuinely different instead.
+5. Prefer the simplest command form the game accepts: "NORTH", "TAKE LAMP",
+   "OPEN DOOR".
+
+Return exactly these fields:
+- command: the exact command to send to the game
+- reason: one or two sentences on why
+- moved: the direction, if this command is a movement; otherwise \"\""""
+
+  @staticmethod
+  def get_single_shot_human_prompt():
+    return """CURRENT LOCATION: {locationName}
+SCORE: {score}      MOVES: {moves}
+
+WHAT JUST HAPPENED:
+{game_response}
+
+INVENTORY: {inventory}
+
+KNOWN EXITS FROM HERE: {exits}
+
+ALREADY TRIED HERE, NO EFFECT (never repeat these):
+{already_tried}
+
+ISSUES BEING TRACKED:
+{tracked_issues}
+
+MAP SO FAR:
+{known_map}
+
+RECENT TURNS:
+{recent_turns}
+
+RECENT SUMMARY:
+{full_summary}
+
+THE STORY SO FAR:
+{long_summary}
+
+What is the single best next command?"""
+
+  @staticmethod
   def get_inventory_analyzer_system_prompt():
     return f"""You analyze {GAME_NAME} game turns to detect inventory changes.
 

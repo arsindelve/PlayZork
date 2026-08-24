@@ -77,6 +77,21 @@ VLLM_BASE_URL = os.getenv("PLAYZORK_VLLM_BASE_URL", "http://localhost:8000/v1").
 VLLM_MODEL = os.getenv("PLAYZORK_VLLM_MODEL", "Qwen/Qwen2.5-14B-Instruct").strip()
 
 # ═══════════════════════════════════════════════════════════
+# EXPERIMENT CONDITION
+# ═══════════════════════════════════════════════════════════
+# Which architecture plays the game. This is the thesis's independent
+# variable, so it is a first-class runtime setting rather than a code edit:
+#
+#   multi_agent  - advocacy agents + arbiter (the treatment)
+#   single_shot  - one inference per turn with everything in context (control)
+#
+# The control is given the SAME information the treatment assembles, minus the
+# deliberation. A weak baseline would make the comparison meaningless.
+EXPERIMENT_CONDITION = os.getenv("PLAYZORK_CONDITION", "multi_agent").strip().lower()
+if EXPERIMENT_CONDITION not in {"multi_agent", "single_shot"}:
+    raise ValueError("PLAYZORK_CONDITION must be 'multi_agent' or 'single_shot'")
+
+# ═══════════════════════════════════════════════════════════
 # TIMEOUT AND RETRY CONFIGURATION
 # ═══════════════════════════════════════════════════════════
 # These numbers are coupled, not independent (GitHub issue #3). The turn budget

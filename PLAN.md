@@ -234,6 +234,29 @@ Counts come from the provider's own metadata, never an estimate. Structured-outp
 
 **Report token counts alongside `score@wall-clock` in every result.** Otherwise the multi-agent arm is penalised for token volume in a way that says nothing about the architecture.
 
+## The experiment — control arm built
+
+**`PLAYZORK_CONDITION=single_shot | multi_agent`** (default `multi_agent`). Both implement the same interface, so `GameSession`, reports, persistence and token accounting are unaffected by which arm runs.
+
+`SingleShotService` makes **one inference per turn** with everything in context: current room, inventory, known exits, the map so far, tracked issues, what has already been tried here without effect, recent turns, and both summaries. Same model tier as the arbiter, so the comparison isolates architecture rather than model quality.
+
+**Deliberately generous to the control.** A weak baseline would make the whole comparison meaningless, and a generous one is the conservative choice — it is harder for the treatment to win. Worth a decision before the real runs: this is arguably *too* generous, since `tracked_issues` and `known_map` are themselves scaffolding under test. A leaner variant (history + game state only) is a prompt-field change away and would make a cleaner ablation ladder:
+
+| arm | context |
+|---|---|
+| single-shot, lean | game state + history only |
+| single-shot, full | + map, memory, exits *(built)* |
+| multi-agent | + advocacy and arbitration *(built)* |
+
+First live run (`baseline-smoke-20260824`) played sensibly — `EXAMINE MAILBOX` → `OPEN MAILBOX` → `TAKE LEAFLET` — at **~20s/turn against the treatment's ~70s**.
+
+**Measured cost per turn, both arms** (from `turn_tokens`; the control's 3 calls are 1 decision + 2 shared background summaries, which both arms pay):
+
+| arm | LLM calls | tokens/turn |
+|---|---|---|
+| single-shot | 3 | ~1,900 |
+| multi-agent | 6–10 | *(to be measured over a matched run)* |
+
 ## Then: the experiment
 
 M1–M4 is the platform. Thesis protocol: same 14B model, N seeded runs each of

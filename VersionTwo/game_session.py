@@ -12,7 +12,7 @@ from display_manager import DisplayManager
 from game_logger import GameLogger
 import time
 
-from config import get_cheap_llm, get_expensive_llm
+from config import EXPERIMENT_CONDITION, get_cheap_llm, get_expensive_llm
 from token_meter import get_token_meter
 
 
@@ -91,13 +91,25 @@ class GameSession:
         initialize_analysis_tools(session_id, self.db)
         self.logger.logger.info("Analysis tools initialized")
 
-        # Pass toolkits to adventurer service
-        self.adventurer_service = AdventurerService(
-            self.history_toolkit,
-            self.memory_toolkit,
-            self.mapper_toolkit,
-            self.inventory_toolkit
-        )
+        # Which architecture plays this run — the thesis's independent
+        # variable (config.EXPERIMENT_CONDITION). Both implement the same
+        # interface, so everything downstream is unaffected.
+        if EXPERIMENT_CONDITION == "single_shot":
+            from adventurer.single_shot_service import SingleShotService
+            self.adventurer_service = SingleShotService(
+                self.history_toolkit,
+                self.memory_toolkit,
+                self.mapper_toolkit,
+                self.inventory_toolkit,
+            )
+        else:
+            self.adventurer_service = AdventurerService(
+                self.history_toolkit,
+                self.memory_toolkit,
+                self.mapper_toolkit,
+                self.inventory_toolkit
+            )
+        self.logger.logger.info(f"CONDITION: {EXPERIMENT_CONDITION}")
 
         # Resume turn numbering from where this session left off
         last_turn = self.db.get_latest_turn_number(session_id)
