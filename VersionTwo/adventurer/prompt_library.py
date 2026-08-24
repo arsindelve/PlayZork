@@ -693,6 +693,11 @@ Analyze the game response for interactive objects and propose the best interacti
 
   @staticmethod
   def get_issue_closed_analysis_prompt(tracked_issues, recent_history, location, game_response):
+    """Built here and handed to the model as a PLAIN STRING, not as a
+    LangChain template — so brace escaping collapses exactly once (this
+    f-string), not twice. Writing `{{{{` here, the convention used by the
+    template-rendered prompts elsewhere in this file, showed the model `{{`
+    and taught it malformed JSON (#28)."""
     return f"""You are the IssueClosedAgent in a {GAME_NAME}-playing AI system.
 
 YOUR SINGLE RESPONSIBILITY:
@@ -850,20 +855,20 @@ An ID that is not in that list is DISCARDED and the issue stays open.
 The IDs in the example below are placeholders. NEVER return them.
 
 DEFAULT ANSWER - use this whenever no issue was actually resolved this turn:
-{{{{
+{{
   "closed_issue_ids": [],
   "reasoning": "No tracked issues have been resolved in recent history."
-}}}}
+}}
 
 FORMAT EXAMPLE ONLY - the placeholder IDs 9001/9002 do not exist, never copy them:
 Suppose the tracked list above had contained exactly these two lines:
   - [ID:9001, Importance:405/1000] Small mailbox at West Of House - open it
   - [ID:9002, Importance:310/1000] Locked grating at Clearing - find key and unlock it
 and recent history showed the mailbox opened and the grating unlocked. You would return:
-{{{{
+{{
   "closed_issue_ids": [9001, 9002],
   "reasoning": "ID 9001 (mailbox) was opened. ID 9002 (grating) was unlocked with the key."
-}}}}
+}}
 Use the real ID numbers from the tracked list above - not 9001 or 9002.
 
 Analyze the tracked issues against recent history and identify which to close:

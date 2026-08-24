@@ -124,6 +124,12 @@ Per-turn LLM calls, with N tracked issues: **10 + 2N → 5 + N**.
 
 A live run caught what the unit tests missed: deleting the research phases also deleted the function-local `from llm_utils import ...` the surviving proposal calls relied on. #1's containment logged `OBSERVE failed, skipping this turn` and kept playing — so the Observer was *silently disabled* rather than crashing. The test that should have caught it only inspected source text; it now executes all four agents.
 
+### Also landed
+
+| # | Issue | Task | Status |
+|---|---|---|---|
+| — | [#28](https://github.com/arsindelve/PlayZork/issues/28) | Prompt JSON examples reach the model as valid JSON | ✅ done — **narrower than filed**: the template-rendered prompts were already correct; only the plain-string path was over-escaped |
+
 ### Remaining
 
 | # | Issue | Task |
