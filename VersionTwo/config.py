@@ -65,8 +65,16 @@ if not SESSION_ID:
 # LLM PROVIDER CONFIGURATION
 # ═══════════════════════════════════════════════════════════
 LLM_PROVIDER = os.getenv("PLAYZORK_LLM_PROVIDER", "ollama").strip().lower()
-if LLM_PROVIDER not in {"openai", "ollama"}:
-    raise ValueError("PLAYZORK_LLM_PROVIDER must be 'openai' or 'ollama'")
+if LLM_PROVIDER not in {"openai", "ollama", "vllm"}:
+    raise ValueError("PLAYZORK_LLM_PROVIDER must be 'openai', 'ollama' or 'vllm'")
+
+# vLLM exposes an OpenAI-compatible server, so it needs a base URL and the
+# served model name rather than API credentials. Unlike Ollama it does real
+# continuous batching, which is the difference that matters here: this project
+# fans out 5-10 concurrent calls per turn, and Ollama was measured serving them
+# at FLAT throughput (see STATUS.md 2026-08-24) — i.e. no concurrency at all.
+VLLM_BASE_URL = os.getenv("PLAYZORK_VLLM_BASE_URL", "http://localhost:8000/v1").strip()
+VLLM_MODEL = os.getenv("PLAYZORK_VLLM_MODEL", "Qwen/Qwen2.5-14B-Instruct").strip()
 
 # ═══════════════════════════════════════════════════════════
 # TIMEOUT AND RETRY CONFIGURATION
@@ -146,7 +154,14 @@ MODELS = {
     "openai": {
         "cheap": "gpt-5-nano-2025-08-07",
         "expensive": "gpt-5.6-sol",
-    }
+    },
+    # vLLM serves one model per process, so both tiers point at the same
+    # served name — matching the Ollama arrangement, where a single warm model
+    # avoids swap cost. Override with PLAYZORK_VLLM_MODEL.
+    "vllm": {
+        "cheap": None,
+        "expensive": None,
+    },
 }
 
 
@@ -171,6 +186,16 @@ def _build_llm(provider: str, tier: str, temperature: float):
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=MODELS["openai"][tier], temperature=temperature)
+    elif provider == "vllm":
+        # vLLM speaks the OpenAI API, so the OpenAI client works unchanged.
+        # api_key is required by the client but ignored by a local server.
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=VLLM_MODEL,
+            temperature=temperature,
+            base_url=VLLM_BASE_URL,
+            api_key=os.getenv("PLAYZORK_VLLM_API_KEY", "not-needed"),
+        )
     else:
         raise ValueError(f"Invalid LLM_PROVIDER: {provider}")
 

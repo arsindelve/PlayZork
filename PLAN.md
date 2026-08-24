@@ -200,6 +200,30 @@ Deliberately conservative, on the same reasoning as #11's BLOCKED rule — a fal
 
 ---
 
+## Serving
+
+**vLLM backend added** (2026-08-24) so moving to GPU is a config change, not a port:
+
+```
+PLAYZORK_LLM_PROVIDER=vllm
+PLAYZORK_VLLM_BASE_URL=http://localhost:8000/v1
+PLAYZORK_VLLM_MODEL=Qwen/Qwen2.5-14B-Instruct
+```
+
+vLLM speaks the OpenAI API, so the existing client works unchanged. What differs is **continuous batching**: this Mac's Ollama serves concurrent requests at flat throughput (measured 0.26 req/s at 1, 2 and 4 concurrency), i.e. no parallelism at all, while the system issues 5–10 concurrent calls per turn. That single difference is worth more than every orchestration change in M4 combined.
+
+Measured baseline on the current machine (Apple M5, 24GB), qwen2.5:14b:
+
+| | rate |
+|---|---|
+| generation | 14 tok/s |
+| prefill | 237 tok/s |
+| one 3.5k-token call | 14.4s, of which **10.4s is prefill** |
+
+Prefill dominating is why a GPU should help disproportionately here — it is compute-bound and parallel, where generation is bandwidth-bound and sequential.
+
+**Re-baseline everything after the move.** Every timing in this document and in STATUS.md is Mac-specific, including the "concurrency buys nothing" finding, which is a property of *this serving stack* and not of the architecture.
+
 ## Instrumentation for the experiment
 
 **Per-turn token accounting** (`VersionTwo/token_meter.py`, `turn_tokens` table) — landed 2026-08-24.
