@@ -61,6 +61,11 @@ class TurnContext:
     # target location (casefolded) -> next step, "NO PATH", or "ALREADY THERE"
     directions: Dict[str, str] = field(default_factory=dict)
 
+    # object -> commands the GAME says it will accept for it, straight from
+    # the backend (#30). Authoritative, so the InteractionAgent no longer has
+    # to guess what is interactable by pattern-matching English (#16).
+    available_actions: Dict[str, List[str]] = field(default_factory=dict)
+
     # Commands already tried IN THIS ROOM that changed nothing, mapped to the
     # response they produced (GitHub issue #18). Zork is deterministic: the
     # same command, in the same room, with nothing changed since, produces the
@@ -84,6 +89,25 @@ class TurnContext:
         if not is_known_location(target):
             return "NOT AVAILABLE"
         return self.directions.get(target.strip().casefold(), "NO PATH")
+
+    @property
+    def available_actions_summary(self) -> str:
+        """The game's own list of valid commands here, rendered for a prompt.
+
+        Everything listed is guaranteed to parse — the backend supplied it —
+        so an agent choosing from this list cannot invent an object that is
+        not present, which is the entire failure mode of #16.
+        """
+        if not self.available_actions:
+            return "The game did not report any interactable objects here."
+        lines = []
+        for obj, commands in self.available_actions.items():
+            if self.unproductive:
+                commands = [c for c in commands
+                            if normalize_command(c) not in self.unproductive]
+            if commands:
+                lines.append(f"  {obj}: {', '.join(commands)}")
+        return "\n".join(lines) or "Everything here has already been tried."
 
     def is_unproductive(self, command: Optional[str]) -> bool:
         """True when this exact command already did nothing in this room."""
@@ -113,6 +137,7 @@ class TurnContext:
             f"INVENTORY: {self.inventory_summary}",
             f"KNOWN EXITS: {self.exits_summary}",
             f"ALREADY TRIED HERE, NO EFFECT (do not repeat):\n{self.unproductive_summary}",
+            f"THE GAME ACCEPTS THESE COMMANDS HERE:\n{self.available_actions_summary}",
         ]
         if target_location:
             blocks.append(f"DIRECTION TO '{target_location}': {self.direction_to(target_location)}")
@@ -160,6 +185,15 @@ def build_turn_context(
         score=game_response.Score,
         moves=game_response.Moves,
     )
+
+    # The game reports exactly which commands it will accept for each object
+    # in this room (#30). Nothing to infer.
+    api_actions = getattr(game_response, "ActionsAvailableFromLocation", None)
+    if isinstance(api_actions, dict):
+        context.available_actions = {
+            str(obj): [str(c) for c in (cmds or [])]
+            for obj, cmds in api_actions.items()
+        }
 
     # The backend reports inventory itself (#30); fall back to our tracking.
     api_inventory = getattr(game_response, "Inventory", None)

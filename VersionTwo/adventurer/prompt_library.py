@@ -677,15 +677,26 @@ Respond with structured output."""
   @staticmethod
   def get_interaction_agent_human_prompt():
     return """CURRENT LOCATION: {current_location}
-CURRENT SCORE: {current_score}
+SCORE: {current_score}
 
-INVENTORY:
-{inventory}
-
-CURRENT GAME RESPONSE:
+WHAT JUST HAPPENED:
 {game_response}
 
-Analyze the game response for interactive objects and propose the best interaction."""
+INVENTORY: {inventory}
+
+COMMANDS THE GAME WILL ACCEPT HERE (authoritative — it told us):
+{available_actions}
+
+ALREADY TRIED HERE, NO EFFECT (never propose these again):
+{already_tried}
+
+A regex hint, which is frequently WRONG and must be ignored unless the game
+text plainly supports it: {parser_hint}
+
+Choose ONE interaction. If the authoritative list above is non-empty, choose
+from it — those commands are guaranteed to parse. Never propose an action on
+an object the game has not mentioned, and never propose "nothing" or an action
+on "you"."""
 
   # ═══════════════════════════════════════════════════════════
   # ISSUE CLOSED AGENT PROMPTS
