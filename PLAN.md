@@ -323,6 +323,35 @@ never compare a per-turn mean across runs of unequal length.
 Neither arm has scored. 26 turns and 11 turns, both 0 points — the agent is
 not entering the house, which is what the frontier fix targets.
 
+### The generation gap, demonstrated cleanly (2026-08-24, `frontier3-20260824`)
+
+With the frontier working, the decisive turn reads:
+
+```
+=== PLACES SEEN BUT NOT ENTERED ===
+  - white house (named nearby, never entered)
+  - boarded front door (named nearby, never entered)
+
+=== AGENT PROPOSALS ===
+ExplorerAgent: [Confidence: 95/100, EV: 47.5]
+  Proposed Action: NORTH
+```
+
+**One proposal.** The arbiter chose NORTH because NORTH was the only thing on
+the ballot. The house is in its context, correctly identified as unentered, and
+no agent turned it into a candidate.
+
+This is a materially stronger result than the earlier run, where the same
+NORTH could be blamed on the empty frontier. That confound is now removed: the
+signal is present, correct, and prominent, and the outcome is unchanged. The
+failure is **generation, not ranking** — and no amount of arbiter tuning
+addresses it, because arbitration operates on a set of size one.
+
+It is worth noting how nearly this was missed. Two consecutive runs reported
+"No unfollowed leads" from two *different* causes (see the commit log), and
+both times the honest-looking conclusion available was "5b doesn't help".
+Believing that would have attributed a wiring bug to the architecture.
+
 ### Consequence: arm A is now motivated by evidence, not speculation
 
 B's pre-registered limitation has been demonstrated rather than predicted:
