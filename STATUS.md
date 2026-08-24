@@ -1273,3 +1273,54 @@ filter were undo cases, so this keeps the whole demonstrated benefit.
 | InteractionAgent EV | put the bulkhead on the ballot on turn 2 |
 | undo demotion | ended the pf3 oscillation |
 | zero-EV filter | **neutral-to-harmful** — nearly blocked the escape |
+
+
+## Reproducible: escaped twice (`pf4`, `pf5`), both by an EV-0.0 override
+
+`pf5-20260824` reached the Escape Pod at **turn 12** (pf4: turn 13), score 3.
+Two runs, two escapes -- the result is a capability, not an accident.
+
+**Both escapes were won by a proposal the deterministic layer had zeroed.**
+`WEST` gets marked unproductive when the agent tries it before the emergency,
+while the bulkhead is shut; the explosion then opens it and nothing invalidates
+the record. In both runs the arbiter chose `WEST` anyway at EV 0.0 -- pf4:
+*"because the escape pod bulkhead is now open"*, pf5: *"because the recent
+explosion and the sliding open of the door"*.
+
+**The narrowing was load-bearing in pf5, not merely prudent.** The ballot at
+the escape decision:
+
+```
+InteractionAgent: [Confidence: 80/100, EV: 80.0, game-confirmed]  OPEN escape pod bulkhead
+ExplorerAgent:    [Confidence: 95/100, EV: 0.0]                   GO WEST      <- the escape
+  ALREADY TRIED HERE, no effect: "The escape pod bulkhead is closed."
+```
+
+A positive-EV proposal was present, so the earlier un-narrowed filter would
+have withheld `GO WEST` outright and the agent would have chosen `OPEN` --
+which answers *"It's already open!"* and wastes the turn.
+
+**The lesson, stated against my own prior.** "Prompt text is not a mechanism"
+held six times today and is wrong at this boundary. The deterministic layer
+encodes *"the same command, in the same room, with nothing changed since,
+produces the same response"*; an exploding spaceship violates the premise, and
+only the LLM arbiter could see that. Mechanising its judgment away would have
+cost both escapes.
+
+## Still blocking reliability
+
+- **Premature issue closure.** The escape-pod issue is closed in 4 of 5 runs,
+  always right after the turn-2 refusal -- the IssueClosedAgent reads *"Why
+  open the door ... if there's no emergency?"* as resolution rather than "not
+  yet". pf4 escaped with **every** issue closed, so the memory system
+  contributed nothing to either success. The closure prompt is already
+  maximally careful (it parses acceptance criteria and gives explicit
+  DO-NOT-CLOSE examples), so the guard must be code: apply staged closures only
+  on a turn where something actually changed -- score, location or inventory.
+  Nothing can newly become resolved by a turn that accomplished nothing.
+- **Issue target vs sighting location.** `location` records where an issue was
+  *observed*. For "white house seen from West of House" that is the useful
+  room; for "Blather orders you to return to Deck Nine", observed at Reactor
+  Lobby, it routes the agent to where it already stands. Both runs fell back to
+  inventing `RETURN TO DECK NINE`, which Planetfall's parser accepts and Zork's
+  would not. The target must be extracted, not assumed to be the sighting room.
