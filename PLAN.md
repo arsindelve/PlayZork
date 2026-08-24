@@ -490,25 +490,54 @@ Two further findings from the same run confirm the idea does not transfer:
   **`nothing` at confidence 0** for a 900-importance issue two rooms away —
   it does not use its own precomputed `DIRECTION TO` to navigate back.
 
-**Revised priority.** What would actually help escape the explosion, in order:
+**Revised priority — ALL SIX NOW DONE** (`b30ca0c`, `f96d63f`):
 
-1. give the InteractionAgent an EV, so the pod proposal is rankable at all
-2. apply the repeat/undo multiplier to it — `note, _ = repeat_note(...)`
-   **discards the multiplier**, so #18's demotion is a cosmetic warning line
-   for this agent rather than a mechanism, which is precisely the
-   "prompt text is not a mechanism" failure the project already learned once
-3. surface the game clock — `Time` is parsed (`alias="time"`, observed
-   advancing 4654 → 4708) and **never read anywhere**. On a timed objective
-   the agents cannot see the deadline they are being judged against
-4. make the objective specific — Planetfall's is configured as
-   `"Complete the mission"`, which is interpolated into every prompt and tells
-   the arbiter nothing about escaping
-5. teach `IssueAgent` to navigate toward its issue's location instead of
-   returning `nothing`
-6. fix movement undo detection and the direction vocabulary (below)
+1. ✅ **InteractionAgent EV.** Evidence-weighted, not tuned to win this case: a
+   command the *backend* listed for an object present scores 100 (mirroring the
+   explorer's +3 for a game-confirmed exit, and stronger evidence — advertised
+   exits are sometimes refused); a model-invented interaction scores 50, so at
+   confidence 70 it gets 35 and **still loses** to exploration's 47.5. Pinned
+   by test, since otherwise this is just a blanket win for one agent.
+2. ✅ **Its discarded multiplier.** `note, _ = repeat_note(...)` → `note, mult`.
+3. ✅ **Game clock surfaced.** Renders only where one exists — Zork returns 0 by
+   probe, so its prompts are unchanged.
+4. ✅ **Objective made specific**, naming both the escape and the rest of the
+   game, since the string is fixed for the whole run.
+5. ✅ **IssueAgent walks to its issue.** Confidence 70 describes the reliability
+   of the *action* (one BFS step over edges we recorded); worth is already
+   priced by importance — 900 → EV 63 beats exploration, decayed 300 → 21 does
+   not. Never substitutes without a known route.
+6. ✅ **Movement identity, undo, and ship directions.** `GO WEST`/`WEST`/`W` now
+   one command; direction inverses added as a whole-command table so `NORTH`
+   inverts but `PUSH NORTH WALL` does not; port/starboard/fore/aft added as
+   **aliases** rather than canonical directions, because EAST and STARBOARD are
+   one passage and the explorer's EV scales with the unexplored count.
 
-The frontier→issue idea drops to the bottom of that list. It remains a
-reasonable answer to Zork's generation gap; it is not the bottleneck.
+**Verified in play, not only in the suite** — the exact turn that failed:
+
+| | turn 2 decision |
+|---|---|
+| control `pf-20260824` | `GO UP` |
+| fixed `pf2-20260824` | **`OPEN escape pod bulkhead`** |
+
+Suite 661 → 736.
+
+The frontier→issue idea stays at the bottom. It remains a reasonable answer to
+Zork's generation gap; it was never the bottleneck.
+
+**Still open, in rough priority:**
+
+- Does the run now actually *escape*? Opening the bulkhead is one turn of a
+  sequence (enter the pod, launch). `pf3-20260824` is the first run with all
+  six fixes; it needs to be read to the explosion.
+- The landmark vocabulary remains Zork-shaped (`pod`, `reactor`, `bay`,
+  `airlock`, `lift`, `deck` all absent) and returns `['corridor']` on a
+  spaceship. Either make it per-game, derive it from the backend's own object
+  list, or drop it — do not leave a Zork-only heuristic running on three
+  backends.
+- The single-shot control arm has not been re-run since any of this. Every
+  comparison in PLAN.md predates six behavioural fixes, so the arms are not
+  currently comparable and no result should be quoted across that boundary.
 
 ### Bugs found by playing Planetfall (2026-08-24)
 
