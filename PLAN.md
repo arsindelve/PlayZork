@@ -362,6 +362,70 @@ That result is in. A GoalAgent's remit should be specifically **to turn nouns in
 
 If a cheaper intermediate is wanted first: redefine the frontier as *places named in recent room descriptions that do not appear in the map*, which is deterministic, needs no new LLM call, and would have surfaced "white house" on turn 4.
 
+### IDEA (not yet fleshed out): frontier leads → the existing issue store
+
+Recorded 2026-08-24 after establishing the generation gap. **Not designed yet**
+— being grounded against Planetfall first, see below.
+
+The discussion started at "add a GoalAgent" and collapsed to something smaller.
+There is **no type distinction between a goal and an issue**. Compare:
+
+```
+stored today:  "Grating at Clearing — open or unlock it"
+would be:      "White house at West Of House — named but never entered; find a way in"
+```
+
+Same shape. A GoalAgent to hold the second would have been a distinction
+without a difference, and "kill the troll" proves it — the troll is in the room
+with you, affords a verb, and the observer flags it exactly like the grating.
+It already works.
+
+**What actually differs is provenance.** The ObserverAgent records
+*affordances, not objectives*. Every issue it stored across two full runs was a
+manipulable object in the room being stood in:
+
+```
+t1 [700] Small mailbox at West Of House — open it and examine contents
+t6 [500] Pile of leaves at Clearing — take leaves and investigate
+t7 [800] Grating at Clearing — open or unlock it
+```
+
+The white house is named in the same description as the mailbox and is never
+flagged, because from outside it affords nothing — the door is boarded. So the
+gap is in the *producer*, not in the representation.
+
+The sketch, therefore: `persist_node` (the graph's single writer) stores
+frontier leads as ordinary issues, deduped exactly like the observer's. The
+memory record's `location` field already means the right thing —
+
+```python
+location: str              # Where we were when we learned this
+```
+
+— the **sighting room**, not where the target is. For the grating those
+coincide; for the house the sighting room is `West Of House`, a real map node,
+so existing BFS pathfinding routes to it unchanged and the IssueAgent gains one
+line: `DIRECTION TO 'West Of House': SOUTH`.
+
+Predicted effect on the decisive turn — the ballot goes from one entry to two,
+making it a contested turn where arbitration can act at all:
+
+```
+before:  ExplorerAgent [EV 47.5] NORTH
+after:   ExplorerAgent [EV 47.5] NORTH
+         IssueAgent #1 [EV ????] SOUTH   ← toward the house
+```
+
+Secondary, smaller: `direction_to` returns `NO PATH` both for a mapped room
+with no known route and for a target that was never a room at all. An agent
+told `NO PATH` reasonably drops the lead. Worth distinguishing, but fix 1
+avoids it by construction, so it is a guardrail rather than a prerequisite.
+
+**Open question this must answer before being built** — does it help escape the
+Planetfall explosion? That is a *timed* objective, unlike entering the house,
+and a lead that arrives too late is worth nothing. See the Planetfall findings
+below.
+
 ### Pre-register arm A as an ablation
 
 Add **`+goal_agent`** as a fourth experimental arm alongside lean single-shot / full single-shot / multi-agent. That way goal-directed *proposal generation* is measured rather than quietly patched in, and the gap between multi-agent and multi-agent+goal_agent is exactly the size of the generation deficit described above.
