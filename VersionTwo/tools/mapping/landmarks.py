@@ -129,7 +129,13 @@ def unvisited_landmarks(
     names = {_clean(n) for n in (visited_locations or []) if n}
     out: List[str] = []
     seen: Set[str] = set()
-    for sentence in re.split(r"(?<=[.!?])\s+", recent_text or ""):
+    # Split on NEWLINES as well as sentence terminators. The game puts the
+    # room name on its own line above the description -- "West Of House\nYou
+    # are standing in an open field west of a white house" -- with no period
+    # after it, so a sentence-only split fuses the two and the location name
+    # lands in the same "sentence" as the landmark, retiring the single lead
+    # that matters. Seen live twice before the cause was found.
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", recent_text or ""):
         inside = any(re.search(rf"\b{re.escape(n)}\b", sentence, re.IGNORECASE)
                      for n in names if n)
         for phrase in find_landmarks(sentence):

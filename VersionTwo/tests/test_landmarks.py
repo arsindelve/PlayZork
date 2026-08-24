@@ -217,3 +217,44 @@ class TestScansRawProseNotTheTranscript:
         when the standing lead matters most."""
         from tools.mapping.landmarks import unvisited_landmarks
         assert unvisited_landmarks("Taken.", ["West Of House"]) == []
+
+
+class TestRealGameResponseFormat:
+    """The format the game actually sends, which broke this twice.
+
+    A raw response is "West Of House\\nYou are standing in an open field west
+    of a white house, with a boarded front door." -- the room name is a HEADER
+    LINE with no terminating period. A sentence-only split fuses it to the
+    description, putting the location name in the same "sentence" as the
+    landmark and retiring the one lead that matters.
+
+    Both failed live runs came from this. The unit tests missed it because they
+    fed prose without the header line.
+    """
+
+    REAL = ("West Of House\nYou are standing in an open field west of a white "
+            "house, with a boarded front door.\nThere is a small mailbox here.")
+
+    def test_header_line_does_not_retire_the_landmark(self):
+        from tools.mapping.landmarks import unvisited_landmarks
+        assert "white house" in unvisited_landmarks(self.REAL, ["West Of House"])
+
+    def test_the_turn_four_state_that_failed_twice(self):
+        from tools.mapping.landmarks import unvisited_landmarks
+        # "Taken." is the current response; the description is in history.
+        text = "Taken.\n" + self.REAL
+        assert "white house" in unvisited_landmarks(text, ["West Of House"])
+
+    def test_header_line_still_allows_real_retirement(self):
+        from tools.mapping.landmarks import unvisited_landmarks
+        # Splitting on newlines must not break the inside-the-room case.
+        kitchen = ("Kitchen\nYou are in the kitchen of the white house. "
+                   "A dark chimney leads down.")
+        leads = unvisited_landmarks(kitchen, ["Kitchen"])
+        assert "white house" not in leads
+        assert "dark chimney" in leads
+
+    def test_room_named_for_landmark_with_header(self):
+        from tools.mapping.landmarks import unvisited_landmarks
+        assert unvisited_landmarks("Cellar\nYou are in a dark cellar.",
+                                   ["Cellar"]) == []
