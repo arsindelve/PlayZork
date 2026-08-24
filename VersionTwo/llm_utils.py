@@ -3,6 +3,7 @@ LLM utility functions for robust invocation with retry logic and timeout handlin
 """
 
 import asyncio
+import contextvars
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import time
@@ -56,7 +57,12 @@ def invoke_with_retry(chain, input_data, operation_name: str = "LLM call", timeo
             # Use ThreadPoolExecutor to run with timeout
             executor = ThreadPoolExecutor(max_workers=1)
             try:
-                future = executor.submit(chain.invoke, input_data)
+                # copy_context so the operation label survives into the
+                # worker thread. ThreadPoolExecutor.submit does NOT propagate
+                # contextvars, so sync-path calls (big-picture, death
+                # detection, dedup) were arriving at the callback unlabelled.
+                ctx = contextvars.copy_context()
+                future = executor.submit(ctx.run, chain.invoke, input_data)
                 result = future.result(timeout=timeout_seconds)
                 logger.info(f"[{operation_name}] Success on attempt {attempt}")
                 executor.shutdown(wait=False)

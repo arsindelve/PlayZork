@@ -193,3 +193,40 @@ def test_an_unlabelled_call_is_recorded_as_unattributed_not_dropped():
 
 def test_the_process_meter_is_a_singleton():
     assert get_token_meter() is get_token_meter()
+
+
+def test_labels_survive_the_thread_pool_boundary():
+    """The sync retry path runs `chain.invoke` in a ThreadPoolExecutor, and
+    `submit()` does NOT propagate contextvars — so big-picture, death
+    detection and dedup calls were arriving at the callback unlabelled (8.5%
+    of a live run's tokens). copy_context() carries the label across."""
+    import concurrent.futures
+    import contextvars
+    from types import SimpleNamespace
+
+    from token_meter import TokenCallbackHandler, TokenMeter
+
+    meter = TokenMeter()
+    meter.start_turn(1)
+    meter.set_operation("BigPictureAnalyzer")
+    handler = TokenCallbackHandler(meter)
+
+    def work():
+        handler.on_llm_end(SimpleNamespace(generations=[[SimpleNamespace(
+            message=SimpleNamespace(usage_metadata={"input_tokens": 900, "output_tokens": 50}))]]))
+
+    ctx = contextvars.copy_context()
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        pool.submit(ctx.run, work).result()
+
+    assert "BigPictureAnalyzer" in meter.snapshot().by_operation
+
+
+def test_the_sync_retry_path_copies_context():
+    import inspect
+
+    import llm_utils
+
+    source = inspect.getsource(llm_utils.invoke_with_retry)
+    assert "copy_context()" in source
+    assert "ctx.run" in source
