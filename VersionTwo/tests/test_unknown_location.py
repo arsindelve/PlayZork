@@ -106,6 +106,13 @@ class FakeInteractionAgent:
         self.confidence = 0
 
 
+def _context_for(memories, location, game_text):
+    """The snapshot build_context hands to every branch."""
+    from tools.agent_graph.turn_context import TurnContext
+
+    return TurnContext(location=location, game_text=game_text, score=0, moves=1)
+
+
 def _run_spawn(monkeypatch, location_name):
     monkeypatch.setattr(dg, "ExplorerAgent", FakeExplorerAgent)
     monkeypatch.setattr(dg, "InteractionAgent", FakeInteractionAgent)
@@ -132,6 +139,9 @@ def _run_spawn(monkeypatch, location_name):
             Score=0,
             Moves=1,
         ),
+        "memories": [],
+        "turn_context": _context_for([], location_name or "Unknown",
+                                     "It is pitch black."),
     }
     return asyncio.run(node(state))
 

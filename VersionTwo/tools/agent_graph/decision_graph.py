@@ -1,7 +1,7 @@
 """
 Simple LangGraph for managing the decision-making flow.
 
-Flow: SpawnAgents → Decide → CloseIssues → Observe → Persist → END
+Flow: BuildContext → (SpawnAgents → Decide | CloseIssues | Observe) → Persist → END
 
 This introduces graph-based control flow while keeping the existing
 research and decision logic intact.
@@ -45,8 +45,10 @@ class DecisionState(TypedDict):
     loop_detection_agent: Optional[LoopDetectionAgent]  # Single agent, always spawned
     interaction_agent: Optional[InteractionAgent]  # Single agent, always spawned
 
-    # Deterministic turn context, built once in code by spawn_agents (#25)
+    # Deterministic turn context + the memory snapshot every branch shares,
+    # both produced by build_context (#25, #23)
     turn_context: object
+    memories: List
 
     # Research phase output (legacy; kept so reports and any external reader
     # that expects the key keep working)
@@ -97,6 +99,47 @@ def _neutralize_failed_agent(agent, error: BaseException) -> None:
     agent.reason = f"Agent failed during research: {error}"
 
 
+def create_build_context_node(
+    memory_toolkit: MemoryToolkit,
+    mapper_toolkit: MapperToolkit,
+    inventory_toolkit,
+    history_toolkit: HistoryToolkit,
+    turn_number_ref: dict,
+):
+    """Create the node that assembles the turn's deterministic facts.
+
+    Hoisted out of spawn_agents so the branches that run beside it —
+    close_issues and observe — can share the same snapshot (#23/#26). It is
+    pure code: local SQLite reads and the turn response, milliseconds total.
+    """
+    def build_context_node(state: DecisionState) -> dict:
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Top tracked issues, ranked by lazily-decayed importance. Read once
+        # here rather than in spawn, so every branch sees one consistent
+        # snapshot of memory for this turn.
+        memories = memory_toolkit.state.get_top_memories(
+            limit=5,
+            current_turn=turn_number_ref.get("current"),
+        )
+        logger.info(f"Retrieved {len(memories)} memories from database")
+
+        # Sort by location name for cleaner console display
+        memories_sorted = sorted(memories, key=lambda m: m.location if m.location else "")
+
+        context = build_turn_context(
+            game_response=state["game_response"],
+            history_toolkit=history_toolkit,
+            mapper_toolkit=mapper_toolkit,
+            inventory_toolkit=inventory_toolkit,
+            issue_locations=[m.location for m in memories_sorted if m.location],
+        )
+        return {"turn_context": context, "memories": memories_sorted}
+
+    return build_context_node
+
+
 def create_spawn_agents_node(
     memory_toolkit: MemoryToolkit,
     mapper_toolkit: MapperToolkit,
@@ -132,36 +175,14 @@ def create_spawn_agents_node(
         logger.info("SPAWN AGENTS - Creating specialized agents for this turn")
         logger.info("=" * 80)
 
-        # Get top 5 tracked issues from database (ordered by lazily-decayed importance)
-        memories = memory_toolkit.state.get_top_memories(
-            limit=5,
-            current_turn=turn_number_ref.get("current"),
-        )
-        logger.info(f"Retrieved {len(memories)} memories from database")
-
-        # Sort by location name for cleaner console display
-        memories_sorted = sorted(memories, key=lambda m: m.location if m.location else "")
+        memories_sorted = state["memories"]
 
         # Create one IssueAgent for each issue (max 5)
         issue_agents = [IssueAgent(memory=mem) for mem in memories_sorted]
 
         logger.info(f"SPAWNED {len(issue_agents)} IssueAgents (top 5 by importance)")
 
-        # Build the turn's context ONCE, in code (#25). This replaces the
-        # per-agent research round-trips: each was a full LLM call whose
-        # instruction named the exact tools to run, executed them once, and
-        # never iterated. The data is deterministic, so fetching it directly
-        # is faster AND strictly more reliable — it cannot be partially
-        # fetched (#5), skipped entirely (#4), or aimed at a tool that does
-        # not exist (#6).
-        context = build_turn_context(
-            game_response=state["game_response"],
-            history_toolkit=history_toolkit,
-            mapper_toolkit=mapper_toolkit,
-            inventory_toolkit=inventory_toolkit,
-            issue_locations=[m.location for m in memories_sorted if m.location],
-        )
-        state["turn_context"] = context
+        context = state["turn_context"]
 
         # Extract current game state
         game_response = state["game_response"]
@@ -280,11 +301,12 @@ def create_spawn_agents_node(
         logger.info("SPAWN AGENTS COMPLETE")
         logger.info("=" * 80)
 
-        state["issue_agents"] = issue_agents
-        state["explorer_agent"] = explorer_agent  # Single agent, can be None
-        state["loop_detection_agent"] = loop_detection_agent  # Always present
-        state["interaction_agent"] = interaction_agent  # Always present
-        return state
+        return {
+            "issue_agents": issue_agents,
+            "explorer_agent": explorer_agent,          # single agent, can be None
+            "loop_detection_agent": loop_detection_agent,
+            "interaction_agent": interaction_agent,
+        }
 
 
     return spawn_agents_node
@@ -385,10 +407,11 @@ def create_decision_node(decision_chain: Runnable):
         logger.info(f"DECISION MADE: {decision.command}")
         logger.info(f"REASON: {decision.reason}")
 
-        state["decision"] = decision
-        state["decision_prompt"] = full_prompt
-        state["decision_tool_calls"] = tool_calls_history
-        return state
+        return {
+            "decision": decision,
+            "decision_prompt": full_prompt,
+            "decision_tool_calls": tool_calls_history,
+        }
 
     return decision_node
 
@@ -493,14 +516,14 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit,
             issue_closed_response = None
             pending_closures = []
 
-        state["issue_closed_response"] = issue_closed_response
-        # Staged, not applied: persist_node commits these last (#3).
-        state["pending_closures"] = pending_closures
-
         logger.info("=" * 80)
         logger.info("CLOSE ISSUES COMPLETE")
         logger.info("=" * 80)
-        return state
+        # Staged, not applied: persist_node commits these last (#3).
+        return {
+            "issue_closed_response": issue_closed_response,
+            "pending_closures": pending_closures,
+        }
 
     return close_issues_node
 
@@ -554,12 +577,10 @@ def create_observe_node(decision_llm, history_toolkit: HistoryToolkit, memory_to
             logger.error(f"OBSERVE failed, skipping this turn: {e}", exc_info=True)
             observer_response = None
 
-        state["observer_response"] = observer_response
-
         logger.info("=" * 80)
         logger.info("OBSERVE COMPLETE")
         logger.info("=" * 80)
-        return state
+        return {"observer_response": observer_response}
 
     return observe_node
 
@@ -590,7 +611,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
         logger.info("PERSIST - Saving new issues to memory and decaying old ones")
         logger.info("=" * 80)
 
-        state["memory_persisted"] = False
+        memory_persisted = False
 
         if observer_response is None:
             # Observation failed or was skipped this turn (see #1). Nothing to
@@ -623,7 +644,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
             except Exception as e:
                 logger.error(f"MEMORY STORAGE RAISED, continuing turn: {e}", exc_info=True)
                 was_added = False
-            state["memory_persisted"] = was_added
+            memory_persisted = was_added
 
             # Log summary
             logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -665,7 +686,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
             logger.info("=" * 80)
             logger.info("PERSIST COMPLETE")
             logger.info("=" * 80)
-            return state
+            return {"memory_persisted": memory_persisted}
 
         player_command = state.get("player_command")
         if player_command:
@@ -714,7 +735,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
         logger.info("=" * 80)
         logger.info("PERSIST COMPLETE")
         logger.info("=" * 80)
-        return state
+        return {"memory_persisted": memory_persisted}
 
     return persist_node
 
@@ -776,7 +797,7 @@ def create_decision_graph(
     Build the decision-making graph.
 
     Flow:
-        SpawnAgents → Decide → CloseIssues → Observe → Persist → END
+        BuildContext → (SpawnAgents → Decide | CloseIssues | Observe) → Persist → END
 
     Args:
         decision_chain: Decision chain with structured output
@@ -792,6 +813,13 @@ def create_decision_graph(
     graph = StateGraph(DecisionState)
 
     # Add nodes
+    graph.add_node("build_context", create_build_context_node(
+        memory_toolkit,
+        mapper_toolkit,
+        inventory_toolkit,
+        history_toolkit,
+        turn_number_ref,
+    ))
     graph.add_node("spawn_agents", create_spawn_agents_node(
         memory_toolkit,
         mapper_toolkit,
@@ -807,13 +835,38 @@ def create_decision_graph(
     graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit, turn_number_ref))
 
     # Define flow
-    graph.set_entry_point("spawn_agents")
-    # No research node: its work is deterministic and now happens in code
-    # inside spawn_agents (#25).
+    # Flow (#23, #26):
+    #
+    #   build_context ─┬─ spawn_agents → decide ─┐
+    #                  ├─ close_issues ──────────┤
+    #                  └─ observe ───────────────┴─ persist → END
+    #
+    # close_issues and observe were chained AFTER decide, so ~20% of every
+    # turn was spent on bookkeeping once the command was already chosen. They
+    # have no data dependency on the decision at all — both read the game
+    # response, which is available at the top of the turn — so they now run
+    # BESIDE the spawn→decide chain and finish inside its shadow.
+    #
+    # This is also the first real use of the graph: LangGraph runs the three
+    # branches in one parallel super-step and joins them at persist. It was
+    # previously a six-node straight line that would have behaved identically
+    # as six sequential awaits.
+    #
+    # Ordering safety: the parallel branches are READ-ONLY with respect to
+    # memory. close_issues stages its closures rather than applying them (#3),
+    # and persist — which every branch joins — remains the single writer.
+    graph.set_entry_point("build_context")
+    graph.add_edge("build_context", "spawn_agents")
+    graph.add_edge("build_context", "close_issues")
+    graph.add_edge("build_context", "observe")
     graph.add_edge("spawn_agents", "decide")
-    graph.add_edge("decide", "close_issues")
-    graph.add_edge("close_issues", "observe")
-    graph.add_edge("observe", "persist")
+    # A LIST start_key is a real join: LangGraph waits for ALL three branches.
+    # Adding the three edges separately does NOT do this — the branches have
+    # different depths (spawn->decide is two hops, close and observe are one),
+    # so persist was scheduled in the super-step where close and observe
+    # finished AND AGAIN when decide finished. Verified live: PERSIST ran
+    # twice per turn.
+    graph.add_edge(["decide", "close_issues", "observe"], "persist")
     graph.add_edge("persist", END)
 
     return graph.compile()

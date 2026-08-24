@@ -130,6 +130,27 @@ A live run caught what the unit tests missed: deleting the research phases also 
 |---|---|---|---|
 | — | [#28](https://github.com/arsindelve/PlayZork/issues/28) | Prompt JSON examples reach the model as valid JSON | ✅ done — **narrower than filed**: the template-rendered prompts were already correct; only the plain-string path was over-escaped |
 
+### #23 + #26 as built — the graph finally fans out
+
+`close_issues` and `observe` were chained *after* `decide`, so 18–24% of every turn (measured 2026-08-24) was spent on bookkeeping once the command was already chosen. Neither has any data dependency on the decision — both read the game response, available at the top of the turn.
+
+```
+build_context ─┬─ spawn_agents → decide ─┐
+               ├─ close_issues ──────────┤
+               └─ observe ───────────────┴─ persist → END
+```
+
+**Measured: turn 1 went 49s → 29s with an identical 6 LLM calls** — pure overlap, no work removed. The three branches now start at the same timestamp in the logs.
+
+Two things had to be true first, and both were changes in their own right:
+
+- **Nodes return only their own keys.** They previously mutated and returned the whole state, which LangGraph reads as every node writing every key — an immediate concurrent-update conflict. Their write sets turned out to be perfectly disjoint, which is what made the fan-out possible at all.
+- **`build_context` is its own node.** Hoisted out of spawn so all three branches share one consistent snapshot of memory and the turn's facts.
+
+**A live run caught what 502 unit tests did not:** three separate `add_edge(x, "persist")` calls are *not* a join. The branches have different depths (spawn→decide is two hops, close and observe are one), so persist was scheduled in the super-step where close/observe finished **and again** when decide finished — it ran **twice per turn**, double-applying the turn's bookkeeping. LangGraph's list start_key (`add_edge([...], "persist")`) is the real join. Pinned by two tests.
+
+This is also the first genuine use of LangGraph in the project. Per [#26](https://github.com/arsindelve/PlayZork/issues/26) the graph was previously a straight line that would have behaved identically as sequential `await`s.
+
 ### Remaining
 
 | # | Issue | Task |

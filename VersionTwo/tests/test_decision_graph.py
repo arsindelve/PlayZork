@@ -92,6 +92,13 @@ class FakeMemory:
         self.moves = 1
 
 
+def _context_for(memories, location, game_text):
+    """The snapshot build_context hands to every branch."""
+    from tools.agent_graph.turn_context import TurnContext
+
+    return TurnContext(location=location, game_text=game_text, score=0, moves=1)
+
+
 def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors, exits=None):
     """Wire a spawn node whose IssueAgents behave per `agent_behaviors`.
 
@@ -166,6 +173,10 @@ def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors, exits=None):
             Score=0,
             Moves=1,
         ),
+        # build_context supplies both of these to every branch (#23).
+        "memories": memories,
+        "turn_context": _context_for(memories, "West Of House",
+                                     "You are standing in an open field."),
     }
     return node, state, created
 
@@ -234,7 +245,11 @@ def test_close_issues_failure_does_not_discard_the_decision(monkeypatch):
     result = node(state)
 
     assert result["issue_closed_response"] is None
-    assert result["decision"].command == "OPEN MAILBOX"
+    assert result["pending_closures"] == []
+    # Stronger than before: the node returns only its OWN keys, so it is now
+    # structurally incapable of disturbing the decision, not merely careful
+    # not to (#23 — it runs beside the decide branch, not after it).
+    assert "decision" not in result
 
 
 def test_observe_failure_does_not_discard_the_decision(monkeypatch):
@@ -259,7 +274,7 @@ def test_observe_failure_does_not_discard_the_decision(monkeypatch):
     result = node(state)
 
     assert result["observer_response"] is None
-    assert result["decision"].command == "OPEN MAILBOX"
+    assert "decision" not in result
 
 
 def test_persist_handles_missing_observer_response(monkeypatch):
