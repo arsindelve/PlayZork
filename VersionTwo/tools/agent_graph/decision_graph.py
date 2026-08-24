@@ -530,8 +530,27 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
 
     # InteractionAgent (AFTER IssueAgents, BEFORE ExplorerAgent)
     if interaction_agent and interaction_agent.confidence > 0:
-        note, _ = repeat_note(interaction_agent.proposed_action)
-        lines.append(f"InteractionAgent: [Confidence: {interaction_agent.confidence}/100]")
+        # This agent had NO expected value at all, while both others did, and
+        # the arbiter is instructed to rank by expected value — so the only
+        # agent that proposes object interactions was structurally unrankable.
+        # Observed in pf-20260824: it proposed OPEN escape pod bulkhead (the
+        # way off a ship that was about to explode) at confidence 70, and lost
+        # to GO UP at EV 47.5 on turn 2.
+        #
+        # Base is evidence-weighted, mirroring the ExplorerAgent's +3 for a
+        # game-confirmed exit: a command the BACKEND listed for an object here
+        # is guaranteed to parse and to name something present (#30/#16),
+        # which is strictly stronger evidence than an advertised exit — those
+        # are refused sometimes. An interaction the model invented gets the
+        # weaker base, comparable to exploration's ceiling.
+        confirmed = bool(context and context.is_backend_confirmed(
+            interaction_agent.proposed_action))
+        note, mult = repeat_note(interaction_agent.proposed_action)
+        base = 100 if confirmed else 50
+        ev = (interaction_agent.confidence / 100) * base * mult
+        evidence = "game-confirmed" if confirmed else "model-proposed"
+        lines.append(f"InteractionAgent: [Confidence: {interaction_agent.confidence}/100, "
+                     f"EV: {ev:.1f}, {evidence}]")
         if note:
             lines.append(note)
         if interaction_agent.detected_objects:

@@ -106,6 +106,13 @@ class TurnContext:
     # (Milestone 5b): it ranked proposals with no idea whether any of them
     # advanced the game.
     turns_since_score_change: int = 0
+
+    # The GAME's own clock, straight from the backend (`time`). Parsed on the
+    # response model since #30 and read by nothing until now — which on a timed
+    # objective means the agents could not see the deadline they were being
+    # judged against. Planetfall's ship explodes; Zork reports 0, so this
+    # renders only where it means something.
+    game_time: Optional[int] = None
     frontier: List[str] = field(default_factory=list)
 
     # Commands that SUCCEEDED in this room (changed something). Used to spot a
@@ -170,11 +177,50 @@ class TurnContext:
                 f"the current approach is not scoring, prefer a change of direction")
 
     @property
+    def clock_summary(self) -> str:
+        """The game clock, rendered only when the backend actually keeps one.
+
+        Zork reports 0 for every turn, so rendering it there would add a line
+        of noise to every prompt in the game that has no deadline. Planetfall
+        advances it per move and blows the ship up.
+        """
+        if not self.game_time:
+            return ""
+        return (f"GAME CLOCK: {self.game_time} — the game's own clock. It "
+                f"advances with every move, including wasted ones.")
+
+    @property
     def frontier_summary(self) -> str:
         """Leads named but not followed up, rendered for a prompt."""
         if not self.frontier:
             return "No unfollowed leads — nothing named nearby is unvisited."
         return "\n".join(f"  - {room}" for room in self.frontier)
+
+    def is_backend_confirmed(self, command: Optional[str]) -> bool:
+        """True when the GAME itself listed this command for an object here.
+
+        Mirrors the ExplorerAgent's `+3 for a game-confirmed exit`: the
+        backend's accepted-command list (#30/#16) is the strongest evidence
+        available that a proposal will do something, because the server
+        supplied it. Matching is verb + object rather than string equality —
+        the agent says "OPEN escape pod bulkhead" where the backend lists
+        "open bulkhead" under the key "escape pod bulkhead", and both name the
+        same act.
+        """
+        proposed = normalize_command(command)
+        if not proposed or not self.available_actions:
+            return False
+        verb = proposed.split()[0]
+        for obj, commands in self.available_actions.items():
+            obj_norm = normalize_command(obj)
+            mentions_object = obj_norm and (
+                obj_norm in proposed
+                or any(w in proposed.split() for w in obj_norm.split()))
+            if not mentions_object:
+                continue
+            if any(normalize_command(c).split()[:1] == [verb] for c in commands):
+                return True
+        return False
 
     def undoes_recent_progress(self, command: Optional[str]) -> str:
         """The command this proposal would undo, or "" if none.
@@ -222,6 +268,8 @@ class TurnContext:
             f"ALREADY TRIED HERE, NO EFFECT (do not repeat):\n{self.unproductive_summary}",
             f"THE GAME ACCEPTS THESE COMMANDS HERE:\n{self.available_actions_summary}",
         ]
+        if self.clock_summary:
+            blocks.insert(1, self.clock_summary)
         if target_location:
             blocks.append(f"DIRECTION TO '{target_location}': {self.direction_to(target_location)}")
         if self.strategic_analysis:
@@ -267,6 +315,7 @@ def build_turn_context(
         game_text=game_response.Response or "",
         score=game_response.Score,
         moves=game_response.Moves,
+        game_time=getattr(game_response, "Time", None),
     )
 
     # Decode the backend's exits array into direction names (#30).

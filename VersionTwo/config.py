@@ -27,7 +27,16 @@ GAME_BACKENDS = {
         "base_url": "https://6kvs9n5pj4.execute-api.us-east-1.amazonaws.com",
         "endpoint": "/Prod/Planetfall",
         "name": "Planetfall",
-        "objective": "Complete the mission",
+        # Specific, because this string is interpolated into EVERY prompt and
+        # is the arbiter's only statement of what it is playing for. The old
+        # value was "Complete the mission", which told it nothing: in run
+        # pf-20260824 the InteractionAgent proposed OPEN escape pod bulkhead on
+        # turn 2 and the arbiter walked up a gangway instead, with no notion
+        # that the ship was about to explode. Both phases are named because the
+        # string is fixed for the whole game and the escape is only the first.
+        "objective": ("Escape the doomed ship Feinstein using the escape pod "
+                      "before it explodes, then survive and complete the "
+                      "mission on the planet below"),
         "target_score": 80
     },
     "escaperoom": {
