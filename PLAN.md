@@ -186,6 +186,15 @@ Deliberately conservative, on the same reasoning as #11's BLOCKED rule — a fal
 
 **#33 as built.** Probed the live backend for real refusal phrasings rather than guessing. `"The forest becomes impenetrable to the north."` is topology and is now matched; `"The windows are all boarded."` is an object refusal and correctly is not. A drafted `impassable + mountains` pattern was **removed**: Zork's Forest room *description* reads *"The forest thins out, revealing impassible mountains"* — scenery on a **successful** move, which would have fabricated a wall on arrival.
 
+| — | [#16](https://github.com/arsindelve/PlayZork/issues/16) | InteractionAgent: parser demoted to a hint; the game's own accepted-command list is authoritative | ✅ done |
+| — | [#15](https://github.com/arsindelve/PlayZork/issues/15) | Room identity — same-named rooms told apart by their exits signature | ✅ done |
+
+**#16.** The primary fix was not better regexes: [#30](https://github.com/arsindelve/PlayZork/issues/30) surfaced `ActionsAvailableFromLocation`, an authoritative per-object list of the commands the game will accept, so the agent no longer guesses what is interactable from prose. The parser is demoted to a hint that can never short-circuit the LLM — which was the real defect, since it skipped the LLM on precisely the turns it misfired. Its three bugs are fixed too, for the fallback path.
+
+**#15.** The short-term half was already done by #10 (no BLOCKED without an explicit refusal). The long-term half is now in: rooms are identified by *name + exits signature*, so Zork's several "Forest" rooms and the maze stop collapsing into one node. Verified live — `Forest` `[2,0,1]` and `Forest #2` `[3,2,1]` are now separate nodes with correct edges.
+
+Fingerprinting deliberately uses **exits, not the description**: a description changes when an object is taken, which would spawn a phantom room every time something moved. And the match is **containment, not equality**, biased to merge rather than split — opening the trap door legitimately adds an exit, and a wrong split fragments the map into halves that can never be reconnected, where a wrong merge is merely today's behaviour.
+
 ## Milestone 5 — remaining
 
 | # | Issue | Task |

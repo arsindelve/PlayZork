@@ -33,7 +33,8 @@ class MapperToolkit:
         player_command: str,
         turn_number: int,
         game_response: Optional[str] = None,
-        api_direction: Optional[str] = None
+        api_direction: Optional[str] = None,
+        exits: Optional[list] = None
     ) -> None:
         """
         Update map state after a game turn completes.
@@ -55,7 +56,8 @@ class MapperToolkit:
                 player_command=player_command,
                 turn_number=turn_number,
                 game_response=game_response,
-                api_direction=api_direction
+                api_direction=api_direction,
+                exits=exits
             )
         except Exception as e:
             logger.error(f"ERROR in mapper update_after_turn: {e}", exc_info=True)

@@ -241,7 +241,8 @@ class GameSession:
                 player_command=input_text,
                 turn_number=self.turn_number,
                 game_response=zork_response.Response,
-                api_direction=zork_response.LastMovementDirection
+                api_direction=zork_response.LastMovementDirection,
+                exits=getattr(zork_response, "Exits", None)
             )
 
             # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)

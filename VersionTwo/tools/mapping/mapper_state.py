@@ -9,6 +9,7 @@ from .directions import (
     normalize_movement_command,
 )
 from .locations import is_known_location, normalize_location
+from .room_identity import RoomRegistry
 from .response_signals import is_movement_refusal, looks_like_death
 
 if TYPE_CHECKING:
@@ -39,6 +40,10 @@ class MapperState:
         """
         self.session_id = session_id
         self.db = db
+        # Distinguishes rooms that share a display name (#15). Rebuilt per
+        # process; it only ever ADDS labels, so a resumed session degrades to
+        # the bare name rather than mislabelling.
+        self._rooms = RoomRegistry()
         self.previous_location: Optional[str] = None
         self._pathfinder: Optional['PathFinder'] = None
 
@@ -105,7 +110,8 @@ class MapperState:
         player_command: str,
         turn_number: int,
         game_response: Optional[str] = None,
-        api_direction: Optional[str] = None
+        api_direction: Optional[str] = None,
+        exits: Optional[list] = None
     ) -> None:
         """
         Update the map based on the current turn.
@@ -120,9 +126,17 @@ class MapperState:
             api_direction: The backend's own LastMovementDirection for this
                 turn. The server already knows which way we went, so this is
                 preferred over re-deriving it from the command string (#30).
+            exits: The backend's exits array, used to tell apart two rooms
+                that report the same display name (#15).
         """
         import logging
         logger = logging.getLogger(__name__)
+
+        # Resolve which room this actually is. Zork has several rooms called
+        # "Forest" and a maze where every room reports one name; without this
+        # they collapse into a single node with all their exits merged (#15).
+        # Falls back to the bare name when the backend gives no exits array.
+        current_location = self._rooms.resolve(current_location, exits) or current_location
 
         # Try to extract direction from command FIRST
         direction = self._extract_direction(player_command)
