@@ -95,23 +95,35 @@ class TestOnlyZeroedBlocksAreWithheld:
         text = _format_agent_proposals([], explorer("NORTH"), None, interaction(), ctx)
         assert "ExplorerAgent" in text and "InteractionAgent" in text
 
-    def test_a_zeroed_issue_is_withheld_too(self):
-        """Not explorer-specific — any agent's zeroed proposal goes."""
+    def test_an_undoing_issue_is_withheld_too(self):
+        """Not explorer-specific — any agent's UNDO proposal goes."""
         ctx = TurnContext(location="Clearing", game_text="", score=0, moves=9,
                           available_actions=POD,
-                          unproductive={"OPEN BULKHEAD": "Why open it?"})
-        text = _format_agent_proposals([issue()], None, None, interaction(), ctx)
+                          succeeded={"OPEN BULKHEAD": "The bulkhead opens."})
+        text = _format_agent_proposals([issue("CLOSE BULKHEAD")], None, None,
+                                       interaction(), ctx)
         assert "IssueAgent" not in text
         assert "InteractionAgent" in text
 
-    def test_a_zeroed_interaction_is_withheld_too(self):
+    def test_an_undoing_interaction_is_withheld_too(self):
         ctx = TurnContext(location="Clearing", game_text="", score=0, moves=9,
                           available_actions=POD,
-                          unproductive={"EXAMINE BLATHER": "He ignores you."})
+                          succeeded={"OPEN BULKHEAD": "The bulkhead opens."})
         text = _format_agent_proposals([], explorer("NORTH"), None,
-                                       interaction("EXAMINE BLATHER"), ctx)
+                                       interaction("CLOSE BULKHEAD"), ctx)
         assert "InteractionAgent" not in text
         assert "ExplorerAgent" in text
+
+    def test_an_already_tried_proposal_is_never_withheld(self):
+        """THE pf4 case: the world changed and the record did not."""
+        ctx = TurnContext(location="Deck Nine", game_text="", score=0, moves=13,
+                          available_actions=POD,
+                          unproductive={"WEST": "The escape pod bulkhead is closed."})
+        text = _format_agent_proposals([], explorer("GO WEST"), None,
+                                       interaction(), ctx)
+        assert "ExplorerAgent" in text, "the escape move must stay on the ballot"
+        assert "GO WEST" in text
+        assert "InteractionAgent" in text
 
     def test_no_context_disables_demotion_entirely(self):
         """With no context there is nothing to demote against, so every

@@ -569,10 +569,52 @@ class TestRealWorldScenarios:
         path_there = pathfinder.find_path("Home", "Treasure")
         assert path_there == ["NORTH", "EAST", "DOWN"]
 
-        # Note: Return journey won't work without reverse transitions!
-        # This is correct behavior - PathFinder doesn't assume bidirectional edges
+        # The return journey now routes over PROVISIONAL reverse edges.
+        #
+        # This test previously asserted the opposite, on the reasoning that
+        # PathFinder must not assume bidirectional edges. That was right about
+        # the stored map and wrong about routing: the agent could not PLAN a
+        # return to anywhere it had not already walked back from. In
+        # pf4-20260824 the escape pod sat one room away and the IssueAgent was
+        # told "NO PATH", reaching it only by inventing "RETURN TO DECK NINE",
+        # which Planetfall's parser happened to accept and Zork's would not.
+        #
+        # A wrong guess costs one refused move, which is recorded as a real
+        # BLOCKED edge and corrects the route — the direction the standing
+        # invariant says to err in.
         path_back = pathfinder.find_path("Treasure", "Home")
-        assert path_back is None  # No return path recorded
+        assert path_back == ["UP", "WEST", "SOUTH"]
+
+    def test_reverse_edges_are_never_written_to_the_map(self, mapper_state, pathfinder):
+        """The safety property: routing hint, not a recorded fact.
+
+        One-way passages are real (Zork's slide, the chimney), so a reverse
+        edge must never enter the stored world model — only the route.
+        """
+        mapper_state.record_movement("Home", "Forest", "NORTH", 1)
+        pathfinder.find_path("Forest", "Home")
+
+        stored = [(t.from_location, t.direction, t.to_location)
+                  for t in mapper_state.get_all_transitions()]
+        assert stored == [("Home", "NORTH", "Forest")]
+
+    def test_a_refused_direction_is_not_offered_as_a_reverse(self, mapper_state, pathfinder):
+        """A one-way passage, once discovered, must stay one-way.
+
+        The game refusing SOUTH out of Forest is a recorded BLOCKED edge, and
+        the provisional reverse must not silently re-offer it.
+        """
+        mapper_state.record_movement("Home", "Forest", "NORTH", 1)
+        mapper_state.record_movement("Forest", "BLOCKED", "SOUTH", 2)
+
+        assert pathfinder.find_path("Forest", "Home") is None
+
+    def test_a_recorded_edge_beats_a_provisional_one(self, mapper_state, pathfinder):
+        """Where the real return direction is known, it must be used."""
+        mapper_state.record_movement("Home", "Forest", "NORTH", 1)
+        mapper_state.record_movement("Forest", "Home", "DOWN", 2)
+
+        assert pathfinder.find_path("Forest", "Home") == ["DOWN"]
 
 
 class TestPerformance:

@@ -494,28 +494,51 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
     # at the end of this function.
     blocks = []
 
-    def block(ev=None):
-        """Start a new proposal block and return its line list."""
-        blocks.append([ev, []])
+    def block(ev=None, withholdable=False):
+        """Start a new proposal block and return its line list.
+
+        `withholdable` marks a demotion safe to take off the ballot entirely.
+        Only WOULD-UNDO qualifies; see repeat_note.
+        """
+        blocks.append([ev, [], withholdable])
         return blocks[-1][1]
 
     lines = block()
 
     def repeat_note(action):
-        """Marker + EV multiplier for a proposal that should not be chosen."""
+        """Marker, EV multiplier, and whether the demotion may be WITHHELD.
+
+        The two demotion reasons have different epistemics, and conflating them
+        nearly lost the game. See the filter at the end of this function.
+
+        - ALREADY TRIED: true only while the world is unchanged. An explosion
+          opened the escape pod bulkhead in pf4-20260824, and `WEST` — the move
+          that escaped the ship — was still marked unproductive from turn 10
+          when it had been closed. Demote it, but NEVER take it off the ballot:
+          the arbiter chose it anyway, reasoning "the escape pod bulkhead is
+          now open", which is a world change this layer cannot represent.
+        - WOULD UNDO: reverses progress just made. Wasteful independently of
+          world state, so it is safe to withhold.
+
+        A move that is the next step of a route toward a tracked issue is not
+        demoted as an undo at all: a goal-directed return is not aimless
+        backtracking, and the undo rule cannot tell them apart on its own.
+        """
         if context is None:
-            return None, 1.0
+            return None, 1.0, False
         if context.is_unproductive(action):
             prior = context.unproductive.get(normalize_command(action), "")
-            return f"  ⚠️ ALREADY TRIED HERE, no effect: \"{prior.strip()[:80]}\"", 0.0
+            return (f"  ⚠️ ALREADY TRIED HERE, no effect: \"{prior.strip()[:80]}\"",
+                    0.0, False)
         undone = context.undoes_recent_progress(action)
-        if undone:
+        if undone and not context.is_route_step(action):
             # The backend's accepted-command list is a grammar and contains
             # both halves of every pair, so an agent reading it as advice
             # proposes the inverse of what it just achieved. Observed live:
             # "close grating" at confidence 90, right after opening it.
-            return f"  ⚠️ WOULD UNDO '{undone}' — reverses this turn's own progress", 0.0
-        return None, 1.0
+            return (f"  ⚠️ WOULD UNDO '{undone}' — reverses this turn's own progress",
+                    0.0, True)
+        return None, 1.0, False
 
     # LoopDetectionAgent (FIRST - highest priority if loop detected)
     if loop_detection_agent and loop_detection_agent.confidence > 0:
@@ -529,9 +552,9 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
     # IssueAgents
     for i, agent in enumerate(issue_agents, 1):
         if agent.proposed_action and agent.confidence is not None:
-            note, mult = repeat_note(agent.proposed_action)
+            note, mult, withholdable = repeat_note(agent.proposed_action)
             ev = (agent.importance/1000) * (agent.confidence/100) * 100 * mult
-            lines = block(ev)
+            lines = block(ev, withholdable)
             lines.append(f"IssueAgent #{i}: [Importance: {agent.importance}/1000, Confidence: {agent.confidence}/100, EV: {ev:.1f}]")
             lines.append(f"  Issue: {agent.issue_content}")
             lines.append(f"  Proposed Action: {agent.proposed_action}")
@@ -557,11 +580,11 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
         # weaker base, comparable to exploration's ceiling.
         confirmed = bool(context and context.is_backend_confirmed(
             interaction_agent.proposed_action))
-        note, mult = repeat_note(interaction_agent.proposed_action)
+        note, mult, withholdable = repeat_note(interaction_agent.proposed_action)
         base = 100 if confirmed else 50
         ev = (interaction_agent.confidence / 100) * base * mult
         evidence = "game-confirmed" if confirmed else "model-proposed"
-        lines = block(ev)
+        lines = block(ev, withholdable)
         lines.append(f"InteractionAgent: [Confidence: {interaction_agent.confidence}/100, "
                      f"EV: {ev:.1f}, {evidence}]")
         if note:
@@ -576,9 +599,9 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
 
     # ExplorerAgent (LAST)
     if explorer_agent and explorer_agent.proposed_action and explorer_agent.confidence is not None:
-        note, mult = repeat_note(explorer_agent.proposed_action)
+        note, mult, withholdable = repeat_note(explorer_agent.proposed_action)
         ev = (len(explorer_agent.unexplored_directions)/10) * (explorer_agent.confidence/100) * 50 * mult
-        lines = block(ev)
+        lines = block(ev, withholdable)
         lines.append(f"ExplorerAgent: [Confidence: {explorer_agent.confidence}/100, EV: {ev:.1f}]")
         if note:
             lines.append(note)
@@ -606,16 +629,17 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
     # This implements the original intent rather than overruling it: when
     # everything else really is exhausted every EV is zero, nothing is
     # withheld, and the annotated proposals remain visible.
-    if any(ev is not None and ev > 0 for ev, _ in blocks):
-        withheld = [b for b in blocks if b[0] is not None and b[0] <= 0 and b[1]]
+    if any(b[0] is not None and b[0] > 0 for b in blocks):
+        withheld = [b for b in blocks
+                    if b[0] is not None and b[0] <= 0 and b[1] and b[2]]
         if withheld:
             import logging as _logging
             log = _logging.getLogger(__name__)
-            for _, block_lines in withheld:
-                log.info(f"[Decide] withheld zero-EV proposal: {block_lines[0]}")
+            for b in withheld:
+                log.info(f"[Decide] withheld zero-EV undo proposal: {b[1][0]}")
             blocks = [b for b in blocks if b not in withheld]
 
-    rendered = [line for _, block_lines in blocks for line in block_lines]
+    rendered = [line for b in blocks for line in b[1]]
     return "\n".join(rendered) if rendered else "No proposals available. Choose LOOK to observe the current situation."
 
 

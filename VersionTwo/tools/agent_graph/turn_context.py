@@ -290,6 +290,26 @@ class TurnContext:
                 return done
         return ""
 
+    def is_route_step(self, command: Optional[str]) -> bool:
+        """True when this command is the next step toward a tracked issue.
+
+        The undo rule cannot tell aimless backtracking from a goal-directed
+        return: both reverse the previous move. In pf4-20260824 the escape pod
+        was at Deck Nine and the agent was one room above it, so walking back
+        down — the correct move — looked identical to the oscillation the rule
+        exists to stop.
+
+        `directions` holds the precomputed next step toward each tracked
+        issue's location, so a proposal matching one of them is going somewhere
+        on purpose.
+        """
+        proposed = normalize_command(command)
+        if not proposed or not self.directions:
+            return False
+        return any(normalize_command(step) == proposed
+                   for step in self.directions.values()
+                   if step and step not in ("NO PATH", "NOT AVAILABLE"))
+
     def is_unproductive(self, command: Optional[str]) -> bool:
         """True when this exact command already did nothing in this room."""
         return normalize_command(command) in self.unproductive

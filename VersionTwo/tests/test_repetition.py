@@ -145,25 +145,26 @@ def test_repeated_proposals_reach_the_arbiter_at_zero_expected_value():
     assert "ALREADY TRIED HERE" in text
 
 
-def test_a_dead_proposal_is_withheld_when_a_live_one_exists():
-    """It used to be annotated and left on the ballot, and the arbiter reasoned
-    straight past the zero: in pf3-20260824 three undo demotions fired and TWO
-    were chosen anyway — "Chose ExplorerAgent (confidence 95, EV 0.0) despite
-    the low EV" — with a 70-EV proposal sitting unchosen on the same ballot.
+def test_an_already_tried_proposal_is_demoted_but_never_withheld():
+    """Demoted, and DELIBERATELY left on the ballot.
 
-    The reason it is dead is NOT lost; it travels on the other channel, the
-    ALREADY TRIED block of the research context. See the assertion below and
-    test_the_prompt_block_lists_what_is_dead_and_why.
+    "Already tried" is true only while the world is unchanged. In
+    pf4-20260824 an explosion opened the escape pod bulkhead, and `WEST` — the
+    move that escaped the ship — was still marked unproductive from turn 10,
+    when it had been closed. The arbiter picked it anyway, reasoning "the
+    escape pod bulkhead is now open": a world change this layer cannot see.
+
+    Withholding it would have deleted the winning move from the ballot. Only
+    WOULD-UNDO demotions may be withheld; see test_zero_ev_filter.py.
     """
     ctx = TurnContext(location="Clearing", game_text="", score=0, moves=13,
                       unproductive={"NORTH": "The forest becomes impenetrable to the north."})
 
     text = _proposals(ctx)
 
-    assert "ExplorerAgent" not in text, "the dead proposal must not be on the ballot"
-    assert "IssueAgent #1" in text, "the live proposal must remain"
-    # The arbiter still learns WHY north is dead, via the research context.
-    assert "impenetrable" in ctx.research_context_for()
+    assert "ExplorerAgent" in text, "an already-tried proposal must stay selectable"
+    assert "EV: 0.0" in text, "but demoted"
+    assert "impenetrable" in text, "and the arbiter must see why"
 
 
 def test_everything_dead_means_nothing_is_withheld():
