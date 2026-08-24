@@ -35,9 +35,25 @@ def test_inverse_commands_are_recognised(command, undo):
     assert inverse_of(command) == undo
 
 
-@pytest.mark.parametrize("command", ["NORTH", "EXAMINE SWORD", "LOOK", ""])
+@pytest.mark.parametrize("command", ["EXAMINE SWORD", "LOOK", "",
+                                     "PUSH NORTH WALL"])
 def test_commands_without_an_inverse_are_left_alone(command):
     assert inverse_of(command) == ""
+
+
+@pytest.mark.parametrize("command,undo", [
+    ("NORTH", "SOUTH"), ("GO WEST", "EAST"), ("W", "EAST"),
+    ("UP", "DOWN"), ("GO DOWN", "UP"), ("NORTHEAST", "SOUTHWEST"),
+    ("GO STARBOARD", "WEST"),
+])
+def test_movement_inverses_are_recognised(command, undo):
+    """NORTH was previously asserted to have NO inverse, which was the defect,
+    not the intent: nothing could tell that EAST reverses WEST, so no proposal
+    that walked straight back where it came from was ever demoted. In
+    frontier3-20260824 the agent reached Behind House — the room with the
+    window into the house — and oscillated off it, zero suppressions in 16
+    turns. pf-20260824 did it vertically while the ship's clock ran."""
+    assert inverse_of(command) == undo
 
 
 def test_the_observed_close_grating_proposal_is_demoted():

@@ -27,6 +27,8 @@ query or an in-memory lookup — milliseconds in total.
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from tools.mapping.directions import (extract_direction,
+                                      is_probable_movement_command)
 from tools.mapping.landmarks import unvisited_landmarks
 from tools.mapping.locations import is_known_location
 
@@ -52,13 +54,40 @@ _INVERSES = {
 }
 
 
+# Movement inverses, kept SEPARATE from the verb table above because they are
+# whole commands rather than verbs taking an object. Without these,
+# `undoes_recent_progress` could not tell that EAST reverses WEST or DOWN
+# reverses UP — so nothing demoted a proposal that walked straight back where
+# it came from. In frontier3-20260824 the agent reached Behind House, the room
+# with the window into the house, and oscillated off it; pf-20260824 did the
+# same vertically, GO UP -> GO UP -> GO DOWN, while the ship's clock ran.
+_DIRECTION_INVERSES = {
+    "NORTH": "SOUTH", "SOUTH": "NORTH",
+    "EAST": "WEST", "WEST": "EAST",
+    "NORTHEAST": "SOUTHWEST", "SOUTHWEST": "NORTHEAST",
+    "NORTHWEST": "SOUTHEAST", "SOUTHEAST": "NORTHWEST",
+    "UP": "DOWN", "DOWN": "UP",
+}
+
+
 def inverse_of(command: Optional[str]) -> str:
     """The command that would undo `command`, or "" if it has no inverse."""
-    tokens = normalize_command(command).split()
-    if not tokens:
+    normalized = normalize_command(command)
+    if not normalized:
         return ""
+
+    # Whole-command match only, so "NORTH" inverts but "PUSH NORTH WALL" does
+    # not become "PUSH SOUTH WALL". normalize_command has already collapsed
+    # "GO WEST" and "W" to "WEST", so every phrasing lands here.
+    if normalized in _DIRECTION_INVERSES:
+        return _DIRECTION_INVERSES[normalized]
+
+    tokens = normalized.split()
     for verb_len in (2, 1):
-        if len(tokens) > verb_len:
+        # `>=` not `>`: a verb-only command like "OPEN" has an inverse too, and
+        # requiring an object meant a bare direction could never resolve one
+        # even once directions were listed.
+        if len(tokens) >= verb_len:
             verb = " ".join(tokens[:verb_len])
             if verb in _INVERSES:
                 return " ".join([_INVERSES[verb]] + tokens[verb_len:])
@@ -66,10 +95,33 @@ def inverse_of(command: Optional[str]) -> str:
 
 
 def normalize_command(command: Optional[str]) -> str:
-    """Canonical form for comparing two commands. Case and spacing only —
-    deliberately NOT semantic, so "OPEN DOOR" and "OPEN THE DOOR" stay
-    distinct rather than risking a false suppression."""
-    return " ".join((command or "").strip().upper().split())
+    """Canonical form for comparing two commands.
+
+    Case and spacing, plus ONE semantic rule: a command that is purely a
+    movement collapses to its canonical direction, so "GO WEST", "WEST" and
+    "W" are one command rather than three. They were three, and the cost was
+    real — repetition suppression, the `succeeded` map and undo detection all
+    key off this string, so an agent could alternate phrasings forever without
+    any of them noticing. Observed in frontier3-20260824: the agent reached
+    Behind House, the room containing the window into the house, and bounced
+    GO WEST -> EAST -> GO WEST off it with ZERO suppressions in 16 turns.
+
+    Everything else stays literal: "OPEN DOOR" and "OPEN THE DOOR" remain
+    distinct, because a false suppression silently removes a real option and
+    nothing in the game text ever corrects it. `extract_direction` is safe to
+    lean on here precisely because it is the STRICT parser — it returns None
+    for "TAKE LAMP", "OPEN WINDOW" and "PUSH NORTH WALL" — as opposed to
+    `find_mentioned_directions`, which scans prose permissively. Keep the two
+    apart; merging them is a standing temptation and would be a bug.
+    """
+    text = " ".join((command or "").strip().upper().split())
+    if not text:
+        return ""
+    if is_probable_movement_command(text):
+        direction = extract_direction(text)
+        if direction:
+            return direction
+    return text
 
 
 @dataclass

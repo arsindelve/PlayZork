@@ -67,6 +67,18 @@ class IssueAgent:
             f"Discovered: Turn {self.turn_number}"
         )
 
+    @staticmethod
+    def _declined(proposal) -> bool:
+        """True when the agent effectively proposed nothing.
+
+        Local models express this several ways — an empty string, the literal
+        word "nothing", or a real-looking action at zero confidence — and all
+        three reach the arbiter as an unusable proposal.
+        """
+        action = (getattr(proposal, "proposed_action", "") or "").strip().lower()
+        confidence = getattr(proposal, "confidence", 0) or 0
+        return (not action) or action in ("nothing", "none", "n/a") or confidence <= 0
+
     async def propose(
         self,
         decision_llm: BaseChatModel,
@@ -149,6 +161,32 @@ class IssueAgent:
         self.proposed_action = proposal.proposed_action
         self.reason = proposal.reason
         self.confidence = proposal.confidence
+
+        # An issue you are not standing at has a deterministic answer: walk
+        # toward it. The prompt already carries `navigation_direction` and
+        # `location_status`, and the model declined anyway — in pf-20260824 it
+        # returned "nothing" at confidence 0 for a 900-importance escape pod
+        # two rooms away, while the ship's clock ran. Same shape as #21: a rule
+        # stated only in prose is not a mechanism, so enforce it here.
+        #
+        # Confidence describes the RELIABILITY OF THE ACTION, not the worth of
+        # the issue: one step along a BFS shortest path over edges we recorded
+        # ourselves is about as dependable as a proposal gets. Whether the
+        # issue deserves pursuing is already priced in by the importance term
+        # of the expected value — 900 importance gives EV 63 and outranks
+        # exploration's 47.5, a decayed 300 gives 21 and does not.
+        if self._declined(proposal) and location_status == "DIFFERENT LOCATION":
+            step = (navigation_direction or "").strip().upper()
+            if step and step not in ("NO PATH", "NOT AVAILABLE", "UNKNOWN"):
+                self.proposed_action = step
+                self.confidence = 70
+                self.reason = (
+                    f"Cannot act on this issue from {current_location}; it is "
+                    f"at {self.location}. {step} is the next step on the known "
+                    f"route there.")
+                logger.info(
+                    f"[IssueAgent ID:{self.memory.id}] Declined with no action; "
+                    f"substituting route step {step} toward {self.location}")
 
         # Log proposal summary
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

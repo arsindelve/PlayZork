@@ -25,6 +25,17 @@ DIRECTION_ABBREVIATIONS = {
     "N": "NORTH", "S": "SOUTH", "E": "EAST", "W": "WEST",
     "NE": "NORTHEAST", "NW": "NORTHWEST", "SE": "SOUTHEAST", "SW": "SOUTHWEST",
     "U": "UP", "D": "DOWN",
+    # Planetfall's ship uses nautical directions. They are ALIASES of compass
+    # directions, not new ones: the backend itself translates them, verified by
+    # direct probe against the live API on 2026-08-24 —
+    #   "starboard" -> lastMovementDirection "E"   "port" -> "W"
+    #   "fore"      -> "N"                         "aft"  -> "S"
+    # so EAST and STARBOARD are one passage, not two. That is exactly why they
+    # are NOT added to CANONICAL_DIRECTIONS: the explorer counts unexplored
+    # directions out of that list and its expected value scales with the
+    # count, so aliasing them as separate directions would both inflate its EV
+    # and let it re-walk a passage it had already taken under the other name.
+    "PORT": "WEST", "STARBOARD": "EAST", "FORE": "NORTH", "AFT": "SOUTH",
 }
 
 
@@ -55,10 +66,16 @@ def normalize_direction(direction: Optional[str]) -> str:
 # Substring matching also meant "NORTH" matched inside "NORTHEAST": a room that
 # explicitly said *northeast* sent the agent *north*.
 DIRECTION_PROSE_ALIASES = {
-    "NORTH":     ["NORTH", "NORTHERN", "NORTHWARD", "NORTHWARDS", "N"],
-    "SOUTH":     ["SOUTH", "SOUTHERN", "SOUTHWARD", "SOUTHWARDS", "S"],
-    "EAST":      ["EAST", "EASTERN", "EASTWARD", "EASTWARDS", "E"],
-    "WEST":      ["WEST", "WESTERN", "WESTWARD", "WESTWARDS", "W"],
+    # FORE/AFT/PORT/STARBOARD: Planetfall describes every corridor this way, so
+    # without them the explorer's "+2 mentioned" bonus was unavailable for every
+    # LATERAL move on the ship while UP still earned it from "a gangway leads
+    # up". Deck Nine scored UP 5 (exit+mentioned) against EAST 4
+    # (exit+cardinal) and the agent climbed the ship instead of crossing it,
+    # away from the escape pod. Observed in run pf-20260824.
+    "NORTH":     ["NORTH", "NORTHERN", "NORTHWARD", "NORTHWARDS", "N", "FORE"],
+    "SOUTH":     ["SOUTH", "SOUTHERN", "SOUTHWARD", "SOUTHWARDS", "S", "AFT"],
+    "EAST":      ["EAST", "EASTERN", "EASTWARD", "EASTWARDS", "E", "STARBOARD"],
+    "WEST":      ["WEST", "WESTERN", "WESTWARD", "WESTWARDS", "W", "PORT"],
     "NORTHEAST": ["NORTHEAST", "NORTH-EAST", "NORTHEASTERN", "NE"],
     "NORTHWEST": ["NORTHWEST", "NORTH-WEST", "NORTHWESTERN", "NW"],
     "SOUTHEAST": ["SOUTHEAST", "SOUTH-EAST", "SOUTHEASTERN", "SE"],
