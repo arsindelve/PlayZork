@@ -1226,3 +1226,50 @@ A second rule was added after nearly reporting a 27% token saving that was
 entirely a turn-count artifact (26-turn control vs 11-turn treatment; matched
 on turns 1–10 the honest figure is +4.1%): **never compare a per-turn mean
 across runs of unequal length.**
+
+## RESULT: the agent escaped the Feinstein (`pf4-20260824`, turn 15)
+
+First non-zero score of the project — **3 points** — and the first time any run
+has completed an objective.
+
+```
+11 | GO NORTH  | "A massive explosion rocks the ship."
+12 | OPEN ...  | "It's already open!"  (the emergency opened the bulkhead)
+13 | GO WEST   | Escape Pod — "The pod door clangs shut as heavy explosions..."
+15 | GO DOWN   | "...a huge explosion blows the Feinstein into tiny pieces"
+```
+
+**What the agent actually earned.** The pod's controls are "entirely
+automated": once inside, the door sealed and the ejection ran on its own, and
+`GO NORTH`/`GO DOWN` at turns 14–15 were wasted moves that happened not to
+matter. The agent solved the real puzzle — *be at Deck Nine and go WEST while
+the ship comes apart* — rather than executing a clean sequence.
+
+**The decision that won it was chosen at EV 0.0.** `WEST` had been marked
+unproductive at turn 10, when the bulkhead was still closed. The arbiter picked
+it anyway, reasoning *"the escape pod bulkhead is now open"* — a world change
+the deterministic `unproductive` layer cannot represent, because it assumes
+"the same command, in the same room, with nothing changed since, produces the
+same response" and nothing invalidates the record when the world moves.
+
+**This is a limit on "prompt text is not a mechanism".** That principle was
+right six times running today. Here it is wrong: the code layer assumed a
+static world, the LLM arbiter noticed the world had changed, and mechanising
+that judgment away would have killed the run. The zero-EV filter added earlier
+today came within one positive-EV proposal of deleting the winning move from
+the ballot — it survived only because every other proposal was also zero.
+
+**Consequence — narrow the filter.** Withhold *undo* demotions (structurally
+wasteful, world-independent); never withhold *already-tried* demotions (true
+only while the world is unchanged). Both pf3 overrides that motivated the
+filter were undo cases, so this keeps the whole demonstrated benefit.
+
+**Which fixes were load-bearing:**
+
+| fix | contribution |
+|---|---|
+| ship directions (port/starboard) | moved laterally at all, instead of climbing |
+| specific objective + game clock | the arbiter's reasons cite the emergency |
+| InteractionAgent EV | put the bulkhead on the ballot on turn 2 |
+| undo demotion | ended the pf3 oscillation |
+| zero-EV filter | **neutral-to-harmful** — nearly blocked the escape |
