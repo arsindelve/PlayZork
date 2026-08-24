@@ -268,6 +268,61 @@ The useful frontier is **not in the map**. *"You are facing the north side of a 
 
 **Trajectory was unchanged for the first 8 turns**, identical to the control. At the decisive turn (5, at North of House), the explorer chose NORTH on genuinely correct evidence — the description says *"a narrow path winds through the trees to the north"* and the game confirms NORTH is a real exit, so NORTH scores 6 against EAST's 4. The evidence points north; EAST to Behind House is a real exit that nothing recommends. **This is not a scoring bug — it is the generation gap.**
 
+### The frontier is fixed (2026-08-24) — it now reads room text
+
+`tools/mapping/landmarks.py`. Deterministic extraction, no LLM call, no added
+latency. A closed vocabulary of *enterable structures* rather than general noun
+extraction: a parser or a model would surface furniture and abstractions, and a
+wrong landmark sends the agent chasing something that does not exist, whereas a
+missed one costs only what today already costs. False negative beats false
+positive, as everywhere else in the world model.
+
+Deciding "visited" was the subtle part, and every name-matching rule fails:
+
+| rule | why it fails |
+|---|---|
+| substring | "West of House" contains "house" — standing **outside** suppresses the best lead in the game |
+| strip positional prefix | "West of House" → "House" → same failure |
+| exact equality | nothing is ever named "House", so entering via the window into the Kitchen never clears it and it nags forever |
+
+What works is the room text itself. A landmark retires when a visited room is
+named for it ("Cellar"), or when a visited room is named **in the same
+sentence** — Zork's Kitchen reads *"you are in the kitchen of the white
+house"*, so being inside still names it. Sentence scope keeps that safe:
+*"west of a white house"* never contains the location name "West of House", so
+being outside retires nothing. Recency does the rest — descriptions that stop
+mentioning a landmark let it age out, and **the world model never has to know
+what "inside" means.**
+
+The Kitchen case shows the upside: with the house retired, the same pass
+surfaces *"dark chimney"* — the actual route down to the Cellar.
+
+Verified against the live session DB with real toolkits, not just unit tests:
+the map frontier was empty on the recorded linear path and the house now
+surfaces. Suite 635 → 654.
+
+### Measurement correction: 5b costs ~4% more, not 27% less
+
+The first read of the run analysis showed 10,313 tokens/turn against the
+control's 14,132 and looked like a large saving from the #16/#18 memoization.
+It was **a turn-count artifact** — the control had run 26 turns and the verify
+run 11, and later turns cost more because summaries and history grow. On
+matched turns 1–10 the honest figures are:
+
+| | tokens/turn |
+|---|---|
+| control (turns 1–10) | 10,898 |
+| 5b (turns 1–10) | 11,344 (**+4.1%**) |
+| control (all 26 turns) | 14,697 ← the misleading denominator |
+
++4.1% is what a richer arbiter prompt *should* cost. **Any token comparison
+between runs of different lengths must be matched-turn.** This is the third
+attribution error of this kind in the project, and the general rule is now:
+never compare a per-turn mean across runs of unequal length.
+
+Neither arm has scored. 26 turns and 11 turns, both 0 points — the agent is
+not entering the house, which is what the frontier fix targets.
+
 ### Consequence: arm A is now motivated by evidence, not speculation
 
 B's pre-registered limitation has been demonstrated rather than predicted:
