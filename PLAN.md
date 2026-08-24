@@ -233,6 +233,40 @@ Prefill dominating is why a GPU should help disproportionately here — it is co
 
 **Re-baseline everything after the move.** Every timing in this document and in STATUS.md is Mac-specific, including the "concurrency buys nothing" finding, which is a property of *this serving stack* and not of the architecture.
 
+## Result aggregation — planned, not built
+
+Runs will happen on at least two machines (Mac now, an RTX 5070 Ti PC from 2026-08-30) and possibly in the cloud. **Operational state stays in local SQLite; only results are shared.**
+
+### Why not move persistence to DynamoDB
+
+Considered and rejected for the hot path, on three grounds:
+
+1. **The ranking logic is SQL.** Lazy importance decay is computed *in the query* — `CAST(importance * pow(?, MAX(0, ? - turn_number)) AS INTEGER)` with `ORDER BY effective_importance DESC`. That is the mechanism behind [#20](https://github.com/arsindelve/PlayZork/issues/20). DynamoDB has no computed ordering, so it becomes fetch-all-and-sort in Python — workable at this scale, but a rewrite of something a whole milestone was spent making correct.
+2. **The map write rule is a conditional update.** [#11](https://github.com/arsindelve/PlayZork/issues/11)'s asymmetry (a real destination overwrites BLOCKED, never the reverse) is `ON CONFLICT … DO UPDATE … WHERE`, with 14 tests written against real SQLite semantics. Expressible as a Dynamo `ConditionExpression`, but re-deriving subtle logic against a different consistency model is risk with no payoff.
+3. **Latency lands on the hot path and does not shrink.** `TurnContext` alone does ~6 reads per turn, plus mapper and persist traffic. Local SQLite is microseconds; Dynamo is ~10–20 ms per round trip. ~1–2 s/turn is negligible against today's 40–110 s turns but becomes a *growing* fraction once the GPU cuts turn time — exactly when many seeded runs are being executed.
+
+**Scale does not motivate it either:** the entire dataset across every session ever run is **244 KB**. A 50-turn session is ~60 turn rows, ~12 memories, ~18 map edges.
+
+**And a local file is better for the thesis.** *"Here is the database for run 7"* is one small file that can be attached to an appendix, diffed, or re-analysed years later. A shared mutable table has no natural per-run boundary.
+
+### What is actually needed
+
+Runs are independent — nothing reads another run's map mid-game. The real requirement is **comparing results across machines**, which is one write at the end of a run, not a persistence-layer change.
+
+**Planned:** a `runs` record written once per completed run, to DynamoDB or simply S3/JSON:
+
+| field | why |
+|---|---|
+| `session_id`, `condition`, `seed` | identifies the arm |
+| `turns`, `final_score`, `scoring_turns` | `score@turns` |
+| `wall_seconds`, `total_tokens`, `tokens_by_operation` | `score@wall-clock`, `score@tokens` |
+| `git_sha`, `model`, `provider`, `serving_config` | provenance — required by the pre-registration below, and the reason a GPU run and a Mac run can be compared at all |
+| `wasted_turns`, `override_rate`, `agent_win_counts` | the behavioural measures `run_analysis` already computes |
+
+Everything in that table is already produced by `tools/reporting/run_analysis.py`; this is an upload step, not new analysis. No hot-path cost, and it makes Saturday's GPU runs land alongside today's Mac runs automatically.
+
+**Not built yet — deliberately.** It is only worth building once the run harness exists, so the two land together.
+
 ## Instrumentation for the experiment
 
 **Per-turn token accounting** (`VersionTwo/token_meter.py`, `turn_tokens` table) — landed 2026-08-24.
