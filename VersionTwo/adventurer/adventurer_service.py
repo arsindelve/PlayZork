@@ -35,9 +35,6 @@ class AdventurerService:
         self.inventory_toolkit = inventory_toolkit
         self.logger = GameLogger.get_instance()
 
-        # Turn number tracking (mutable reference for persist node)
-        self.turn_number_ref = {"current": 0}
-
         # Create LLM for decisions and IssueAgent proposals (using expensive model)
         self.decision_llm = get_expensive_llm(temperature=0)
 
@@ -53,7 +50,6 @@ class AdventurerService:
             memory_toolkit=self.memory_toolkit,
             mapper_toolkit=self.mapper_toolkit,
             inventory_toolkit=self.inventory_toolkit,
-            turn_number_ref=self.turn_number_ref
         )
 
     def _create_decision_chain(self) -> Runnable:
@@ -102,13 +98,12 @@ class AdventurerService:
         Returns:
             Tuple of (AdventurerResponse, List[IssueAgent], Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str) - the decision, issue agents, explorer agent, loop detection agent, interaction agent, closed issues, observer response, and decision prompt
         """
-        # Update turn number reference for persist node
-        self.turn_number_ref["current"] = turn_number
-
         # Initialize graph state
         initial_state = {
             "game_response": last_game_response,
             "player_command": player_command,
+            # In graph state, not a side-channel dict (#26)
+            "turn_number": turn_number,
             "issue_agents": [],  # Will be populated by spawn_agents node
             "explorer_agent": None,  # Will be populated if unexplored directions exist
             "loop_detection_agent": None,  # Will be populated by spawn_agents node (always)

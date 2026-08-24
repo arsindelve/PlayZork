@@ -34,7 +34,6 @@ def test_persist_analyzes_command_that_produced_game_response(monkeypatch):
     persist = create_persist_node(
         memory_toolkit,
         inventory_toolkit,
-        {"current": 3},
     )
     state = {
         "game_response": SimpleNamespace(
@@ -44,6 +43,7 @@ def test_persist_analyzes_command_that_produced_game_response(monkeypatch):
             Moves=1,
         ),
         "player_command": "OPEN MAILBOX",
+        "turn_number": 5,
         "decision": SimpleNamespace(command="TAKE LEAFLET"),
         "observer_response": SimpleNamespace(
             remember="",
@@ -164,7 +164,6 @@ def _spawn_node_fixtures(monkeypatch, memories, agent_behaviors, exits=None):
         empty_tools,
         decision_llm=object(),
         history_toolkit=empty_tools,
-        turn_number_ref={"current": 7},
     )
     state = {
         "game_response": SimpleNamespace(
@@ -224,7 +223,7 @@ def test_failed_agents_are_excluded_from_proposals(monkeypatch):
 
 def test_close_issues_failure_does_not_discard_the_decision(monkeypatch):
     class ExplodingIssueCloser:
-        def analyze(self, **kwargs):
+        async def analyze(self, **kwargs):
             raise RuntimeError("structured output parse failed")
 
     monkeypatch.setattr(dg, "IssueClosedAgent", ExplodingIssueCloser)
@@ -233,7 +232,6 @@ def test_close_issues_failure_does_not_discard_the_decision(monkeypatch):
         decision_llm=object(),
         history_toolkit=SimpleNamespace(get_tools=lambda: []),
         memory_toolkit=object(),
-        turn_number_ref={"current": 7},
     )
     state = {
         "game_response": SimpleNamespace(
@@ -242,7 +240,7 @@ def test_close_issues_failure_does_not_discard_the_decision(monkeypatch):
         "decision": SimpleNamespace(command="OPEN MAILBOX"),
     }
 
-    result = node(state)
+    result = asyncio.run(node(state))
 
     assert result["issue_closed_response"] is None
     assert result["pending_closures"] == []
@@ -254,7 +252,7 @@ def test_close_issues_failure_does_not_discard_the_decision(monkeypatch):
 
 def test_observe_failure_does_not_discard_the_decision(monkeypatch):
     class ExplodingObserver:
-        def observe(self, **kwargs):
+        async def observe(self, **kwargs):
             raise RuntimeError("timed out after 5 attempts")
 
     monkeypatch.setattr(dg, "ObserverAgent", ExplodingObserver)
@@ -271,7 +269,7 @@ def test_observe_failure_does_not_discard_the_decision(monkeypatch):
         "decision": SimpleNamespace(command="OPEN MAILBOX"),
     }
 
-    result = node(state)
+    result = asyncio.run(node(state))
 
     assert result["observer_response"] is None
     assert "decision" not in result
@@ -295,13 +293,13 @@ def test_persist_handles_missing_observer_response(monkeypatch):
     persist = create_persist_node(
         SimpleNamespace(add_memory=lambda **kwargs: True),
         SimpleNamespace(state=FakeInventoryState()),
-        {"current": 3},
     )
     state = {
         "game_response": SimpleNamespace(
             Response="Opened.", LocationName="West Of House", Score=0, Moves=1
         ),
         "player_command": "OPEN MAILBOX",
+        "turn_number": 5,
         "decision": SimpleNamespace(command="TAKE LEAFLET"),
         "observer_response": None,
     }
@@ -326,13 +324,13 @@ def test_persist_survives_inventory_analysis_failure(monkeypatch):
     persist = create_persist_node(
         SimpleNamespace(add_memory=lambda **kwargs: True),
         SimpleNamespace(state=FakeInventoryState()),
-        {"current": 3},
     )
     state = {
         "game_response": SimpleNamespace(
             Response="Opened.", LocationName="West Of House", Score=0, Moves=1
         ),
         "player_command": "OPEN MAILBOX",
+        "turn_number": 5,
         "decision": SimpleNamespace(command="TAKE LEAFLET"),
         "observer_response": SimpleNamespace(
             remember="the mailbox is open", rememberImportance=600, item=""
@@ -351,7 +349,7 @@ def test_close_issues_node_passes_the_current_turn(monkeypatch):
     captured = {}
 
     class RecordingCloser:
-        def analyze(self, **kwargs):
+        async def analyze(self, **kwargs):
             captured.update(kwargs)
             return (
                 SimpleNamespace(closed_issue_ids=[], closed_issue_contents=[], reasoning=""),
@@ -364,13 +362,13 @@ def test_close_issues_node_passes_the_current_turn(monkeypatch):
         object(),
         SimpleNamespace(get_tools=lambda: []),
         object(),
-        {"current": 42},
     )
-    node({
+    asyncio.run(node({
         "game_response": SimpleNamespace(
             LocationName="West Of House", Response="ok", Score=0, Moves=1
         ),
-    })
+        "turn_number": 42,
+    }))
 
     assert captured["current_turn"] == 42
 

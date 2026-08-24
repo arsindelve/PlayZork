@@ -151,11 +151,11 @@ def _persist(zork_response, inventory_state, analyzer_calls):
             SimpleNamespace(state=SimpleNamespace(remove_memory=lambda i: True),
                             add_memory=lambda **k: True),
             SimpleNamespace(state=inventory_state),
-            {"current": 4},
-        )
+            )
         persist({
             "game_response": zork_response,
             "player_command": "TAKE SWORD",
+            "turn_number": 5,
             "decision": SimpleNamespace(command="LOOK"),
             "observer_response": None,
             "pending_closures": [],
@@ -175,7 +175,7 @@ def test_persist_syncs_from_the_game_inventory_and_skips_the_llm():
 
     _persist(response, state, calls)
 
-    assert state.synced == (["sword", "brass lantern"], 4)
+    assert state.synced == (["sword", "brass lantern"], 5)
     assert calls == [], "the LLM analyzer must not run when the game reports inventory"
 
 

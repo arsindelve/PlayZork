@@ -48,13 +48,13 @@ def _persist_with(location_name, monkeypatch):
     persist = create_persist_node(
         SimpleNamespace(add_memory=fake_add_memory),
         SimpleNamespace(state=FakeInventoryState()),
-        {"current": 3},
     )
     state = {
         "game_response": SimpleNamespace(
             Response="It is pitch black.", LocationName=location_name, Score=0, Moves=1
         ),
         "player_command": "NORTH",
+        "turn_number": 5,
         "decision": SimpleNamespace(command="LOOK"),
         "observer_response": SimpleNamespace(
             remember="a grue lurks in the dark", rememberImportance=800, item=""
@@ -130,7 +130,6 @@ def _run_spawn(monkeypatch, location_name):
         empty_tools,
         decision_llm=object(),
         history_toolkit=empty_tools,
-        turn_number_ref={"current": 7},
     )
     state = {
         "game_response": SimpleNamespace(

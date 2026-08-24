@@ -22,7 +22,6 @@ def _graph():
     return dg.create_decision_graph(
         decision_chain=object(), decision_llm=object(), history_toolkit=stub,
         memory_toolkit=stub, mapper_toolkit=stub, inventory_toolkit=stub,
-        turn_number_ref={"current": 0},
     )
 
 
@@ -211,3 +210,39 @@ def test_the_real_graph_uses_a_join_not_three_separate_edges():
 
     assert '["decide", "close_issues", "observe"], "persist"' in source, \
         "persist must join all three branches, or it runs twice per turn"
+
+
+def test_adventurer_service_constructs_the_real_graph(monkeypatch):
+    """Wiring guard. Every graph test until now stubbed the factory, so a
+    signature change could pass 504 tests and still crash on startup — which
+    it did: `create_decision_graph() got an unexpected keyword argument
+    'turn_number_ref'` surfaced only when a real session tried to boot.
+    """
+    from langchain_core.runnables import RunnableLambda
+
+    from adventurer.adventurer_service import AdventurerService
+
+    monkeypatch.setattr("adventurer.adventurer_service.get_expensive_llm",
+                        lambda temperature=0: SimpleNamespace(
+                            with_structured_output=lambda schema: RunnableLambda(lambda _: None)))
+    # GameLogger is a singleton that needs a session id on first use.
+    from game_logger import GameLogger
+    GameLogger.get_instance("test-wiring")
+
+    stub = SimpleNamespace(get_tools=lambda: [], state=SimpleNamespace())
+    service = AdventurerService(stub, stub, stub, stub)
+
+    assert service.decision_graph is not None
+    # The side channel is gone; the turn number rides in graph state (#26).
+    assert not hasattr(service, "turn_number_ref")
+
+
+def test_the_turn_number_travels_in_graph_state():
+    import inspect
+
+    from adventurer.adventurer_service import AdventurerService
+
+    source = inspect.getsource(AdventurerService.handle_user_input)
+
+    assert '"turn_number": turn_number' in source
+    assert "turn_number_ref" not in source

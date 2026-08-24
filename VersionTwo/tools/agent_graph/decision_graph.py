@@ -38,6 +38,9 @@ class DecisionState(TypedDict):
     # Input
     game_response: ZorkApiResponse
     player_command: str
+    # In graph state rather than a mutable side-channel dict (#26): the graph
+    # should carry the turn's data, not a reference smuggled past it.
+    turn_number: int
 
     # Spawn phase output
     issue_agents: List[IssueAgent]
@@ -104,7 +107,6 @@ def create_build_context_node(
     mapper_toolkit: MapperToolkit,
     inventory_toolkit,
     history_toolkit: HistoryToolkit,
-    turn_number_ref: dict,
 ):
     """Create the node that assembles the turn's deterministic facts.
 
@@ -121,7 +123,7 @@ def create_build_context_node(
         # snapshot of memory for this turn.
         memories = memory_toolkit.state.get_top_memories(
             limit=5,
-            current_turn=turn_number_ref.get("current"),
+            current_turn=state.get("turn_number"),
         )
         logger.info(f"Retrieved {len(memories)} memories from database")
 
@@ -146,7 +148,6 @@ def create_spawn_agents_node(
     inventory_toolkit,
     decision_llm,
     history_toolkit: HistoryToolkit,
-    turn_number_ref: dict,
 ):
     """
     Create the spawn agents node that creates IssueAgents and ExplorerAgent.
@@ -157,7 +158,6 @@ def create_spawn_agents_node(
         inventory_toolkit: InventoryToolkit for accessing inventory
         decision_llm: LLM for generating proposals
         history_toolkit: HistoryToolkit for accessing tools
-        turn_number_ref: Mutable {"current": int} carrying the current turn for lazy decay
 
     Returns:
         Node function for the graph
@@ -463,7 +463,7 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, 
 
 
 def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit,
-                            memory_toolkit: MemoryToolkit, turn_number_ref: dict):
+                            memory_toolkit: MemoryToolkit):
     """
     Create the issue closing node that identifies and removes resolved issues.
 
@@ -474,13 +474,11 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit,
         decision_llm: The LLM to use for analysis
         history_toolkit: HistoryToolkit for accessing recent game history
         memory_toolkit: MemoryToolkit for removing resolved issues
-        turn_number_ref: Mutable {"current": int} carrying the current turn for
-            lazy importance decay (must match the spawn node — see #20)
 
     Returns:
         Node function for the graph
     """
-    def close_issues_node(state: DecisionState) -> DecisionState:
+    async def close_issues_node(state: DecisionState) -> dict:
         """
         Issue closing phase: Identify and remove resolved issues from memory.
         """
@@ -501,7 +499,7 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit,
         # must not throw away a usable command (see #1). Downstream consumers
         # all treat a None response as "nothing closed this turn".
         try:
-            issue_closed_response, pending_closures = issue_closer.analyze(
+            issue_closed_response, pending_closures = await issue_closer.analyze(
                 game_response=zork_response.Response,
                 location=zork_response.LocationName or "Unknown",
                 score=zork_response.Score,
@@ -509,7 +507,7 @@ def create_close_issues_node(decision_llm, history_toolkit: HistoryToolkit,
                 decision_llm=decision_llm,
                 history_toolkit=history_toolkit,
                 memory_toolkit=memory_toolkit,
-                current_turn=turn_number_ref.get("current"),
+                current_turn=state.get("turn_number"),
             )
         except Exception as e:
             logger.error(f"CLOSE ISSUES failed, skipping this turn: {e}", exc_info=True)
@@ -543,7 +541,7 @@ def create_observe_node(decision_llm, history_toolkit: HistoryToolkit, memory_to
     Returns:
         Node function for the graph
     """
-    def observe_node(state: DecisionState) -> DecisionState:
+    async def observe_node(state: DecisionState) -> dict:
         """
         Observation phase: Identify new strategic issues from game response.
         """
@@ -564,7 +562,7 @@ def create_observe_node(decision_llm, history_toolkit: HistoryToolkit, memory_to
         # command already chosen (see #1). persist_node and GameSession both
         # handle a None observer_response as "no new issue this turn".
         try:
-            observer_response = observer.observe(
+            observer_response = await observer.observe(
                 game_response=zork_response.Response,
                 location=zork_response.LocationName or "Unknown",
                 score=zork_response.Score,
@@ -585,19 +583,18 @@ def create_observe_node(decision_llm, history_toolkit: HistoryToolkit, memory_to
     return observe_node
 
 
-def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_number_ref: dict):
+def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit):
     """
     Create the persistence node that stores strategic issues and updates inventory.
 
     Args:
         memory_toolkit: MemoryToolkit for storing strategic issues
         inventory_toolkit: InventoryToolkit for tracking inventory
-        turn_number_ref: Mutable dict with current turn number
 
     Returns:
         Node function for the graph
     """
-    def persist_node(state: DecisionState) -> DecisionState:
+    def persist_node(state: DecisionState) -> dict:
         """
         Persistence phase: Store strategic issues identified by Observer Agent.
         """
@@ -634,7 +631,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
                 was_added = memory_toolkit.add_memory(
                     content=observer_response.remember,
                     importance=observer_response.rememberImportance or 500,
-                    turn_number=turn_number_ref["current"],
+                    turn_number=state.get("turn_number"),
                     # Empty, not "Unknown": a memory anchored to a fake room
                     # sends every later IssueAgent pathfinding to nowhere (#7).
                     location=zork_response.LocationName or "",
@@ -674,7 +671,7 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
         if api_inventory is not None:
             try:
                 inventory_toolkit.state.sync_with_game(
-                    api_inventory, turn_number_ref["current"]
+                    api_inventory, state.get("turn_number")
                 )
                 logger.info(
                     f"Inventory synced from the game itself "
@@ -716,10 +713,10 @@ def create_persist_node(memory_toolkit: MemoryToolkit, inventory_toolkit, turn_n
 
                 # Apply changes to inventory state
                 for item in changes.items_added:
-                    inventory_toolkit.state.add_item(item, turn_number_ref["current"])
+                    inventory_toolkit.state.add_item(item, state.get("turn_number"))
 
                 for item in changes.items_removed:
-                    inventory_toolkit.state.remove_item(item, turn_number_ref["current"])
+                    inventory_toolkit.state.remove_item(item, state.get("turn_number"))
 
                 current_inventory = inventory_toolkit.state.get_items()
                 logger.info(f"Current inventory ({len(current_inventory)} items): {current_inventory}")
@@ -791,7 +788,6 @@ def create_decision_graph(
     memory_toolkit: MemoryToolkit,
     mapper_toolkit: MapperToolkit,
     inventory_toolkit,
-    turn_number_ref: dict
 ):
     """
     Build the decision-making graph.
@@ -805,7 +801,6 @@ def create_decision_graph(
         history_toolkit: History toolkit for tool execution
         memory_toolkit: Memory toolkit for persistence and issue agent spawning
         mapper_toolkit: Mapper toolkit for ExplorerAgent spawning
-        turn_number_ref: Mutable reference to current turn number
 
     Returns:
         Compiled LangGraph
@@ -818,7 +813,6 @@ def create_decision_graph(
         mapper_toolkit,
         inventory_toolkit,
         history_toolkit,
-        turn_number_ref,
     ))
     graph.add_node("spawn_agents", create_spawn_agents_node(
         memory_toolkit,
@@ -826,13 +820,12 @@ def create_decision_graph(
         inventory_toolkit,
         decision_llm,
         history_toolkit,
-        turn_number_ref,
     ))
     graph.add_node("decide", create_decision_node(decision_chain))
     graph.add_node("close_issues", create_close_issues_node(
-        decision_llm, history_toolkit, memory_toolkit, turn_number_ref))
+        decision_llm, history_toolkit, memory_toolkit))
     graph.add_node("observe", create_observe_node(decision_llm, history_toolkit, memory_toolkit))
-    graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit, turn_number_ref))
+    graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit))
 
     # Define flow
     # Flow (#23, #26):

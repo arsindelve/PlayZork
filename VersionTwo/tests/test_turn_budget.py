@@ -125,14 +125,16 @@ def _analyze_with_stub_llm(monkeypatch, state, closed_ids, current_turn=None):
         reasoning="solved",
     )
     # issue_closed_agent imports invoke_with_retry inside the method body.
-    monkeypatch.setattr("llm_utils.invoke_with_retry", lambda *args, **kwargs: response)
+    async def _stub(*args, **kwargs):
+        return response
+    monkeypatch.setattr("llm_utils.ainvoke_with_retry", _stub)
 
     decision_llm = SimpleNamespace(
         with_structured_output=lambda schema: SimpleNamespace(
             with_config=lambda **kwargs: None
         )
     )
-    return agent.analyze(
+    return asyncio.run(agent.analyze(
         game_response="Opened.",
         location="West Of House",
         score=0,
@@ -141,7 +143,7 @@ def _analyze_with_stub_llm(monkeypatch, state, closed_ids, current_turn=None):
         history_toolkit=history_toolkit,
         memory_toolkit=memory_toolkit,
         current_turn=current_turn,
-    )
+    ))
 
 
 def test_analyze_stages_closures_without_writing(monkeypatch):
@@ -165,13 +167,13 @@ def test_persist_applies_staged_closures():
     persist = create_persist_node(
         SimpleNamespace(state=memory_state, add_memory=lambda **kwargs: True),
         SimpleNamespace(state=FakeInventoryState()),
-        {"current": 5},
     )
     persist({
         "game_response": SimpleNamespace(
             Response="Opened.", LocationName="West Of House", Score=0, Moves=1
         ),
-        "player_command": "",  # skip the inventory LLM
+        "player_command": "",
+        "turn_number": 5,  # skip the inventory LLM
         "decision": SimpleNamespace(command="LOOK"),
         "observer_response": None,
         "pending_closures": [{"id": 1, "display": "[ID:1, 600/1000] open the mailbox"}],
@@ -223,13 +225,13 @@ def test_persist_skips_closures_that_fail_to_write():
     persist = create_persist_node(
         SimpleNamespace(state=memory_state, add_memory=lambda **kwargs: True),
         SimpleNamespace(state=FakeInventoryState()),
-        {"current": 5},
     )
     persist({
         "game_response": SimpleNamespace(
             Response="Opened.", LocationName="West Of House", Score=0, Moves=1
         ),
         "player_command": "",
+        "turn_number": 5,
         "decision": SimpleNamespace(command="LOOK"),
         "observer_response": None,
         "pending_closures": [
@@ -286,13 +288,13 @@ def test_persist_refuses_a_closure_without_display():
     persist = create_persist_node(
         SimpleNamespace(state=memory_state, add_memory=lambda **kwargs: True),
         SimpleNamespace(state=FakeInventoryState()),
-        {"current": 5},
     )
     persist({
         "game_response": SimpleNamespace(
             Response="ok", LocationName="West Of House", Score=0, Moves=1
         ),
         "player_command": "",
+        "turn_number": 5,
         "decision": SimpleNamespace(command="LOOK"),
         "observer_response": None,
         "pending_closures": [{"id": 5, "display": None}],

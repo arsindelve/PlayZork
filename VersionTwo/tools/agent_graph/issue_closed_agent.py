@@ -39,7 +39,7 @@ class IssueClosedAgent:
         """Initialize the IssueClosedAgent"""
         self.logger = logging.getLogger(__name__)
 
-    def analyze(
+    async def analyze(
         self,
         game_response: str,
         location: str,
@@ -137,8 +137,12 @@ class IssueClosedAgent:
         analysis_chain = decision_llm.with_structured_output(IssueClosedResponse)
 
         # Invoke with timeout and retry
-        from llm_utils import invoke_with_retry
-        response = invoke_with_retry(
+        # Async so the branch genuinely yields while waiting, and so a
+        # timeout CANCELS the request. The sync path abandons an in-flight
+        # call and submits another, adding load to the server that was
+        # already slow (#27).
+        from llm_utils import ainvoke_with_retry
+        response = await ainvoke_with_retry(
             analysis_chain.with_config(
                 run_name=f"IssueClosedAgent: {location}"
             ),

@@ -37,7 +37,7 @@ class ObserverAgent:
         self.rememberImportance = None
         self.item = None
 
-    def observe(
+    async def observe(
         self,
         game_response: str,
         location: str,
@@ -111,11 +111,13 @@ class ObserverAgent:
 
         # Use structured output to get ObserverResponse
         # Function-local import: tests monkeypatch llm_utils.invoke_with_retry
-        from llm_utils import invoke_with_retry
+        # Async: a timeout must cancel the request rather than leak the
+        # thread and retry alongside it (#26, #27).
+        from llm_utils import ainvoke_with_retry
         observation_chain = decision_llm.with_structured_output(ObserverResponse)
 
         # Invoke with timeout and retry
-        response = invoke_with_retry(
+        response = await ainvoke_with_retry(
             observation_chain.with_config(
                 run_name=f"Observer Agent: {location}"
             ),

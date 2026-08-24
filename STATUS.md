@@ -1019,3 +1019,63 @@ against a saturated single server, **reducing the number of calls (#25) is the
 dominant lever**, not reordering them. Moving summaries off the critical path
 still shortens the turn, but on a saturated server it relocates work rather
 than removing it.
+
+
+# Development Log: 2026-08-24 — M4 continued, and the finding that reframes it
+
+## Shipped
+
+- **#28** (`9b3f621`) — prompt JSON examples. Narrower than filed: only the plain-string path was over-escaped; the template-rendered prompts were already correct. Introduced by my own #19 rewrite.
+- **#23 + #26** (`5d97771`, follow-up) — the graph fans out; nodes return partial state; `build_context` hoisted; `close_issues`/`observe` async; `turn_number` moved from a mutable side-channel dict into graph state.
+- Tests: 496 → 506.
+
+## THE FINDING: this machine's Ollama has no useful parallelism at all
+
+Benchmarked directly, warm model, identical prompts:
+
+| concurrency | wall | per-call | throughput | speedup |
+|---|---|---|---|---|
+| 1 | 3.8s | 3.8s | 0.26/s | 1.00x |
+| 2 | 7.7s | 5.7s | 0.26/s | 0.99x |
+| 4 | 15.3s | 9.6s | 0.26/s | **0.99x** |
+
+At ~1700-token prompts (realistic for this system). The small-prompt run is identical: 0.79 / 0.78 / 0.78 / 0.76 req/s at 1 / 2 / 4 / 8.
+
+**Throughput is flat. Concurrency buys nothing; it only divides the same tokens/sec across more requests, so per-call latency scales linearly.**
+
+### What this invalidates
+
+- **#27 understates it.** The audit measured "~1.9x, not 4x" and read that as *degraded* parallelism. It is not degraded — it is **absent**. The 1.9x was measurement overlap of queued requests, not concurrent service.
+- **#23/#26 cannot produce a throughput win on this hardware**, and the measurement says so: turns 1–2 improved (49→29s, 87→68s) but turns 3–4 got *worse* (62→72s, 68→78s), because the diamond raises peak in-flight requests from 6 to 8 and mean per-call latency from 24.8s to **31.1s**. Net over four turns: 7%, which is inside the noise.
+- **#25's win was real precisely because it removed calls** (12 → 6), not because it reordered them.
+
+### What actually governs turn time
+
+Turn time = total tokens processed per turn ÷ ~fixed tokens/sec. Nothing else. The levers are:
+
+1. **Fewer LLM calls** — #25 did this, and it is the only lever that has produced a measured win.
+2. **Shorter prompts** — the `BIG_PICTURE_HISTORY_TURNS` bound, and anything else that trims history-shaped content.
+3. **Fewer output tokens** — untouched so far; structured outputs are small but proposals and reasoning are not.
+4. **Different serving** — vLLM with real continuous batching, or a smaller model.
+
+**For the thesis this is a hardware constraint that belongs in the methodology, not a bug.** `score@wall-clock` on this rig is a measure of total tokens per turn. Any architecture comparison must either report token counts alongside wall-clock, or run on serving that actually batches — otherwise the multi-agent arm is penalised for token volume in a way that says nothing about the architecture.
+
+## Was the #23/#26 refactor still worth doing?
+
+Yes, but for correctness rather than speed, and the write-up should say so:
+
+- The graph now expresses the real dependency structure, which is what #26 asked for and what "I wanted to use LangGraph for fun and learning" was supposed to deliver. It was previously a straight line that would have behaved identically as sequential awaits.
+- `close_issues` and `observe` are async, so a timeout **cancels** the request instead of leaking a thread and retrying alongside it (#27's amplifier).
+- Nodes return only their own keys, which makes the disjointness of their writes explicit and checkable.
+- It positions the system to benefit immediately if serving is ever changed.
+
+## Four for four
+
+Every substantial refactor this week has had a defect that the unit suite missed and a live run caught:
+
+1. M2 — inventory analyzer inverted a TAKE into a removal (prompt × model interaction).
+2. #25 — deleted import left the Observer silently disabled; #1's containment hid it.
+3. #23/#26 — separate fan-in edges are not a join; `persist` ran twice per turn.
+4. #26 follow-up — `create_decision_graph()` signature change crashed on startup; **no test constructed the real `AdventurerService`**, so 504 tests passed against code that could not boot.
+
+Each of the four was invisible-by-design rather than loud. A wiring test that constructs the real service now exists (#4 above), and the standing rule stands: **run the thing before believing the suite**.

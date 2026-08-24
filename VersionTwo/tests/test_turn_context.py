@@ -160,7 +160,7 @@ def test_the_graph_no_longer_has_a_research_node():
     graph = dg.create_decision_graph(
         decision_chain=object(), decision_llm=object(),
         history_toolkit=stub, memory_toolkit=stub, mapper_toolkit=stub,
-        inventory_toolkit=stub, turn_number_ref={"current": 0},
+        inventory_toolkit=stub,
     )
     nodes = set(graph.get_graph().nodes)
     assert "research" not in nodes
@@ -235,12 +235,12 @@ def test_every_agent_actually_runs_end_to_end(monkeypatch):
     asyncio.run(IssueAgent(memory).propose(decision_llm=llm, context=ctx))
     asyncio.run(ExplorerAgent("West Of House", ["NORTH"], [], 1).propose(decision_llm=llm, context=ctx))
     asyncio.run(InteractionAgent().propose(decision_llm=llm, context=ctx))
-    ObserverAgent().observe(
+    asyncio.run(ObserverAgent().observe(
         game_response="You are here.", location="West Of House", score=0, moves=1,
         decision_llm=llm,
         memory_toolkit=SimpleNamespace(state=SimpleNamespace(get_top_memories=lambda **k: [])),
         context=ctx,
-    )
+    ))
 
     # Four agents, four calls — no research round-trips left.
     assert len(calls) == 4, calls
