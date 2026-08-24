@@ -575,6 +575,57 @@ None of these were visible in Zork.
   suppressions fired across 16 turns. Planetfall reproduced it vertically:
   `GO UP → GO UP → GO DOWN`.
 
+### STATE OF PLAY, end of 2026-08-24
+
+**Three consecutive Planetfall escapes** (pods at turns 13, 12, 12; score 3
+each) on local `qwen2.5:14b`. First non-zero scores in the project. 38 commits,
+tests 49 -> 783.
+
+Twelve behavioural changes shipped today, in two batches: six defects Planetfall
+exposed that Zork could not (InteractionAgent had no EV; its repeat multiplier
+was discarded; the game clock was parsed and never read; the objective was
+"Complete the mission"; compass-only directions on a ship that uses
+port/starboard; movement had no inverse and `GO WEST`/`WEST`/`W` were three
+keys), then five more on memory and routing (zero-EV filter, narrowed after it
+nearly cost an escape; goal-directed-return exemption; routing-only reverse
+edges; issue target resolution; transcript-contradiction closure guard).
+
+#### What remains, in priority order
+
+1. **`unproductive` has no invalidation on world change.** All three escapes
+   were won by an EV-0.0 override: `WEST` is marked unproductive when tried
+   before the emergency, the explosion opens the bulkhead, and nothing clears
+   the record. It works only because the arbiter reasons past it. The recency
+   window is the sole eventual escape hatch and it is slower than the
+   emergency. **Do not fix this by mechanising the arbiter's override away** --
+   that is precisely what the narrowed filter had to walk back.
+2. **Re-run the single-shot control.** No comparison currently in this file
+   survives today: every number predates ~12 behavioural changes. Nothing
+   should be quoted across that boundary, including figures reported earlier
+   today.
+3. **The landmark vocabulary is Zork-shaped.** Returns `['corridor']` on a
+   spaceship; `pod`, `reactor`, `airlock`, `deck` all absent. It runs on three
+   backends. Make it per-game, derive it from the backend's object list, or
+   delete it.
+4. **`agent_win_counts` mis-attributes.** Observed pf6 turn 4: the arbiter
+   credited ExplorerAgent (EV 47.5) while IssueAgent had EV 54. Harmless today,
+   wrong the moment attribution becomes a thesis metric.
+5. **Still no integration coverage of the live game loop.** Today added five
+   more instances of a green suite over broken behaviour.
+6. **Zork's generation gap** is untouched -- the frontier->issue idea stays at
+   the bottom, since Planetfall showed it was not the bottleneck.
+
+#### The pattern worth auditing deliberately
+
+Ten of today's defects were the same shape: **a rule stated in prose that
+nothing enforced.** Worth searching for on purpose rather than discovering one
+run at a time.
+
+With one boundary, learned the hard way: mechanise rules that are
+world-INDEPENDENT (undo detection reverses progress regardless of state), never
+rules that assume a STATIC WORLD (already-tried is only true until the world
+moves). Applying the second nearly deleted the winning move from pf5's ballot.
+
 ### Pre-register arm A as an ablation
 
 Add **`+goal_agent`** as a fourth experimental arm alongside lean single-shot / full single-shot / multi-agent. That way goal-directed *proposal generation* is measured rather than quietly patched in, and the gap between multi-agent and multi-agent+goal_agent is exactly the size of the generation deficit described above.

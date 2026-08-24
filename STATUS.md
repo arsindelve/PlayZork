@@ -1324,3 +1324,57 @@ cost both escapes.
   Lobby, it routes the agent to where it already stands. Both runs fell back to
   inventing `RETURN TO DECK NINE`, which Planetfall's parser accepts and Zork's
   would not. The target must be extracted, not assumed to be the sighting room.
+
+
+## pf7: the memory system contributed for the first time (3rd escape)
+
+`pf7-20260824` reached the Escape Pod at **turn 12**, score 3. Three
+consecutive escapes now (turns 13, 12, 12), all on local `qwen2.5:14b`.
+
+**What changed.** The closure guard refused three closures, so the escape-pod
+issue survived the whole approach instead of being closed on turn 2 or 3. At
+turn 7 both IssueAgents proposed `DOWN` at confidence 90 and **the arbiter
+chose them over the ExplorerAgent's `GO UP`**:
+
+```
+[IssueAgent ID:46] Navigation direction: DOWN     <- target resolved + reverse-edge route
+[ExplorerAgent]    'GO UP'  (conf 75)
+[IssueAgent ID:46] 'DOWN'   (conf 90)
+DECISION MADE: DOWN
+REASON: Chose IssueAgent #1 (importance 531, confidence 90, EV 47.8)
+```
+
+That is the first decision in this project driven by tracked memory. It also
+confirms the goal-directed-return exemption in live play: `DOWN` reverses turn
+6's `GO UP` and was correctly NOT demoted as backtracking, because it is the
+next step toward a tracked issue.
+
+All five previously-broken links now carry load:
+
+| link | before | now |
+|---|---|---|
+| issue survives | closed turn 2-3 | open, 3 closures refused |
+| target resolution | routed to where it stood | Deck Nine |
+| return route | NO PATH | DOWN |
+| undo demotion | zeroed the return | exempt as a route step |
+| IssueAgent | `nothing` @ conf 0 | `DOWN` @ conf 90, chosen |
+
+**What did NOT change, stated plainly.** Memory drove the POSITIONING, not the
+escape. The final move was again an EV-0.0 override:
+
+```
+[ExplorerAgent]    'GO WEST'                   conf 95, EV 0.0   <- chosen
+[InteractionAgent] 'open escape pod bulkhead'  conf 80, EV 80
+REASON: "...because the recent explosion has caused the door to slide open"
+```
+
+Three escapes, three EV-0.0 overrides, each with a positive-EV alternative on
+the same ballot. The architecture now gets the agent to the right room and
+keeps it there; the escape itself still depends on the arbiter reasoning past a
+stale suppression that the world model cannot invalidate.
+
+**Root defect behind all three:** `unproductive` encodes "the same command, in
+the same room, with nothing changed since, produces the same response" and has
+no invalidation when the world changes. An explosion opening a bulkhead
+violates the premise. The recency window is the only thing that eventually
+clears it, and it is slower than the emergency.
