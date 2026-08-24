@@ -114,10 +114,20 @@ class IssueAgent:
         current_location = context.location
         current_game_response = context.game_text
 
+        # Where the issue actually points, which is not always where it was
+        # noticed. "Ensign Blather at Reactor Lobby — return to Deck Nine as
+        # ordered" was navigated toward Reactor Lobby, the room we were already
+        # standing in, so the route was NO PATH and this agent had nothing to
+        # offer while the escape pod sat two rooms away.
+        from tools.memory.issue_target import resolve_issue_target
+        self.target_location = resolve_issue_target(
+            self.issue_content, self.location,
+            getattr(context, "known_locations", None)) or self.location
+
         # Everything the research phase used to fetch, fetched in code.
-        navigation_direction = context.direction_to(self.location)
+        navigation_direction = context.direction_to(self.target_location)
         inventory_summary = context.inventory_summary
-        self.research_context = context.research_context_for(self.location)
+        self.research_context = context.research_context_for(self.target_location)
 
         logger.info(f"[IssueAgent ID:{self.memory.id}] Navigation direction: {navigation_direction}")
         logger.info(f"[IssueAgent ID:{self.memory.id}] Inventory: {inventory_summary}")
@@ -132,8 +142,8 @@ class IssueAgent:
         logger.info(f"[IssueAgent ID:{self.memory.id}] Calling proposal_chain.invoke()...")
 
         # Calculate location status for spatial reasoning
-        if self.location and is_known_location(current_location):
-            issue_loc_normalized = self.location.strip().lower()
+        if self.target_location and is_known_location(current_location):
+            issue_loc_normalized = self.target_location.strip().lower()
             current_loc_normalized = current_location.strip().lower()
             location_status = "SAME LOCATION" if issue_loc_normalized == current_loc_normalized else "DIFFERENT LOCATION"
         else:
@@ -145,7 +155,7 @@ class IssueAgent:
             ),
             {
                 "issue": self.issue_content,
-                "issue_location": self.location or "Unknown",
+                "issue_location": self.target_location or "Unknown",
                 "current_location": current_location,
                 "location_status": location_status,
                 "navigation_direction": navigation_direction,
@@ -182,11 +192,11 @@ class IssueAgent:
                 self.confidence = 70
                 self.reason = (
                     f"Cannot act on this issue from {current_location}; it is "
-                    f"at {self.location}. {step} is the next step on the known "
+                    f"at {self.target_location}. {step} is the next step on the known "
                     f"route there.")
                 logger.info(
                     f"[IssueAgent ID:{self.memory.id}] Declined with no action; "
-                    f"substituting route step {step} toward {self.location}")
+                    f"substituting route step {step} toward {self.target_location}")
 
         # Log proposal summary
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

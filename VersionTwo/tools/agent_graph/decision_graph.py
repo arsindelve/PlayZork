@@ -18,6 +18,7 @@ from tools.mapping.directions import (
     find_mentioned_directions,
     normalize_direction,
 )
+from tools.memory.issue_target import resolve_issue_target
 from tools.mapping.locations import UNKNOWN_LOCATION, is_known_location
 from langchain_core.runnables import Runnable
 from .issue_agent import IssueAgent
@@ -137,6 +138,25 @@ def create_build_context_node(
             inventory_toolkit=inventory_toolkit,
             issue_locations=[m.location for m in memories_sorted if m.location],
         )
+
+        # Precompute routes to where each issue actually POINTS, which is not
+        # always where it was noticed: "Ensign Blather at Reactor Lobby —
+        # return to Deck Nine" was routed to Reactor Lobby, the room the agent
+        # was already standing in. Done as a second pass because it needs
+        # `known_locations`, which the first pass produces.
+        targets = [
+            resolve_issue_target(m.content, m.location, context.known_locations)
+            for m in memories_sorted
+        ]
+        extra = [t for t in targets if t and t.strip().casefold() not in context.directions]
+        if extra:
+            context = build_turn_context(
+                game_response=state["game_response"],
+                history_toolkit=history_toolkit,
+                mapper_toolkit=mapper_toolkit,
+                inventory_toolkit=inventory_toolkit,
+                issue_locations=[m.location for m in memories_sorted if m.location] + extra,
+            )
         return {"turn_context": context, "memories": memories_sorted}
 
     return build_context_node
@@ -926,6 +946,36 @@ def _apply_pending_closures(state, memory_toolkit, logger) -> None:
         # Anything not closed stays open and is simply re-detected next turn.
         pending_closures = state.get("pending_closures") or []
         issue_closed_response = state.get("issue_closed_response")
+
+        # A turn that changed nothing cannot have resolved anything.
+        #
+        # The IssueClosedAgent closed the ESCAPE POD — the objective — in four
+        # of five Planetfall runs, always immediately after the turn-2 refusal
+        # "Why open the door to the emergency escape pod if there's no
+        # emergency?". It read a TEMPORAL refusal ("not yet") as resolution
+        # ("done"). pf4 escaped with every issue closed, so the memory system
+        # contributed nothing to the only successes this project has had.
+        #
+        # This is not fixable by wording. The closure prompt already parses the
+        # acceptance criteria, says "ONLY close if the acceptance criteria is
+        # SATISFIED", and carries explicit DO-NOT-CLOSE examples; a 14B model
+        # closed it anyway. So the guard is a deterministic precondition rather
+        # than an instruction.
+        #
+        # Same asymmetry as everywhere else in the world model: a wrongly
+        # closed issue silently removes the objective and nothing re-adds it,
+        # while a wrongly kept one costs a little prompt space and decays. The
+        # cost of being conservative is at most a one-turn delay, since the
+        # agent re-evaluates closure every turn.
+        context = state.get("turn_context")
+        if pending_closures and context is not None and not context.accomplished_something:
+            logger.info(
+                f"DEFERRED {len(pending_closures)} closure(s): this turn changed "
+                f"nothing (no move, no score, no inventory change), so nothing "
+                f"can have become resolved by it"
+            )
+            pending_closures = []
+
         if pending_closures:
             logger.info("\n" + "-" * 80)
             logger.info(f"APPLYING {len(pending_closures)} STAGED ISSUE CLOSURE(S)")

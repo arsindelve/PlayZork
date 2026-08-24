@@ -165,6 +165,15 @@ class TurnContext:
     # judged against. Planetfall's ship explodes; Zork reports 0, so this
     # renders only where it means something.
     game_time: Optional[int] = None
+
+    # Did THIS turn actually change the world? Score moved, we moved, or the
+    # inventory changed. Used to gate issue closure: nothing can newly become
+    # resolved by a turn that accomplished nothing (see _apply_pending_closures).
+    accomplished_something: bool = False
+
+    # Every room name the map knows, for resolving an issue's target location
+    # out of its text. Lower-cased.
+    known_locations: List[str] = field(default_factory=list)
     frontier: List[str] = field(default_factory=list)
 
     # Commands that SUCCEEDED in this room (changed something). Used to spot a
@@ -530,6 +539,50 @@ def build_turn_context(
         return [f"{room} (on the map, never explored from)" for room in unexplored] + \
                [f"{phrase} (named nearby, never entered)" for phrase in named]
     context.frontier = safe("frontier", _frontier, [])
+
+    # Did this turn change anything? The backend answers the movement half
+    # authoritatively (PreviousLocationName differs only on a real move), the
+    # score half is arithmetic, and inventory is compared against what the
+    # toolkit still holds from last turn — persist reconciles it later, so at
+    # this point it is genuinely the previous state.
+    def _accomplished():
+        previous_location = getattr(game_response, "PreviousLocationName", None)
+        api_inventory = getattr(game_response, "Inventory", None)
+        turns = history_toolkit.state.get_recent_turns(2)
+
+        moved = bool(previous_location and location
+                     and previous_location.strip().casefold()
+                     != location.strip().casefold())
+        scored = bool(turns) and context.score > max(t.score for t in turns)
+        changed_inventory = False
+        if api_inventory is not None:
+            held = safe("previous inventory",
+                        lambda: inventory_toolkit.state.get_items(), [])
+            changed_inventory = ({i.strip().casefold() for i in api_inventory}
+                                 != {str(i).strip().casefold() for i in held})
+
+        # PERMISSIVE WHEN UNDECIDABLE. With none of the three signals available
+        # — a backend that reports no previous location, no inventory, and no
+        # history yet — we cannot tell, and "cannot tell" must not become
+        # "never close". The guard exists to stop a confident wrong closure,
+        # not to introduce a second failure mode where issues accumulate
+        # forever.
+        decidable = bool(previous_location) or bool(turns) or api_inventory is not None
+        if not decidable:
+            return True
+        return moved or scored or changed_inventory
+    context.accomplished_something = safe("accomplished", _accomplished, True)
+
+    def _known_locations():
+        names = set()
+        for t in mapper_toolkit.state.get_all_transitions():
+            for name in (t.from_location, t.to_location):
+                if name and name.strip().upper() != "BLOCKED":
+                    names.add(name.strip())
+        if location:
+            names.add(location.strip())
+        return sorted(names, key=len, reverse=True)
+    context.known_locations = safe("known locations", _known_locations, [])
 
     if is_known_location(location):
         context.exits = safe("exits", lambda: mapper_toolkit.state.get_exits_from(location), [])
