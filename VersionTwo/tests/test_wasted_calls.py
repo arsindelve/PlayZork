@@ -120,3 +120,95 @@ def test_different_issues_have_different_signatures():
     context = TurnContext(location="Clearing", game_text="", score=0, moves=1)
 
     assert _blocked_signature(_memory(1), context) != _blocked_signature(_memory(2), context)
+
+
+# ---------------------------------------------------------------------------
+# 3. The explorer chooses on evidence, not a fixed cardinal order
+# ---------------------------------------------------------------------------
+
+ALL_DIRECTIONS = ["NORTH", "SOUTH", "EAST", "WEST", "NORTHEAST", "NORTHWEST",
+                  "SOUTHEAST", "SOUTHWEST", "UP", "DOWN"]
+
+
+def _explorer(mentioned=None, game_exits=None, unexplored=None):
+    from tools.agent_graph.explorer_agent import ExplorerAgent
+
+    return ExplorerAgent("Somewhere", unexplored or list(ALL_DIRECTIONS),
+                         mentioned or [], 1, game_exits=game_exits)
+
+
+def test_the_games_own_exit_list_beats_the_cardinal_default():
+    """Up A Tree has one exit. The old fixed order picked NORTH, into nothing;
+    over 26 turns that northward bias walked the agent into the forest and it
+    never came back — and the explorer won 64% of contested turns, so its bias
+    was effectively the agent's policy."""
+    assert _explorer(game_exits=["DOWN"]).best_direction == "DOWN"
+
+
+def test_a_mentioned_direction_confirmed_by_the_game_wins():
+    assert _explorer(mentioned=["EAST"], game_exits=["EAST", "NORTH"]).best_direction == "EAST"
+
+
+def test_a_mentioned_direction_still_counts_without_a_game_exit_list():
+    """Backends that report no exits must keep the old description-based
+    behaviour rather than degrading."""
+    assert _explorer(mentioned=["SOUTH"]).best_direction == "SOUTH"
+
+
+def test_a_direction_the_game_omits_is_ranked_down_not_banned():
+    """The exits array is not a perfect oracle — North of House advertises an
+    exit that is then refused — so it ranks candidates rather than
+    restricting them."""
+    explorer = _explorer(game_exits=["UP"], unexplored=["NORTH", "UP"])
+
+    assert explorer.best_direction == "UP"
+    assert "NORTH" in explorer.unexplored_directions, "must remain selectable"
+
+
+def test_choice_is_deterministic_for_reproducible_runs():
+    first = _explorer(game_exits=["EAST", "WEST"]).best_direction
+    second = _explorer(game_exits=["WEST", "EAST"]).best_direction
+
+    assert first == second
+
+
+# ---------------------------------------------------------------------------
+# 4. The rolling summaries are bounded
+# ---------------------------------------------------------------------------
+
+
+def test_summaries_are_truncated_not_merely_asked_to_be_short():
+    """Both feed every agent prompt every turn, so their length is multiplied
+    by the per-turn call count. Measured over 26 turns the recent summary grew
+    140 -> 1334 chars despite covering a fixed window."""
+    from config import LONG_SUMMARY_MAX_CHARS
+    from tools.history.history_summarizer import _cap
+
+    oversized = "CURRENT STATE:\nLocation: X\n" + "\n".join(
+        f"- room {i}: notes" for i in range(300))
+
+    capped = _cap(oversized, LONG_SUMMARY_MAX_CHARS, "long-running summary")
+
+    assert len(capped) <= LONG_SUMMARY_MAX_CHARS + 40
+    assert capped.startswith("CURRENT STATE:"), "the head carries current state"
+    assert "truncated" in capped
+
+
+def test_a_summary_within_budget_is_left_alone():
+    from tools.history.history_summarizer import _cap
+
+    text = "CURRENT STATE:\nLocation: West Of House"
+    assert _cap(text, 2500, "x") == text
+
+
+def test_the_long_summary_prompt_states_what_to_drop_first():
+    """A budget without a priority order invites the model to drop whatever is
+    convenient — including the unsolved puzzles that matter most."""
+    from adventurer.prompt_library import PromptLibrary
+
+    prompt = PromptLibrary.get_long_running_summary_system_prompt()
+
+    flat = " ".join(prompt.split())
+    assert "LENGTH BUDGET" in flat
+    assert "NEVER drop current state, inventory, or unsolved puzzles" in flat
+    assert "resolved puzzles first" in flat

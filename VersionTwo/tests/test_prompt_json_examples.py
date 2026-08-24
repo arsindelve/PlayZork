@@ -82,6 +82,7 @@ def test_template_prompt_examples_are_valid_json_after_rendering():
     ]).format_messages(
         locationName="West Of House", score=0, moves=1, game_response="r",
         research_context="c", agent_proposals="p",
+        score_trajectory="unchanged for 3 turns", frontier="  - Behind House",
     )
 
     for message in rendered:

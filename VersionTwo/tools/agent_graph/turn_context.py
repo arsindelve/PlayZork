@@ -90,10 +90,22 @@ class TurnContext:
     # target location (casefolded) -> next step, "NO PATH", or "ALREADY THERE"
     directions: Dict[str, str] = field(default_factory=dict)
 
+    # Directions the GAME says exist here, decoded from its exits array (#30).
+    # Not a perfect oracle — North of House reports an exit that is refused —
+    # so it is used to RANK candidates, never to restrict them.
+    game_exits: List[str] = field(default_factory=list)
+
     # object -> commands the GAME says it will accept for it, straight from
     # the backend (#30). Authoritative, so the InteractionAgent no longer has
     # to guess what is interactable by pattern-matching English (#16).
     available_actions: Dict[str, List[str]] = field(default_factory=dict)
+
+    # Turns since the score last moved, and the frontier of places seen but
+    # not entered. Both feed the arbiter, which had no notion of the objective
+    # (Milestone 5b): it ranked proposals with no idea whether any of them
+    # advanced the game.
+    turns_since_score_change: int = 0
+    frontier: List[str] = field(default_factory=list)
 
     # Commands that SUCCEEDED in this room (changed something). Used to spot a
     # proposal that would undo one of them.
@@ -141,6 +153,27 @@ class TurnContext:
             if commands:
                 lines.append(f"  {obj}: {', '.join(commands)}")
         return "\n".join(lines) or "Everything here has already been tried."
+
+    @property
+    def score_trajectory(self) -> str:
+        """How the score is moving, phrased for a prompt.
+
+        A bare number tells the arbiter nothing; "unchanged for 22 turns" tells
+        it the current line of play is not working.
+        """
+        if self.turns_since_score_change <= 0:
+            return "the score moved this turn — that line of play is working"
+        if self.turns_since_score_change < 5:
+            return f"unchanged for {self.turns_since_score_change} turns"
+        return (f"UNCHANGED FOR {self.turns_since_score_change} TURNS — "
+                f"the current approach is not scoring, prefer a change of direction")
+
+    @property
+    def frontier_summary(self) -> str:
+        """Rooms reached but not yet explored from, rendered for a prompt."""
+        if not self.frontier:
+            return "Nothing on the map is unexplored — everything reached has been left from."
+        return "\n".join(f"  - {room}" for room in self.frontier)
 
     def undoes_recent_progress(self, command: Optional[str]) -> str:
         """The command this proposal would undo, or "" if none.
@@ -235,6 +268,16 @@ def build_turn_context(
         moves=game_response.Moves,
     )
 
+    # Decode the backend's exits array into direction names (#30).
+    _EXIT_CODES = {0: "NORTH", 1: "SOUTH", 2: "EAST", 3: "WEST",
+                   10: "UP", 11: "DOWN"}
+    api_exits = getattr(game_response, "Exits", None)
+    if api_exits:
+        context.game_exits = [
+            _EXIT_CODES[int(code)] for code in api_exits
+            if isinstance(code, int) and int(code) in _EXIT_CODES
+        ]
+
     # The game reports exactly which commands it will accept for each object
     # in this room (#30). Nothing to infer.
     api_actions = getattr(game_response, "ActionsAvailableFromLocation", None)
@@ -309,6 +352,33 @@ def build_turn_context(
         return done
 
     context.succeeded = safe("successful commands", _succeeded, {})
+
+    # How long since the score moved (Milestone 5b). The arbiter needs to know
+    # the current approach is not working, not just what the score is.
+    def _stale():
+        turns = history_toolkit.state.get_recent_turns(50)
+        if not turns:
+            return 0
+        best = max(t.score for t in turns)
+        stale = 0
+        for turn in reversed(turns):
+            if turn.score >= best and turn.score > 0:
+                break
+            stale += 1
+        return stale
+    context.turns_since_score_change = safe("score trajectory", _stale, 0)
+
+    # Rooms we have REACHED but never left from — a building walked past is a
+    # far better lead than more open terrain, and the explorer treats all
+    # unexplored directions as equivalent (Milestone 5b).
+    def _frontier():
+        transitions = mapper_toolkit.state.get_all_transitions()
+        reached = {t.to_location for t in transitions if t.to_location != "BLOCKED"}
+        departed = {t.from_location for t in transitions}
+        here = (location or "").strip().casefold()
+        return sorted(r for r in reached - departed
+                      if r and r.strip().casefold() != here)
+    context.frontier = safe("frontier", _frontier, [])
 
     if is_known_location(location):
         context.exits = safe("exits", lambda: mapper_toolkit.state.get_exits_from(location), [])

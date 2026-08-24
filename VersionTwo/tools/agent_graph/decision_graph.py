@@ -275,6 +275,7 @@ def create_spawn_agents_node(
                 current_location=current_location,
                 unexplored_directions=unexplored_directions,
                 mentioned_directions=mentioned_directions,
+                game_exits=context.game_exits,
                 turn_number=0  # Will be set properly when turn_number added to state
             )
             logger.info(f"SPAWNED 1 ExplorerAgent - {len(unexplored_directions)} unexplored directions: {unexplored_directions}")
@@ -422,6 +423,10 @@ def create_decision_node(decision_chain: Runnable):
         full_research_context = research_context
 
         decision_input = {
+            "score_trajectory": (turn_context.score_trajectory if turn_context
+                                 else "unknown"),
+            "frontier": (turn_context.frontier_summary if turn_context
+                         else "unknown"),
             "score": zork_response.Score,
             "locationName": zork_response.LocationName,
             "moves": zork_response.Moves,
@@ -437,6 +442,8 @@ def create_decision_node(decision_chain: Runnable):
 
         # Format human prompt with actual values
         formatted_human = human_prompt.format(
+            score_trajectory=(turn_context.score_trajectory if turn_context else "unknown"),
+            frontier=(turn_context.frontier_summary if turn_context else "unknown"),
             locationName=zork_response.LocationName,
             score=zork_response.Score,
             moves=zork_response.Moves,

@@ -130,10 +130,18 @@ Output JSON with:
 
   @staticmethod
   def get_decision_agent_human_prompt():
-    return f"""=== GAME STATE ===
+    return f"""=== OBJECTIVE ===
+{GAME_OBJECTIVE}
+
+Score: {{score}} — {{score_trajectory}}
+
+=== GAME STATE ===
 Location: {{locationName}}
-Score: {{score}} | Moves: {{moves}}
+Moves: {{moves}}
 Game Response: {{game_response}}
+
+=== PLACES SEEN BUT NOT ENTERED ===
+{{frontier}}
 
 === RESEARCH CONTEXT ===
 {{research_context}}
@@ -144,11 +152,20 @@ Game Response: {{game_response}}
 === YOUR TASK ===
 Evaluate the proposals above and choose the best action.
 
-Consider:
-1. Expected Value: Which proposal has highest (importance × confidence)?
-2. Are we stuck in a loop? (prefer exploration)
-3. Any consensus among agents?
-4. What does research context warn against?
+Consider, in this order:
+1. Does any proposal plausibly ADVANCE THE OBJECTIVE — reaching somewhere new
+   that could hold treasure, acquiring a useful item, or solving a puzzle that
+   unblocks progress? Prefer it, even if another proposal scores higher.
+2. If the score has not moved for many turns, the current line of play is not
+   working. Prefer a proposal that changes the situation over one that
+   continues it.
+3. When nothing clearly advances the objective and only exploration is on
+   offer, prefer exploring TOWARD a place listed above as seen-but-not-entered
+   — a building you have walked past is far likelier to hold something than
+   more open terrain.
+4. Expected Value (importance × confidence) as a tiebreak, not a rule. The EV
+   figure knows nothing about the objective; you do.
+5. Ignore any proposal marked ALREADY TRIED HERE or WOULD UNDO.
 
 Choose the best proposal and explain your reasoning clearly in the 'reason' field.
 
@@ -1041,7 +1058,13 @@ Analyze this response and output JSON with:
 
   @staticmethod
   def get_long_running_summary_system_prompt():
-    return """You are a game state database for an interactive fiction game. Maintain a COMPREHENSIVE, STRUCTURED record of ALL discoveries.
+    return """You are a game state database for an interactive fiction game. Maintain a STRUCTURED record of what matters.
+
+LENGTH BUDGET: stay under 2000 characters. This record is sent to every agent
+on every turn, so its length is paid many times per turn. When you approach the
+budget, DROP detail in this order: resolved puzzles first, then fully-explored
+locations with nothing left in them, then old failures. NEVER drop current
+state, inventory, or unsolved puzzles.
 
 FORMAT (use exactly):
 ```

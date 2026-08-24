@@ -158,6 +158,19 @@ if TURN_BUDGET_SECONDS > _CONFIGURED_TURN_BUDGET:
 # trade strategic depth for throughput when running experiments.
 BIG_PICTURE_HISTORY_TURNS = int(os.getenv("PLAYZORK_BIG_PICTURE_HISTORY_TURNS", "20"))
 
+# Hard caps on the two rolling summaries, in characters.
+#
+# Both feed EVERY agent prompt each turn, so their growth is multiplied by the
+# per-turn call count. Measured over a 26-turn run: the RECENT summary grew
+# 140 -> 1334 chars despite covering a fixed 15-turn window, and the
+# long-running one 374 -> 1653 and still climbing. They were the last
+# unbounded inputs after every other window was capped (#24 option 3).
+#
+# Enforced by truncation, not only by asking the model nicely — a prompt
+# instruction is a hint, and this one has to hold.
+RECENT_SUMMARY_MAX_CHARS = int(os.getenv("PLAYZORK_RECENT_SUMMARY_MAX_CHARS", "1200"))
+LONG_SUMMARY_MAX_CHARS = int(os.getenv("PLAYZORK_LONG_SUMMARY_MAX_CHARS", "2500"))
+
 # ═══════════════════════════════════════════════════════════
 # MODEL CONFIGURATIONS
 # ═══════════════════════════════════════════════════════════

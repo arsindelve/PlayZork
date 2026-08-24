@@ -31,7 +31,8 @@ class ExplorerAgent:
         current_location: str,
         unexplored_directions: List[str],
         mentioned_directions: List[str],
-        turn_number: int
+        turn_number: int,
+        game_exits: Optional[List[str]] = None
     ):
         """
         Initialize the single ExplorerAgent for this turn.
@@ -46,6 +47,8 @@ class ExplorerAgent:
         self.unexplored_directions = unexplored_directions
         self.mentioned_directions = mentioned_directions
         self.turn_number = turn_number
+        # Directions the game itself reports (#30); ranks candidates.
+        self.game_exits = list(game_exits or [])
 
         # Proposal fields (populated after research)
         self.proposed_action: Optional[str] = None
@@ -60,42 +63,47 @@ class ExplorerAgent:
         self.best_direction = self._pick_best_direction()
 
     def _pick_best_direction(self) -> str:
+        """Pick the direction most likely to lead somewhere.
+
+        The old rule fell back to a FIXED cardinal order — NORTH, SOUTH, EAST,
+        WEST — whenever the room description mentioned nothing. That is not a
+        tiebreak, it is a systematic northward bias, and it showed: over a
+        26-turn run the agent walked north into the forest and mapped Clearing,
+        Canyon View and Rocky Ledge while never returning to the house it
+        started beside. The ExplorerAgent won 64% of contested turns, so its
+        bias was effectively the agent's policy.
+
+        Candidates are now SCORED on real evidence:
+
+          +3  the game's own exits array says this direction exists (#30)
+          +2  the room description mentions it
+          +1  a cardinal rather than a diagonal (cheaper to describe, and
+              Zork's world is mostly cardinal)
+
+        The exits array is not a perfect oracle — North of House advertises an
+        exit that is then refused — so it ranks candidates rather than
+        restricting them, and a direction it omits can still be chosen if
+        nothing better is on offer.
         """
-        Pick the best direction to explore based on priority rules.
+        if not self.unexplored_directions:
+            return "NORTH"
 
-        Priority:
-        1. Mentioned in description (any mentioned direction)
-        2. Cardinal directions (NORTH, SOUTH, EAST, WEST) - prefer first
-        3. Diagonal directions (NE, NW, SE, SW)
-        4. UP/DOWN
+        cardinals = {"NORTH", "SOUTH", "EAST", "WEST"}
+        game_exits = {d.upper() for d in (self.game_exits or [])}
+        mentioned = {d.upper() for d in (self.mentioned_directions or [])}
 
-        Returns:
-            Best direction to explore
-        """
-        # First priority: Directions mentioned in description
-        if self.mentioned_directions:
-            # Pick first mentioned direction
-            return self.mentioned_directions[0]
+        def score(direction: str) -> tuple:
+            points = 0
+            if direction in game_exits:
+                points += 3
+            if direction in mentioned:
+                points += 2
+            if direction in cardinals:
+                points += 1
+            # Stable tiebreak on the canonical order, so a run is reproducible.
+            return (-points, self.unexplored_directions.index(direction))
 
-        # Second priority: Cardinal directions
-        cardinals = ["NORTH", "SOUTH", "EAST", "WEST"]
-        for direction in cardinals:
-            if direction in self.unexplored_directions:
-                return direction
-
-        # Third priority: Diagonals
-        diagonals = ["NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST"]
-        for direction in diagonals:
-            if direction in self.unexplored_directions:
-                return direction
-
-        # Last priority: UP/DOWN
-        for direction in ["UP", "DOWN"]:
-            if direction in self.unexplored_directions:
-                return direction
-
-        # Fallback (shouldn't reach here if unexplored_directions is non-empty)
-        return self.unexplored_directions[0] if self.unexplored_directions else "NORTH"
+        return min(self.unexplored_directions, key=score)
 
     def _calculate_confidence(self, chosen_direction: str) -> int:
         """

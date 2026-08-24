@@ -78,7 +78,8 @@ def test_persist_still_stores_a_real_location(monkeypatch):
 # --- spawn node -------------------------------------------------------------
 
 class FakeExplorerAgent:
-    def __init__(self, current_location, unexplored_directions, mentioned_directions, turn_number):
+    def __init__(self, current_location, unexplored_directions, mentioned_directions,
+                 turn_number, game_exits=None):
         self.current_location = current_location
         self.unexplored_directions = unexplored_directions
         self.mentioned_directions = mentioned_directions
