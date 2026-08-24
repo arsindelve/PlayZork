@@ -35,6 +35,13 @@ from tools.mapping.locations import is_known_location
 RECENT_TURNS_FOR_AGENTS = 10
 
 
+def normalize_command(command: Optional[str]) -> str:
+    """Canonical form for comparing two commands. Case and spacing only —
+    deliberately NOT semantic, so "OPEN DOOR" and "OPEN THE DOOR" stay
+    distinct rather than risking a false suppression."""
+    return " ".join((command or "").strip().upper().split())
+
+
 @dataclass
 class TurnContext:
     """Deterministic snapshot of the world at the start of a turn."""
@@ -54,6 +61,12 @@ class TurnContext:
     # target location (casefolded) -> next step, "NO PATH", or "ALREADY THERE"
     directions: Dict[str, str] = field(default_factory=dict)
 
+    # Commands already tried IN THIS ROOM that changed nothing, mapped to the
+    # response they produced (GitHub issue #18). Zork is deterministic: the
+    # same command, in the same room, with nothing changed since, produces the
+    # same result. Re-proposing it is guaranteed waste.
+    unproductive: Dict[str, str] = field(default_factory=dict)
+
     @property
     def inventory_summary(self) -> str:
         """Inventory rendered for a prompt. Never blank — an empty string in a
@@ -72,6 +85,23 @@ class TurnContext:
             return "NOT AVAILABLE"
         return self.directions.get(target.strip().casefold(), "NO PATH")
 
+    def is_unproductive(self, command: Optional[str]) -> bool:
+        """True when this exact command already did nothing in this room."""
+        return normalize_command(command) in self.unproductive
+
+    @property
+    def unproductive_summary(self) -> str:
+        """Rendered for a prompt. Shows the response too, so the model can see
+        *why* the command is pointless rather than just being forbidden — the
+        #21 lesson: a rule that only says "don't" invites the model to invent
+        an alternative."""
+        if not self.unproductive:
+            return "None yet."
+        return "\n".join(
+            f"  - {command} -> \"{response.strip()[:90]}\""
+            for command, response in self.unproductive.items()
+        )
+
     def research_context_for(self, target_location: Optional[str] = None) -> str:
         """The text block that replaces an agent's research phase.
 
@@ -82,6 +112,7 @@ class TurnContext:
             f"CURRENT LOCATION: {self.location}",
             f"INVENTORY: {self.inventory_summary}",
             f"KNOWN EXITS: {self.exits_summary}",
+            f"ALREADY TRIED HERE, NO EFFECT (do not repeat):\n{self.unproductive_summary}",
         ]
         if target_location:
             blocks.append(f"DIRECTION TO '{target_location}': {self.direction_to(target_location)}")
@@ -147,6 +178,40 @@ def build_turn_context(
             for t in turns
         )
     context.recent_turns = safe("recent turns", _recent, "")
+
+    # Which commands have already been shown to do nothing HERE (#18).
+    #
+    # A turn counts as unproductive when it neither scored nor moved us. The
+    # room must match the room we are in now: "OPEN DOOR" failing in the
+    # Kitchen says nothing about the Cellar. Scoped to the recent window so a
+    # command becomes retryable again once it ages out — the world does change
+    # (a door gets unlocked, a lamp gets lit), and permanent suppression would
+    # repeat #11's mistake of letting an inference become unfalsifiable.
+    def _unproductive():
+        turns = history_toolkit.state.get_recent_turns(RECENT_TURNS_FOR_AGENTS)
+        seen = {}
+        previous = None
+        for turn in turns:
+            # The first turn in the window has nothing to compare against, so
+            # we cannot tell whether it moved or scored. Skip it: the command
+            # that WALKED us into this room would otherwise be recorded as
+            # having done nothing here. Bias is always toward not suppressing
+            # — a false suppression silently removes a legitimate action and
+            # nothing in the game text would ever correct it.
+            if previous is None:
+                previous = turn
+                continue
+            moved = turn.location != previous.location
+            scored = turn.score > previous.score
+            here = turn.location and location and \
+                turn.location.strip().casefold() == location.strip().casefold()
+            if here and not moved and not scored:
+                seen[normalize_command(turn.player_command)] = turn.game_response
+            previous = turn
+        seen.pop("", None)
+        return seen
+
+    context.unproductive = safe("unproductive commands", _unproductive, {})
 
     if is_known_location(location):
         context.exits = safe("exits", lambda: mapper_toolkit.state.get_exits_from(location), [])

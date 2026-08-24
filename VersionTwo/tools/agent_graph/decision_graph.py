@@ -29,7 +29,7 @@ from .issue_closed_response import IssueClosedResponse
 from .observer_agent import ObserverAgent
 from .observer_response import ObserverResponse
 from .tool_execution import invoke_tool_safely
-from .turn_context import build_turn_context
+from .turn_context import build_turn_context, normalize_command
 
 
 class DecisionState(TypedDict):
@@ -360,7 +360,10 @@ def create_decision_node(decision_chain: Runnable):
         logger.info(f"Game Response (first 100): {zork_response.Response[:100]}...")
 
         # Format agent proposals for Decision Agent
-        agent_proposals_text = _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, interaction_agent)
+        agent_proposals_text = _format_agent_proposals(
+            issue_agents, explorer_agent, loop_detection_agent, interaction_agent,
+            context=turn_context,
+        )
         logger.info(f"Agent Proposals:\n{agent_proposals_text}")
         logger.info("=" * 80)
 
@@ -416,9 +419,29 @@ def create_decision_node(decision_chain: Runnable):
     return decision_node
 
 
-def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, interaction_agent):
-    """Format agent proposals for Decision Agent evaluation"""
+def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
+                            interaction_agent, context=None):
+    """Format agent proposals for Decision Agent evaluation.
+
+    A proposal that repeats a command already shown to do nothing in this room
+    is marked and its expected value zeroed (#18). This is done in CODE rather
+    than by asking the model nicely: the agent deadlocked for five turns
+    alternating two commands whose failures were both sitting in its own
+    recent history, and the #21 inventory bug showed that a 14B model given a
+    prohibition will happily invent its own way around it.
+
+    The proposal is annotated rather than removed, so the arbiter can still
+    pick it if literally everything else is exhausted — and can see why it was
+    demoted.
+    """
     lines = []
+
+    def repeat_note(action):
+        """Marker + EV multiplier for a proposal that repeats a dead command."""
+        if context is not None and context.is_unproductive(action):
+            prior = context.unproductive.get(normalize_command(action), "")
+            return f"  ⚠️ ALREADY TRIED HERE, no effect: \"{prior.strip()[:80]}\"", 0.0
+        return None, 1.0
 
     # LoopDetectionAgent (FIRST - highest priority if loop detected)
     if loop_detection_agent and loop_detection_agent.confidence > 0:
@@ -431,16 +454,22 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, 
     # IssueAgents
     for i, agent in enumerate(issue_agents, 1):
         if agent.proposed_action and agent.confidence is not None:
-            ev = (agent.importance/1000) * (agent.confidence/100) * 100
+            note, mult = repeat_note(agent.proposed_action)
+            ev = (agent.importance/1000) * (agent.confidence/100) * 100 * mult
             lines.append(f"IssueAgent #{i}: [Importance: {agent.importance}/1000, Confidence: {agent.confidence}/100, EV: {ev:.1f}]")
             lines.append(f"  Issue: {agent.issue_content}")
             lines.append(f"  Proposed Action: {agent.proposed_action}")
+            if note:
+                lines.append(note)
             lines.append(f"  Reason: {agent.reason}")
             lines.append("")
 
     # InteractionAgent (AFTER IssueAgents, BEFORE ExplorerAgent)
     if interaction_agent and interaction_agent.confidence > 0:
+        note, _ = repeat_note(interaction_agent.proposed_action)
         lines.append(f"InteractionAgent: [Confidence: {interaction_agent.confidence}/100]")
+        if note:
+            lines.append(note)
         if interaction_agent.detected_objects:
             lines.append(f"  Detected Objects: {', '.join(interaction_agent.detected_objects)}")
         lines.append(f"  Proposed Action: {interaction_agent.proposed_action}")
@@ -451,8 +480,11 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent, 
 
     # ExplorerAgent (LAST)
     if explorer_agent and explorer_agent.proposed_action and explorer_agent.confidence is not None:
-        ev = (len(explorer_agent.unexplored_directions)/10) * (explorer_agent.confidence/100) * 50
+        note, mult = repeat_note(explorer_agent.proposed_action)
+        ev = (len(explorer_agent.unexplored_directions)/10) * (explorer_agent.confidence/100) * 50 * mult
         lines.append(f"ExplorerAgent: [Confidence: {explorer_agent.confidence}/100, EV: {ev:.1f}]")
+        if note:
+            lines.append(note)
         lines.append(f"  Best Direction: {explorer_agent.best_direction}")
         lines.append(f"  Proposed Action: {explorer_agent.proposed_action}")
         lines.append(f"  Reason: {explorer_agent.reason}")

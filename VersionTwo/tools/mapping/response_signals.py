@@ -102,6 +102,23 @@ _MOVEMENT_REFUSALS = (
     re.compile(rf"\byou\s+{_CANT}\s+go\s+that\s+way", re.IGNORECASE),
     re.compile(rf"\byou\s+{_CANT}\s+get\s+there\s+from\s+here", re.IGNORECASE),
     re.compile(r"\bthere\s+is\s+a\s+wall\s+there", re.IGNORECASE),
+    # Terrain refusals. Added from observed play (#33): "The forest becomes
+    # impenetrable to the north." is as permanent as "you cannot go that way",
+    # but matched none of the generic patterns, so the explorer never learned
+    # the wall and re-proposed NORTH until the session deadlocked.
+    #
+    # These stay in the ALLOW-list only because terrain is topology. They must
+    # not be confused with object refusals ("The trap door is closed."), which
+    # describe temporary puzzle state and are deliberately still unmatched.
+    #
+    # Only the vegetation family is listed, because that is what was actually
+    # observed. A tempting "impassable + mountains" pattern was drafted and
+    # REMOVED: Zork's Forest room DESCRIPTION reads "The forest thins out,
+    # revealing impassible mountains." — scenery on a SUCCESSFUL move. Matching
+    # it would fabricate a wall on arrival, which is the exact class of error
+    # #10 exists to prevent. Verified phrasings only.
+    re.compile(r"\b(?:forest|undergrowth|trees?|foliage|brush)\b[^.]*\b"
+               r"(?:impenetrable|impassable|too\s+(?:thick|dense))", re.IGNORECASE),
 )
 
 

@@ -251,3 +251,51 @@ def test_non_movement_command_never_records_even_on_refusal_text(mapper, mock_db
     mapper.update_from_turn("Living Room", "OPEN DOOR", 9, "You cannot go that way.")
 
     assert mock_db.transitions == []
+
+
+# ---------------------------------------------------------------------------
+# Terrain refusals, added from observed play (GitHub issue #33)
+# ---------------------------------------------------------------------------
+
+
+import pytest as _pytest
+
+from tools.mapping.response_signals import is_movement_refusal as _refusal
+
+
+@_pytest.mark.parametrize("response", [
+    # Captured from the live backend, 2026-08-24.
+    "The forest becomes impenetrable to the north.",
+    "You cannot go that way.",
+    "You can't go that way.",
+    # Same family, plausible variants.
+    "The forest is too dense to walk through.",
+    "The undergrowth is impenetrable.",
+])
+def test_terrain_and_generic_refusals_are_recorded(response):
+    """Topology: as permanent as a wall, so the explorer should learn it.
+
+    Missing this phrasing is what left the map ignorant of a real wall and let
+    the agent re-propose NORTH from the Clearing until it deadlocked (#33).
+    """
+    assert _refusal(response) is True
+
+
+@_pytest.mark.parametrize("response,why", [
+    ("The forest thins out, revealing impassible mountains.",
+     "ROOM DESCRIPTION on a SUCCESSFUL move — matching it fabricates a wall on arrival"),
+    ("This is a forest, with trees in all directions.",
+     "room description"),
+    ("The windows are all boarded.",
+     "object refusal, observed live"),
+    ("The trap door is closed.",
+     "puzzle state — must stay retryable (#11)"),
+    ("The door is boarded and you cannot remove the boards.",
+     "object refusal containing 'cannot'"),
+    ("The troll fends you off with a menacing gesture.",
+     "temporary obstacle"),
+])
+def test_scenery_and_puzzle_state_are_never_recorded(response, why):
+    """The allow-list must stay narrow. A false wall is near-unrecoverable:
+    the explorer counts a BLOCKED direction as explored and never retries."""
+    assert _refusal(response) is False, why

@@ -162,7 +162,31 @@ This is also the first genuine use of LangGraph in the project. Per [#26](https:
 
 *Expected outcome: measured 7m25s turn → ~2–3 min, with the architecture more faithful to the design, not less.*
 
-## Milestone 5 — Honest proposals *(~1–2 days)*
+## Milestone 5 — Honest proposals *(~1–2 days)* — in progress
+
+**Promoted ahead of the remaining latency work (2026-08-24).** The M3 checkpoint showed the agent deadlocking from turn 11, alternating two commands the game had already refused. A faster GPU deadlocks faster; until this is fixed, a thesis run cannot produce meaningful `score@turns` data because every run flatlines.
+
+| # | Issue | Task | Status |
+|---|---|---|---|
+| — | [#18](https://github.com/arsindelve/PlayZork/issues/18) | Repetition suppression | ✅ done |
+| — | [#33](https://github.com/arsindelve/PlayZork/issues/33) | Terrain refusals added to the allow-list, from observed play | ✅ done |
+
+**#18 as built.** `TurnContext` computes the set of commands already shown to do nothing *in this room* — a turn counts as unproductive when it neither scored nor changed location. Two consumers:
+
+1. The agents' prompt block lists them **with the response each produced**, so the model sees *why* rather than just being forbidden.
+2. `_format_agent_proposals` **zeroes the expected value** of any repeat and annotates it for the arbiter.
+
+The second exists because of the #21 lesson: a 14B model given a bare prohibition invented its own way around it. Prompt text alone is not a mechanism.
+
+Deliberately conservative, on the same reasoning as #11's BLOCKED rule — a false suppression silently removes a legitimate action and nothing in the game text would ever correct it:
+- scoped to the current room (`OPEN DOOR` failing in the Kitchen says nothing about the Cellar)
+- scoped to the recent window, so suppression **ages out** as the world changes
+- matching is case/whitespace only, never semantic
+- the first turn in the window is skipped, since the command that walked us into the room has no predecessor to prove it did something
+
+**#33 as built.** Probed the live backend for real refusal phrasings rather than guessing. `"The forest becomes impenetrable to the north."` is topology and is now matched; `"The windows are all boarded."` is an object refusal and correctly is not. A drafted `impassable + mountains` pattern was **removed**: Zork's Forest room *description* reads *"The forest thins out, revealing impassible mountains"* — scenery on a **successful** move, which would have fabricated a wall on arrival.
+
+## Milestone 5 — remaining
 
 | # | Issue | Task |
 |---|---|---|
