@@ -65,6 +65,21 @@ class DatabaseManager:
 
             # Turns table
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS turn_tokens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    turn_number INTEGER NOT NULL,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    llm_calls INTEGER DEFAULT 0,
+                    wall_seconds REAL DEFAULT 0,
+                    by_operation TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(session_id, turn_number)
+                )
+            """)
+
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS turns (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
@@ -297,6 +312,35 @@ class DatabaseManager:
             )
             result = cursor.fetchone()
             return result[0] if result and result[0] is not None else None
+
+    def add_turn_tokens(
+        self,
+        session_id: str,
+        turn_number: int,
+        input_tokens: int,
+        output_tokens: int,
+        llm_calls: int,
+        wall_seconds: float,
+        by_operation: str = "",
+    ) -> None:
+        """Record a turn's token cost.
+
+        Separate from `turns` because tokens are only known once the turn is
+        over, while the turn row is written at the top of it. Tokens are the
+        hardware-independent unit that makes runs on different machines
+        comparable (see token_meter).
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT OR REPLACE INTO turn_tokens
+                   (session_id, turn_number, input_tokens, output_tokens,
+                    llm_calls, wall_seconds, by_operation)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, turn_number, input_tokens, output_tokens,
+                 llm_calls, wall_seconds, by_operation)
+            )
+            conn.commit()
 
     def add_turn(
         self,

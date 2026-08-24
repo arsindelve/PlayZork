@@ -10,7 +10,10 @@ from tools.mapping import MapperToolkit
 from tools.database import DatabaseManager
 from display_manager import DisplayManager
 from game_logger import GameLogger
+import time
+
 from config import get_cheap_llm, get_expensive_llm
+from token_meter import get_token_meter
 
 
 # Turn-level failure policy (see GitHub issue #1). A turn can fail for reasons
@@ -189,7 +192,15 @@ class GameSession:
         :return: The next input to be processed.
         """
         try:
+            # Close out the PREVIOUS turn's token accounting before starting
+            # this one. Measuring between turn starts (rather than at the end
+            # of the decision graph) attributes the background work — summaries,
+            # big-picture, death analysis — to the turn that spawned it.
+            self._record_previous_turn_tokens()
+
             self.turn_number += 1
+            self._turn_started_at = time.monotonic()
+            get_token_meter().start_turn(self.turn_number)
             self.logger.log_turn_start(self.turn_number, input_text)
 
             # Step 1: Send input to the Zork service and get the response
@@ -302,6 +313,40 @@ class GameSession:
             # play() decides whether to recover with a fallback command or end
             # the session; it owns the user-facing message.
             raise
+
+    def _record_previous_turn_tokens(self) -> None:
+        """Persist and log what the last turn cost in tokens.
+
+        Wall-clock alone cannot compare architectures across machines, and on
+        one machine it is a proxy for token volume anyway — this box's Ollama
+        has flat throughput regardless of concurrency. Tokens are the unit that
+        survives a hardware change (see STATUS.md 2026-08-24).
+        """
+        snapshot = get_token_meter().snapshot()
+        if not snapshot.calls:
+            return
+        wall = time.monotonic() - getattr(self, "_turn_started_at", time.monotonic())
+        try:
+            by_op = "; ".join(
+                f"{name}:{tin}/{tout}x{calls}"
+                for name, (tin, tout, calls) in sorted(snapshot.by_operation.items())
+            )
+            self.db.add_turn_tokens(
+                session_id=self.session_id,
+                turn_number=snapshot.turn_number,
+                input_tokens=snapshot.input_tokens,
+                output_tokens=snapshot.output_tokens,
+                llm_calls=snapshot.calls,
+                wall_seconds=round(wall, 1),
+                by_operation=by_op,
+            )
+        except Exception as e:
+            self.logger.logger.warning(f"Could not persist token usage: {e}")
+
+        rate = snapshot.total_tokens / wall if wall > 0 else 0
+        self.logger.logger.info(
+            f"[TOKENS] {snapshot.summary()} in {wall:.0f}s ({rate:.0f} tok/s)"
+        )
 
     def _dispatch_summary_refresh(self, turn) -> None:
         """Regenerate the history summaries off the critical path (#24).

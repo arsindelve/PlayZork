@@ -200,6 +200,16 @@ Deliberately conservative, on the same reasoning as #11's BLOCKED rule — a fal
 
 ---
 
+## Instrumentation for the experiment
+
+**Per-turn token accounting** (`VersionTwo/token_meter.py`, `turn_tokens` table) — landed 2026-08-24.
+
+Wall-clock cannot compare architectures across machines, and on any one machine it is a proxy for token volume anyway: this box's Ollama benchmarks at *flat* throughput across 1/2/4/8 concurrent requests, so concurrency changes nothing and only token count moves the number. Tokens are hardware-independent, so a laptop run and a GPU run are directly comparable, and the multi-agent arm gets charged for what it actually costs rather than for how fast the box happens to be.
+
+Counts come from the provider's own metadata, never an estimate. Structured-output chains return a Pydantic model carrying no usage metadata, so **totals are a floor, not an estimate** — an invented number would be worse than a missing one here. Metering lives in `llm_utils`, the single choke point both retry helpers pass through, and is measured *between turn starts* so background work (summaries, big-picture, death analysis) is attributed to the turn that spawned it.
+
+**Report token counts alongside `score@wall-clock` in every result.** Otherwise the multi-agent arm is penalised for token volume in a way that says nothing about the architecture.
+
 ## Then: the experiment
 
 M1–M4 is the platform. Thesis protocol: same 14B model, N seeded runs each of

@@ -9,6 +9,23 @@ import time
 from config import LLM_TIMEOUT_SECONDS, LLM_MAX_RETRIES
 
 
+def _meter(result, operation_name: str) -> None:
+    """Record the call's token cost.
+
+    Every guarded LLM call in the system passes through invoke_with_retry or
+    ainvoke_with_retry, so this is the one place that sees all of them —
+    the same property that made instrumenting the analyzers worthwhile (#24).
+    Structured-output chains return a Pydantic model rather than an AIMessage,
+    which carries no usage metadata; those calls are counted where they can be
+    and skipped where they cannot, so totals are a floor, not an estimate.
+    """
+    try:
+        from token_meter import get_token_meter
+        get_token_meter().record(result, operation_name)
+    except Exception:  # noqa: BLE001 - accounting must never cost a turn
+        pass
+
+
 def invoke_with_retry(chain, input_data, operation_name: str = "LLM call", timeout_seconds: int = None, max_retries: int = None):
     """
     Invoke an LLM chain with timeout and retry logic.
@@ -45,6 +62,7 @@ def invoke_with_retry(chain, input_data, operation_name: str = "LLM call", timeo
                 result = future.result(timeout=timeout_seconds)
                 logger.info(f"[{operation_name}] Success on attempt {attempt}")
                 executor.shutdown(wait=False)
+                _meter(result, operation_name)
                 return result
             except FuturesTimeoutError:
                 logger.warning(f"[{operation_name}] Timeout after {timeout_seconds}s on attempt {attempt}")
@@ -118,6 +136,7 @@ async def ainvoke_with_retry(
                 timeout=timeout_seconds,
             )
             logger.info(f"[{operation_name}] Success on attempt {attempt}")
+            _meter(result, operation_name)
             return result
         except asyncio.TimeoutError:
             logger.warning(f"[{operation_name}] Timeout after {timeout_seconds}s on attempt {attempt}")
