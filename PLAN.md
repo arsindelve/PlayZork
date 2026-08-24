@@ -203,6 +203,59 @@ Fingerprinting deliberately uses **exits, not the description**: a description c
 | 22 | [#18](https://github.com/arsindelve/PlayZork/issues/18) | Repetition suppression (check recent turns for the same failed proposal) |
 | — | [#17](https://github.com/arsindelve/PlayZork/issues/17) | Should already be closed by #25 — verify |
 
+## Milestone 5b — Goal-directedness in the arbiter *(planned, not built)*
+
+### The gap, measured
+
+Session `analysis-run-20260824`, 20 turns, **score 0**, and the agent never approached the house — the entire Zork opening. Turns 14–20 read:
+
+```
+15  EAST    -> Forest
+16  NORTH   -> "The forest becomes impenetrable to the north."
+17  SOUTH   -> Clearing
+18  EAST    -> Canyon View
+19  NORTH   -> "You cannot go that way."
+20  SOUTH   -> "You cannot go that way."
+```
+
+It walked east into the forest to **Canyon View** — a scenic dead-end branch — while the house, its unopened window, the trophy case and essentially every early point sat three rooms west, unvisited since turn 4.
+
+**Nothing in the architecture is accountable for the objective.** IssueAgents advocate for what has been *discovered*; the ExplorerAgent advocates for what is *unvisited* and treats all unexplored directions as equivalent; the InteractionAgent advocates for what is *in the room*. All three are reactive. `GAME_OBJECTIVE` appears in prompts as a header but drives no proposal.
+
+The grating episode shows the cost precisely: a locked grating with no key produced a correctly-formed issue, a correctly-decaying importance (648 → 382), and six `"nothing"` proposals — while the actual opening was never considered, because nothing had *discovered* it and discovery is a random walk.
+
+### Why B rather than A, C or D
+
+| option | verdict |
+|---|---|
+| **A. A GoalAgent** — a new proposer reasoning from objective + score | Most likely to make it play Zork, but risks becoming a single-shot player in an agent costume. If it wins most turns the architecture has collapsed into the baseline and the comparison is confounded. |
+| **B. Strengthen the arbiter** ← chosen | Small, adds no LLM call, introduces no new proposer. |
+| C. Goal-aware ExplorerAgent | A heuristic patch; helps only exploration. |
+| D. Change nothing, report it | Scientifically clean, but leaves the system unable to play. |
+
+**B is chosen because it does not change what is being compared.** The arbiter already exists and already ranks; giving it the objective changes *how it ranks*, not *what the architecture is*.
+
+**Known limitation, to be stated in the write-up:** the arbiter can only rank what it is given. It cannot generate "go back to the house" if no agent proposed it. B therefore improves selection among existing proposals; it does **not** close the generation gap. If the measurements below show it is insufficient, that is itself the result that motivates arm A.
+
+### What to change
+
+1. **`get_decision_agent_evaluation_prompt`** — supply the objective, the current score, and the score trajectory (turns since it last moved). Instruct: prefer proposals that plausibly advance the objective; when nothing does, prefer exploration that moves *toward* known-but-unentered structures over exploration that moves away.
+2. **`get_decision_agent_human_prompt`** / `decision_node` — add `objective`, `score`, `turns_since_score_change`, and a short list of *known but unvisited* map frontier rooms (already derivable from `TurnContext.exits` + the map).
+3. **No new call, no new agent, no schema change.**
+
+### How to tell whether it worked
+
+Re-run 25 turns and compare against `analysis-run-20260824` as the control:
+
+- **score@turns** — does the score move at all inside 25 turns?
+- **distinct rooms** and whether the house is entered
+- **arbiter override rate** — B should *raise* it, since the objective gives the arbiter a reason to disagree with raw EV
+- **wasted turns** — should fall if aimless frontier-walking drops
+
+### Pre-register arm A as an ablation
+
+Add **`+goal_agent`** as a fourth experimental arm alongside lean single-shot / full single-shot / multi-agent. That way goal-directed *proposal generation* is measured rather than quietly patched in, and the gap between multi-agent and multi-agent+goal_agent is exactly the size of the generation deficit described above.
+
 ## Milestone 6 — Decision point, not a fix
 
 [#22](https://github.com/arsindelve/PlayZork/issues/22) LoopDetectionAgent: keep disabled through baseline experiments; treat "fixed + re-enabled" as an optional ablation arm. Don't spend the five fixes unless the experiment design wants that arm.
