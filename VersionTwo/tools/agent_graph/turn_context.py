@@ -25,7 +25,7 @@ Built once per turn and sliced per agent. Every read here is a local SQLite
 query or an in-memory lookup — milliseconds in total.
 """
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from tools.mapping.directions import (extract_direction,
                                       is_probable_movement_command)
@@ -174,6 +174,12 @@ class TurnContext:
     # Every room name the map knows, for resolving an issue's target location
     # out of its text. Lower-cased.
     known_locations: List[str] = field(default_factory=list)
+
+    # The raw recent turn records. `recent_turns` above is the rendered prose
+    # for prompts; this is the structured form, needed by the closure guard in
+    # persist, which must ask "was this issue's action tried in its target room
+    # and did nothing?" — a question the rendered string cannot answer.
+    recent_turn_records: List[Any] = field(default_factory=list)
     frontier: List[str] = field(default_factory=list)
 
     # Commands that SUCCEEDED in this room (changed something). Used to spot a
@@ -435,6 +441,10 @@ def build_turn_context(
             for t in turns
         )
     context.recent_turns = safe("recent turns", _recent, "")
+    context.recent_turn_records = safe(
+        "recent turn records",
+        lambda: list(history_toolkit.state.get_recent_turns(RECENT_TURNS_FOR_AGENTS)),
+        [])
 
     # Which commands have already been shown to do nothing HERE (#18).
     #

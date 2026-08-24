@@ -18,6 +18,7 @@ from tools.mapping.directions import (
     find_mentioned_directions,
     normalize_direction,
 )
+from tools.memory.closure_guard import closure_is_contradicted
 from tools.memory.issue_target import resolve_issue_target
 from tools.mapping.locations import UNKNOWN_LOCATION, is_known_location
 from langchain_core.runnables import Runnable
@@ -947,32 +948,59 @@ def _apply_pending_closures(state, memory_toolkit, logger) -> None:
         pending_closures = state.get("pending_closures") or []
         issue_closed_response = state.get("issue_closed_response")
 
-        # A turn that changed nothing cannot have resolved anything.
+        # REFUSE a closure the game's own transcript contradicts.
         #
-        # The IssueClosedAgent closed the ESCAPE POD — the objective — in four
-        # of five Planetfall runs, always immediately after the turn-2 refusal
-        # "Why open the door to the emergency escape pod if there's no
-        # emergency?". It read a TEMPORAL refusal ("not yet") as resolution
-        # ("done"). pf4 escaped with every issue closed, so the memory system
-        # contributed nothing to the only successes this project has had.
+        # The IssueClosedAgent closed the ESCAPE POD — the objective — in five
+        # of six Planetfall runs, always shortly after the turn-2 refusal "Why
+        # open the door to the emergency escape pod if there's no emergency?",
+        # reading a TEMPORAL refusal ("not yet") as resolution ("done"). pf4
+        # escaped with every one of its four issues closed, so the memory
+        # system contributed nothing to either success.
         #
-        # This is not fixable by wording. The closure prompt already parses the
+        # Not fixable by wording: the closure prompt already parses the
         # acceptance criteria, says "ONLY close if the acceptance criteria is
-        # SATISFIED", and carries explicit DO-NOT-CLOSE examples; a 14B model
-        # closed it anyway. So the guard is a deterministic precondition rather
-        # than an instruction.
+        # SATISFIED", and carries explicit DO-NOT-CLOSE examples.
         #
-        # Same asymmetry as everywhere else in the world model: a wrongly
-        # closed issue silently removes the objective and nothing re-adds it,
-        # while a wrongly kept one costs a little prompt space and decays. The
-        # cost of being conservative is at most a one-turn delay, since the
-        # agent re-evaluates closure every turn.
+        # An earlier version of this guard deferred closures on any turn that
+        # changed nothing. That correctly caught the turn-2 refusal and still
+        # lost the pod on turn 3, because the closer re-stages the same closure
+        # every turn and the next turn was a move. A TURN-level guard cannot
+        # fix an ISSUE-level misjudgement. So the question asked here is about
+        # the issue: has its action already been tried, in the room it applies
+        # to, and accomplished nothing?
         context = state.get("turn_context")
+        if pending_closures and context is not None:
+            memories_by_id = {m.id: m for m in (state.get("memories") or [])}
+            survivors = []
+            for closure in pending_closures:
+                memory = memories_by_id.get(closure.get("id"))
+                if memory is None:
+                    survivors.append(closure)
+                    continue
+                target = resolve_issue_target(
+                    memory.content, memory.location, context.known_locations)
+                disproof = closure_is_contradicted(
+                    memory.content, target, context.recent_turn_records)
+                if disproof:
+                    logger.info(
+                        f"REFUSED closure of ID {closure.get('id')}: the "
+                        f"transcript contradicts it — its action was tried at "
+                        f"{target} and did nothing: \"{disproof[:80]}\""
+                    )
+                    continue
+                survivors.append(closure)
+            pending_closures = survivors
+
+        # SECONDARY, and deliberately kept after the evidence check above: a
+        # turn that changed nothing cannot have resolved anything either. On
+        # its own this is insufficient — it merely postpones a wrong closure to
+        # the next turn that moves — but it costs one turn's delay at most and
+        # catches issues whose criteria is too terse for the transcript check
+        # to match on.
         if pending_closures and context is not None and not context.accomplished_something:
             logger.info(
                 f"DEFERRED {len(pending_closures)} closure(s): this turn changed "
-                f"nothing (no move, no score, no inventory change), so nothing "
-                f"can have become resolved by it"
+                f"nothing (no move, no score, no inventory change)"
             )
             pending_closures = []
 

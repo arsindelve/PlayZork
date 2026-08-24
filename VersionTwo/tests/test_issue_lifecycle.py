@@ -157,3 +157,67 @@ class TestKnownLocations:
             inventory_toolkit=NS(state=NS(get_items=lambda *a, **k: [])),
             issue_locations=None)
         assert "BLOCKED" not in c.known_locations
+
+
+class TestClosureContradiction:
+    """The issue-level guard. The turn-level one above was insufficient: the
+    closer re-stages the same closure every turn, so deferral only moved the
+    loss from turn 2 to turn 3."""
+
+    POD = "Locked pod bulkhead at Deck Nine — open bulkhead and examine escape pod"
+
+    def _turns(self, response="Why open the door to the emergency escape pod "
+                              "if there's no emergency?"):
+        return [
+            NS(turn_number=1, player_command="look", location="Deck Nine",
+               score=0, game_response="Deck Nine"),
+            NS(turn_number=2, player_command="OPEN escape pod bulkhead",
+               location="Deck Nine", score=0, game_response=response),
+        ]
+
+    def test_the_refusal_contradicts_the_closure(self):
+        from tools.memory.closure_guard import closure_is_contradicted
+        assert closure_is_contradicted(self.POD, "Deck Nine", self._turns())
+
+    def test_an_unrelated_command_does_not(self):
+        from tools.memory.closure_guard import closure_is_contradicted
+        turns = [NS(turn_number=1, player_command="look", location="Deck Nine",
+                    score=0, game_response="Deck Nine"),
+                 NS(turn_number=2, player_command="GO WEST", location="Deck Nine",
+                    score=0, game_response="The bulkhead is closed.")]
+        assert closure_is_contradicted(self.POD, "Deck Nine", turns) is None
+
+    def test_a_wrong_room_does_not_contradict(self):
+        """Trying it somewhere else says nothing about the target room."""
+        from tools.memory.closure_guard import closure_is_contradicted
+        turns = self._turns()
+        turns[1].location = "Reactor Lobby"
+        assert closure_is_contradicted(self.POD, "Deck Nine", turns) is None
+
+    def test_a_successful_attempt_does_not_contradict(self):
+        """If it actually scored, the issue really may be resolved."""
+        from tools.memory.closure_guard import closure_is_contradicted
+        turns = self._turns(response="The bulkhead swings open.")
+        turns[1].score = 5
+        assert closure_is_contradicted(self.POD, "Deck Nine", turns) is None
+
+    def test_one_shared_word_is_not_enough(self):
+        """'drop lamp' must not count as an attempt at 'take the lamp'."""
+        from tools.memory.closure_guard import closure_is_contradicted
+        turns = [NS(turn_number=1, player_command="look", location="Cave",
+                    score=0, game_response="Cave"),
+                 NS(turn_number=2, player_command="DROP LAMP", location="Cave",
+                    score=0, game_response="Dropped.")]
+        assert closure_is_contradicted(
+            "Lamp at Cave — take the lamp and light it", "Cave", turns) is None
+
+    @pytest.mark.parametrize("turns", [None, []])
+    def test_no_evidence_means_no_block(self, turns):
+        from tools.memory.closure_guard import closure_is_contradicted
+        assert closure_is_contradicted(self.POD, "Deck Nine", turns) is None
+
+    def test_terse_criteria_cannot_be_matched_and_is_not_blocked(self):
+        """Fewer than two significant words: never claim a contradiction."""
+        from tools.memory.closure_guard import closure_is_contradicted
+        assert closure_is_contradicted("Thing at Cave — open", "Cave",
+                                       self._turns()) is None
