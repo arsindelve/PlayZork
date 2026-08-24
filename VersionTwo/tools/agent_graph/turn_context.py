@@ -35,6 +35,35 @@ from tools.mapping.locations import is_known_location
 RECENT_TURNS_FOR_AGENTS = 10
 
 
+# Actions that undo each other. The backend's accepted-command list contains
+# both halves of each pair — it is a grammar, not advice — and an agent that
+# reads "close grating" as a suggestion will undo its own progress. Observed
+# live: the agent closed the grating it was trying to open, at confidence 90.
+_INVERSES = {
+    "OPEN": "CLOSE", "CLOSE": "OPEN",
+    "TAKE": "DROP", "GET": "DROP", "DROP": "TAKE",
+    "LOCK": "UNLOCK", "UNLOCK": "LOCK",
+    "LIGHT": "EXTINGUISH", "EXTINGUISH": "LIGHT",
+    "WEAR": "REMOVE", "REMOVE": "WEAR",
+    "ENTER": "EXIT", "EXIT": "ENTER",
+    "RAISE": "LOWER", "LOWER": "RAISE",
+    "TURN ON": "TURN OFF", "TURN OFF": "TURN ON",
+}
+
+
+def inverse_of(command: Optional[str]) -> str:
+    """The command that would undo `command`, or "" if it has no inverse."""
+    tokens = normalize_command(command).split()
+    if not tokens:
+        return ""
+    for verb_len in (2, 1):
+        if len(tokens) > verb_len:
+            verb = " ".join(tokens[:verb_len])
+            if verb in _INVERSES:
+                return " ".join([_INVERSES[verb]] + tokens[verb_len:])
+    return ""
+
+
 def normalize_command(command: Optional[str]) -> str:
     """Canonical form for comparing two commands. Case and spacing only —
     deliberately NOT semantic, so "OPEN DOOR" and "OPEN THE DOOR" stay
@@ -65,6 +94,10 @@ class TurnContext:
     # the backend (#30). Authoritative, so the InteractionAgent no longer has
     # to guess what is interactable by pattern-matching English (#16).
     available_actions: Dict[str, List[str]] = field(default_factory=dict)
+
+    # Commands that SUCCEEDED in this room (changed something). Used to spot a
+    # proposal that would undo one of them.
+    succeeded: Dict[str, str] = field(default_factory=dict)
 
     # Commands already tried IN THIS ROOM that changed nothing, mapped to the
     # response they produced (GitHub issue #18). Zork is deterministic: the
@@ -108,6 +141,22 @@ class TurnContext:
             if commands:
                 lines.append(f"  {obj}: {', '.join(commands)}")
         return "\n".join(lines) or "Everything here has already been tried."
+
+    def undoes_recent_progress(self, command: Optional[str]) -> str:
+        """The command this proposal would undo, or "" if none.
+
+        The agent opened the grating, then proposed closing it — because the
+        game's accepted-command list mentions "close grating". Reading a
+        grammar as a recommendation is a failure mode worth blocking in code,
+        not only in the prompt.
+        """
+        proposed = normalize_command(command)
+        if not proposed:
+            return ""
+        for done in self.succeeded:
+            if inverse_of(done) == proposed:
+                return done
+        return ""
 
     def is_unproductive(self, command: Optional[str]) -> bool:
         """True when this exact command already did nothing in this room."""
@@ -246,6 +295,20 @@ def build_turn_context(
         return seen
 
     context.unproductive = safe("unproductive commands", _unproductive, {})
+
+    def _succeeded():
+        """Commands that visibly changed something in this room."""
+        turns = history_toolkit.state.get_recent_turns(RECENT_TURNS_FOR_AGENTS)
+        done = {}
+        for turn in turns:
+            here = turn.location and location and \
+                turn.location.strip().casefold() == location.strip().casefold()
+            command = normalize_command(turn.player_command)
+            if here and command and command not in context.unproductive:
+                done[command] = turn.game_response
+        return done
+
+    context.succeeded = safe("successful commands", _succeeded, {})
 
     if is_known_location(location):
         context.exits = safe("exits", lambda: mapper_toolkit.state.get_exits_from(location), [])

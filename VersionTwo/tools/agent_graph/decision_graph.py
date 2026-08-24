@@ -142,6 +142,26 @@ def create_build_context_node(
     return build_context_node
 
 
+def _blocked_signature(memory, context) -> tuple:
+    """What an IssueAgent's "I cannot act" verdict actually depends on.
+
+    Observed live, every blocking reason was of the form "the grating is
+    locked and I have no key" or "there is no known path to the Clearing from
+    here" — they turn on INVENTORY and LOCATION, not on the room description.
+    While both are unchanged the answer cannot change either, and re-asking
+    costs ~3000 tokens (the most expensive call in the system) to hear the
+    same thing again. 55% of IssueAgent calls on the measured run returned
+    "nothing".
+
+    A change to either input invalidates the verdict and the agent runs again.
+    """
+    return (
+        memory.id,
+        (context.location or "").strip().casefold(),
+        tuple(sorted(item.strip().casefold() for item in context.inventory)),
+    )
+
+
 def create_spawn_agents_node(
     memory_toolkit: MemoryToolkit,
     mapper_toolkit: MapperToolkit,
@@ -162,7 +182,11 @@ def create_spawn_agents_node(
     Returns:
         Node function for the graph
     """
-    async def spawn_agents_node(state: DecisionState) -> DecisionState:
+    # issue signature -> why it could not be acted on. Lives as long as the
+    # graph, so a verdict persists across turns.
+    blocked_issues: dict = {}
+
+    async def spawn_agents_node(state: DecisionState) -> dict:
         """
         Spawn phase: Create one IssueAgent for each tracked strategic issue.
         Each agent performs its own research and generates a proposal IN PARALLEL.
@@ -177,12 +201,26 @@ def create_spawn_agents_node(
 
         memories_sorted = state["memories"]
 
-        # Create one IssueAgent for each issue (max 5)
-        issue_agents = [IssueAgent(memory=mem) for mem in memories_sorted]
-
-        logger.info(f"SPAWNED {len(issue_agents)} IssueAgents (top 5 by importance)")
-
         context = state["turn_context"]
+
+        # One IssueAgent per issue, but skip those already known to be
+        # unactionable under this location + inventory. A skipped agent keeps
+        # its recorded reason, so the HTML report still explains its silence.
+        issue_agents = []
+        skipped = 0
+        for mem in memories_sorted:
+            agent = IssueAgent(memory=mem)
+            cached = blocked_issues.get(_blocked_signature(mem, context))
+            if cached is not None:
+                agent.proposed_action = None
+                agent.confidence = None
+                agent.reason = cached
+                skipped += 1
+                logger.info(f"SKIPPED IssueAgent ID:{mem.id} — still blocked: {cached[:70]}")
+            issue_agents.append(agent)
+
+        logger.info(f"SPAWNED {len(issue_agents) - skipped} IssueAgents "
+                    f"({skipped} skipped as already blocked)")
 
         # Extract current game state
         game_response = state["game_response"]
@@ -266,7 +304,10 @@ def create_spawn_agents_node(
             return agent.propose(decision_llm=decision_llm, context=context)
 
         # Filter out None agents (e.g., loop_detection_agent is disabled)
-        all_agents = [a for a in issue_agents + [explorer_agent, loop_detection_agent, interaction_agent] if a is not None]
+        runnable_issues = [a for a in issue_agents if a.reason is None]
+        all_agents = [a for a in runnable_issues
+                      + [explorer_agent, loop_detection_agent, interaction_agent]
+                      if a is not None]
 
         # Run all agents in parallel — pure async, no threads.
         # return_exceptions=True isolates failures: one agent blowing up must
@@ -292,6 +333,13 @@ def create_spawn_agents_node(
                     exc_info=result,
                 )
                 _neutralize_failed_agent(agent, result)
+
+        # Remember a fresh "cannot act" verdict so the next turn does not pay
+        # ~3000 tokens to hear it again.
+        for agent, mem in zip(issue_agents, memories_sorted):
+            action = (agent.proposed_action or "").strip().lower()
+            if agent in all_agents and action in ("nothing", "none"):
+                blocked_issues[_blocked_signature(mem, context)] = agent.reason or "no action available"
 
         logger.info(
             f"All {len(all_agents)} agents completed research in PARALLEL "
@@ -437,10 +485,19 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
     lines = []
 
     def repeat_note(action):
-        """Marker + EV multiplier for a proposal that repeats a dead command."""
-        if context is not None and context.is_unproductive(action):
+        """Marker + EV multiplier for a proposal that should not be chosen."""
+        if context is None:
+            return None, 1.0
+        if context.is_unproductive(action):
             prior = context.unproductive.get(normalize_command(action), "")
             return f"  ⚠️ ALREADY TRIED HERE, no effect: \"{prior.strip()[:80]}\"", 0.0
+        undone = context.undoes_recent_progress(action)
+        if undone:
+            # The backend's accepted-command list is a grammar and contains
+            # both halves of every pair, so an agent reading it as advice
+            # proposes the inverse of what it just achieved. Observed live:
+            # "close grating" at confidence 90, right after opening it.
+            return f"  ⚠️ WOULD UNDO '{undone}' — reverses this turn's own progress", 0.0
         return None, 1.0
 
     # LoopDetectionAgent (FIRST - highest priority if loop detected)

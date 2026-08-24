@@ -684,8 +684,17 @@ WHAT JUST HAPPENED:
 
 INVENTORY: {inventory}
 
-COMMANDS THE GAME WILL ACCEPT HERE (authoritative — it told us):
+COMMANDS THE GAME CAN PARSE HERE — this is a GRAMMAR, not advice:
 {available_actions}
+
+This list says which phrasings the parser understands. It says NOTHING about
+which are worth doing, and it deliberately includes the OPPOSITE of what you
+want: "close X" sits next to "open X", "drop X" next to "take X". Choosing an
+action because it appears here is a mistake — the list is for getting the
+WORDING right once you have decided what to do.
+
+Never undo your own progress: do not close what you opened, drop what you
+took, or lock what you unlocked, unless the game text gives a reason to.
 
 ALREADY TRIED HERE, NO EFFECT (never propose these again):
 {already_tried}
@@ -693,10 +702,10 @@ ALREADY TRIED HERE, NO EFFECT (never propose these again):
 A regex hint, which is frequently WRONG and must be ignored unless the game
 text plainly supports it: {parser_hint}
 
-Choose ONE interaction. If the authoritative list above is non-empty, choose
-from it — those commands are guaranteed to parse. Never propose an action on
-an object the game has not mentioned, and never propose "nothing" or an action
-on "you"."""
+Choose ONE interaction that makes PROGRESS. Decide what is worth doing from
+the room description and your inventory, then phrase it using the grammar
+above if it appears there. Never propose an action on an object the game has
+not mentioned, and never propose "nothing" or an action on "you"."""
 
   # ═══════════════════════════════════════════════════════════
   # ISSUE CLOSED AGENT PROMPTS
