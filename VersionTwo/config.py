@@ -43,7 +43,7 @@ GAME_BACKENDS = {
 }
 
 # Active game backend - change this to switch games
-ACTIVE_GAME = "escaperoom"  # Options: "zork", "planetfall", or "escaperoom"
+ACTIVE_GAME = "zork"  # Options: "zork", "planetfall", or "escaperoom"
 
 # Helper function to get the current game config
 def get_game_config():
@@ -74,8 +74,8 @@ TURN_BUDGET_SECONDS = 600
 # ═══════════════════════════════════════════════════════════
 MODELS = {
     "ollama": {
-        "cheap": "qwen2.5:14b",      # Research, summarization, deduplication (~9GB, ~80 tok/s)
-        "expensive": "qwen2.5:14b",  # Decision-making, agent proposals (same model — stays warm, no swap)
+        "cheap": "qwen3.8:27b-mxfp8",      # Research, summarization, deduplication
+        "expensive": "qwen3.8:27b-mxfp8",  # Decision-making, agent proposals (same model — stays warm, no swap)
     },
     "openai": {
         "cheap": "gpt-5-nano-2025-08-07",
