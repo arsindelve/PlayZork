@@ -1,11 +1,9 @@
 import asyncio
 import sys
-from dotenv import load_dotenv
+
 from game_session import GameSession
 from config import SESSION_ID
 
-# Load environment variables from .env file
-load_dotenv()
 
 async def main():
 

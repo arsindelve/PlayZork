@@ -5,6 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from adventurer.prompt_library import PromptLibrary
+from .tool_execution import invoke_tool_safely
 import logging
 
 
@@ -30,7 +31,8 @@ class ExplorerAgent:
         current_location: str,
         unexplored_directions: List[str],
         mentioned_directions: List[str],
-        turn_number: int
+        turn_number: int,
+        game_exits: Optional[List[str]] = None
     ):
         """
         Initialize the single ExplorerAgent for this turn.
@@ -45,6 +47,8 @@ class ExplorerAgent:
         self.unexplored_directions = unexplored_directions
         self.mentioned_directions = mentioned_directions
         self.turn_number = turn_number
+        # Directions the game itself reports (#30); ranks candidates.
+        self.game_exits = list(game_exits or [])
 
         # Proposal fields (populated after research)
         self.proposed_action: Optional[str] = None
@@ -59,42 +63,47 @@ class ExplorerAgent:
         self.best_direction = self._pick_best_direction()
 
     def _pick_best_direction(self) -> str:
+        """Pick the direction most likely to lead somewhere.
+
+        The old rule fell back to a FIXED cardinal order — NORTH, SOUTH, EAST,
+        WEST — whenever the room description mentioned nothing. That is not a
+        tiebreak, it is a systematic northward bias, and it showed: over a
+        26-turn run the agent walked north into the forest and mapped Clearing,
+        Canyon View and Rocky Ledge while never returning to the house it
+        started beside. The ExplorerAgent won 64% of contested turns, so its
+        bias was effectively the agent's policy.
+
+        Candidates are now SCORED on real evidence:
+
+          +3  the game's own exits array says this direction exists (#30)
+          +2  the room description mentions it
+          +1  a cardinal rather than a diagonal (cheaper to describe, and
+              Zork's world is mostly cardinal)
+
+        The exits array is not a perfect oracle — North of House advertises an
+        exit that is then refused — so it ranks candidates rather than
+        restricting them, and a direction it omits can still be chosen if
+        nothing better is on offer.
         """
-        Pick the best direction to explore based on priority rules.
+        if not self.unexplored_directions:
+            return "NORTH"
 
-        Priority:
-        1. Mentioned in description (any mentioned direction)
-        2. Cardinal directions (NORTH, SOUTH, EAST, WEST) - prefer first
-        3. Diagonal directions (NE, NW, SE, SW)
-        4. UP/DOWN
+        cardinals = {"NORTH", "SOUTH", "EAST", "WEST"}
+        game_exits = {d.upper() for d in (self.game_exits or [])}
+        mentioned = {d.upper() for d in (self.mentioned_directions or [])}
 
-        Returns:
-            Best direction to explore
-        """
-        # First priority: Directions mentioned in description
-        if self.mentioned_directions:
-            # Pick first mentioned direction
-            return self.mentioned_directions[0]
+        def score(direction: str) -> tuple:
+            points = 0
+            if direction in game_exits:
+                points += 3
+            if direction in mentioned:
+                points += 2
+            if direction in cardinals:
+                points += 1
+            # Stable tiebreak on the canonical order, so a run is reproducible.
+            return (-points, self.unexplored_directions.index(direction))
 
-        # Second priority: Cardinal directions
-        cardinals = ["NORTH", "SOUTH", "EAST", "WEST"]
-        for direction in cardinals:
-            if direction in self.unexplored_directions:
-                return direction
-
-        # Third priority: Diagonals
-        diagonals = ["NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST"]
-        for direction in diagonals:
-            if direction in self.unexplored_directions:
-                return direction
-
-        # Last priority: UP/DOWN
-        for direction in ["UP", "DOWN"]:
-            if direction in self.unexplored_directions:
-                return direction
-
-        # Fallback (shouldn't reach here if unexplored_directions is non-empty)
-        return self.unexplored_directions[0] if self.unexplored_directions else "NORTH"
+        return min(self.unexplored_directions, key=score)
 
     def _calculate_confidence(self, chosen_direction: str) -> int:
         """
@@ -124,79 +133,29 @@ class ExplorerAgent:
         # Cap at 95 (never 100% certain)
         return min(base + bonus, 95)
 
-    async def research_and_propose(
+    async def propose(
         self,
-        research_agent: Runnable,
         decision_llm: BaseChatModel,
-        history_tools: list,
-        mapper_tools: list,
-        current_game_response: str,
-        current_score: int,
-        current_moves: int
+        context,
     ) -> None:
-        """
-        Phase 1: Research using tools (optional - understand map topology)
-        Phase 2: Generate exploration proposal for best_direction
+        """Generate the exploration proposal for `best_direction`.
+
+        The research round-trip is gone (#25): it asked the model to "use the
+        mapper tools to understand this location", executed whatever came
+        back once, and never iterated. TurnContext already holds the map.
         """
         logger = logging.getLogger(__name__)
+        # Function-local import: tests monkeypatch llm_utils.ainvoke_with_retry
+        from llm_utils import ainvoke_with_retry
 
-        logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"[ExplorerAgent] AGENT: ExplorerAgent")
+        logger.info(f"[ExplorerAgent:{self.best_direction}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"[ExplorerAgent] CURRENT LOCATION: {self.current_location}")
         logger.info(f"[ExplorerAgent] BEST DIRECTION: {self.best_direction}")
         logger.info(f"[ExplorerAgent] UNEXPLORED COUNT: {len(self.unexplored_directions)}")
-        logger.info(f"[ExplorerAgent] UNEXPLORED DIRECTIONS: {', '.join(self.unexplored_directions)}")
-        logger.info(f"[ExplorerAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info(f"[ExplorerAgent:{self.best_direction}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # Phase 1: Research (call mapper tools to understand geography)
-        research_input = {
-            "input": f"You are planning exploration from '{self.current_location}'. "
-                     f"There are {len(self.unexplored_directions)} unexplored directions: {', '.join(self.unexplored_directions)}. "
-                     f"Use the mapper tools to understand what we know about this location and surrounding areas.",
-            "score": current_score,
-            "locationName": self.current_location,
-            "moves": current_moves,
-            "game_response": current_game_response
-        }
-
-        from llm_utils import ainvoke_with_retry
-        research_response = await ainvoke_with_retry(
-            research_agent.with_config(
-                run_name=f"ExplorerAgent Research: {self.best_direction} from {self.current_location}"
-            ),
-            research_input,
-            operation_name="ExplorerAgent Research"
-        )
-
-        # Execute tool calls if present
-        if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
-            tool_results = []
-            all_tools = history_tools + mapper_tools
-            tools_map = {tool.name: tool for tool in all_tools}
-
-            logger.info(f"[ExplorerAgent:{self.best_direction}] Made {len(research_response.tool_calls)} tool calls:")
-
-            for tool_call in research_response.tool_calls:
-                tool_name = tool_call['name']
-                tool_args = tool_call.get('args', {})
-
-                logger.info(f"[ExplorerAgent:{self.best_direction}]   -> {tool_name}({tool_args})")
-
-                if tool_name in tools_map:
-                    tool_result = tools_map[tool_name].invoke(tool_args)
-                    logger.info(f"[ExplorerAgent:{self.best_direction}]      Result: {str(tool_result)[:150]}...")
-                    tool_results.append(f"{tool_name} result: {tool_result}")
-
-                    self.tool_calls_history.append({
-                        "tool_name": tool_name,
-                        "input": str(tool_args),
-                        "output": str(tool_result)
-                    })
-
-            self.research_context = "\n\n".join(tool_results) if tool_results else "No tools called"
-        else:
-            logger.info(f"[ExplorerAgent:{self.best_direction}] No tool calls made")
-            self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
+        current_game_response = context.game_text
+        self.research_context = context.research_context_for()
 
         # Calculate confidence for the chosen direction
         self.confidence = self._calculate_confidence(self.best_direction)

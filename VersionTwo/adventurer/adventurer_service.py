@@ -21,7 +21,7 @@ class AdventurerService:
         """
         Initializes the AdventurerService with LangGraph-managed flow.
 
-        Flow: Research → Decide → Persist (managed by LangGraph)
+        Flow: SpawnAgents → Decide → CloseIssues → Observe → Persist (LangGraph)
 
         Args:
             history_toolkit: The HistoryToolkit instance for accessing game history
@@ -35,52 +35,22 @@ class AdventurerService:
         self.inventory_toolkit = inventory_toolkit
         self.logger = GameLogger.get_instance()
 
-        # Turn number tracking (mutable reference for persist node)
-        self.turn_number_ref = {"current": 0}
-
         # Create LLM for decisions and IssueAgent proposals (using expensive model)
         self.decision_llm = get_expensive_llm(temperature=0)
 
-        # Create research agent and decision chain
-        self.research_agent = self._create_research_agent()
+        # No research agent: the turn's facts are gathered deterministically
+        # by TurnContext now (#25).
         self.decision_chain = self._create_decision_chain()
 
         # Create LangGraph to manage the flow
         self.decision_graph = create_decision_graph(
-            research_agent=self.research_agent,
             decision_chain=self.decision_chain,
             decision_llm=self.decision_llm,
             history_toolkit=self.history_toolkit,
             memory_toolkit=self.memory_toolkit,
             mapper_toolkit=self.mapper_toolkit,
             inventory_toolkit=self.inventory_toolkit,
-            turn_number_ref=self.turn_number_ref
         )
-
-    def _create_research_agent(self) -> Runnable:
-        """
-        Create the research agent that can call history and mapper tools (Phase 1)
-
-        Returns:
-            Runnable chain configured with tools
-        """
-        # Use cheap model for reasoning with tools
-        llm = get_cheap_llm(temperature=0)
-
-        # Combine history and mapper tools
-        tools = self.history_toolkit.get_tools() + self.mapper_toolkit.get_tools()
-
-        # Bind tools to the LLM and REQUIRE it to call at least one tool
-        llm_with_tools = llm.bind_tools(tools, tool_choice="any")
-
-        # Create prompt for research agent
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", PromptLibrary.get_research_agent_prompt()),
-            ("human", "{input}"),
-        ])
-
-        # Return chain that can call tools
-        return prompt | llm_with_tools
 
     def _create_decision_chain(self) -> Runnable:
         """
@@ -109,31 +79,31 @@ class AdventurerService:
         # Chain with structured output (using shared decision_llm)
         return chat_prompt_template | self.decision_llm.with_structured_output(AdventurerResponse)
 
-    async def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str, List, List]:
+    async def handle_user_input(self, last_game_response: ZorkApiResponse, turn_number: int, player_command: str) -> Tuple[AdventurerResponse, List, Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str, List, List]:
         """
-        Execute the LangGraph decision flow: SpawnAgents → Research → Decide → CloseIssues → Observe → Persist
+        Execute the LangGraph decision flow: SpawnAgents → Decide → CloseIssues → Observe → Persist
 
         The graph manages the entire flow:
         1. SpawnAgents node: Creates IssueAgents + ExplorerAgent + LoopDetectionAgent + InteractionAgent
-        2. Research node: Calls history tools to gather context
-        3. Decision node: Generates AdventurerResponse with structured output
-        4. CloseIssues node: Identifies and removes resolved issues from memory
-        5. Observe node: Identifies new strategic issues to track
-        6. Persist node: Stores new strategic issues in memory (if flagged)
+        2. Decision node: Generates AdventurerResponse with structured output
+        3. CloseIssues node: Identifies and removes resolved issues from memory
+        4. Observe node: Identifies new strategic issues to track
+        5. Persist node: Stores new strategic issues in memory (if flagged)
 
         Args:
             last_game_response: The most recent response from the Zork game
             turn_number: Current turn number for memory persistence
+            player_command: Command that produced last_game_response
 
         Returns:
             Tuple of (AdventurerResponse, List[IssueAgent], Optional[ExplorerAgent], Optional[LoopDetectionAgent], Optional[InteractionAgent], Optional[IssueClosedResponse], Optional[ObserverResponse], str) - the decision, issue agents, explorer agent, loop detection agent, interaction agent, closed issues, observer response, and decision prompt
         """
-        # Update turn number reference for persist node
-        self.turn_number_ref["current"] = turn_number
-
         # Initialize graph state
         initial_state = {
             "game_response": last_game_response,
+            "player_command": player_command,
+            # In graph state, not a side-channel dict (#26)
+            "turn_number": turn_number,
             "issue_agents": [],  # Will be populated by spawn_agents node
             "explorer_agent": None,  # Will be populated if unexplored directions exist
             "loop_detection_agent": None,  # Will be populated by spawn_agents node (always)
@@ -144,11 +114,12 @@ class AdventurerService:
             "decision_prompt": "",  # Will be populated by decision node
             "decision_tool_calls": [],  # Will be populated by decision node
             "issue_closed_response": None,  # Will be populated by close_issues node
+            "pending_closures": [],  # Staged by close_issues, applied by persist (#3)
             "observer_response": None,  # Will be populated by observe node
             "memory_persisted": False
         }
 
-        # Execute the graph (SpawnAgents → Research → Decide → CloseIssues → Observe → Persist)
+        # Execute the graph (SpawnAgents → Decide → CloseIssues → Observe → Persist)
         # Each agent logs its own activities and summaries.
         # A per-turn deadline guards against any hung agent stalling the run.
         self.logger.log_research_start()

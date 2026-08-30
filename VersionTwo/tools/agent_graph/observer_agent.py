@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool
 from .observer_response import ObserverResponse
 from tools.memory import MemoryToolkit
 from adventurer.prompt_library import PromptLibrary
+from .tool_execution import invoke_tool_safely
 import logging
 
 
@@ -36,16 +37,15 @@ class ObserverAgent:
         self.rememberImportance = None
         self.item = None
 
-    def observe(
+    async def observe(
         self,
         game_response: str,
         location: str,
         score: int,
         moves: int,
         decision_llm: BaseChatModel,
-        research_agent,
-        history_tools: List[BaseTool],
-        memory_toolkit: MemoryToolkit
+        memory_toolkit: MemoryToolkit,
+        context=None,
     ) -> ObserverResponse:
         """
         Analyze the game response and identify new strategic issues.
@@ -56,7 +56,6 @@ class ObserverAgent:
             score: Current game score
             moves: Current move count
             decision_llm: The LLM to use for analysis
-            research_agent: Research agent with access to history tools
             history_tools: List of history tools for context gathering
             memory_toolkit: MemoryToolkit for accessing already-tracked issues
 
@@ -90,38 +89,17 @@ class ObserverAgent:
             "game_response": game_response
         }
 
-        from llm_utils import invoke_with_retry
-        research_response = invoke_with_retry(
-            research_agent.with_config(
-                run_name=f"Observer Research: {location}"
-            ),
-            research_input,
-            operation_name="Observer Research"
+        # Historical context comes from the TurnContext, assembled in code.
+        # This was a full LLM round-trip that asked the model to call
+        # get_full_summary / get_recent_turns, then executed whatever came
+        # back against a map holding only 2 of the 8 bound tools (#5) — so
+        # most of what it asked for was silently dropped and the Observer
+        # decided what to persist to long-term memory with
+        # "No historical context available." (#25).
+        historical_context = (
+            context.research_context_for() if context is not None
+            else "No historical context retrieved."
         )
-
-        # Execute tool calls to get historical context
-        historical_context = ""
-        if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
-            tool_results = []
-            tools_map = {tool.name: tool for tool in history_tools}
-
-            self.logger.info(f"[ObserverAgent] Made {len(research_response.tool_calls)} tool calls:")
-
-            for tool_call in research_response.tool_calls:
-                tool_name = tool_call['name']
-                tool_args = tool_call.get('args', {})
-
-                self.logger.info(f"[ObserverAgent]   -> {tool_name}({tool_args})")
-
-                if tool_name in tools_map:
-                    tool_result = tools_map[tool_name].invoke(tool_args)
-                    self.logger.info(f"[ObserverAgent]      Result: {str(tool_result)[:150]}...")
-                    tool_results.append(f"{tool_name}: {tool_result}")
-
-            historical_context = "\n\n".join(tool_results) if tool_results else "No historical context available."
-        else:
-            self.logger.info(f"[ObserverAgent] No tool calls made")
-            historical_context = "No historical context retrieved."
 
         self.logger.info(f"[ObserverAgent] Historical context length: {len(historical_context)} chars")
 
@@ -132,10 +110,14 @@ class ObserverAgent:
         prompt = self._create_observation_prompt(game_response, location, historical_context, tracked_issues_text)
 
         # Use structured output to get ObserverResponse
+        # Function-local import: tests monkeypatch llm_utils.invoke_with_retry
+        # Async: a timeout must cancel the request rather than leak the
+        # thread and retry alongside it (#26, #27).
+        from llm_utils import ainvoke_with_retry
         observation_chain = decision_llm.with_structured_output(ObserverResponse)
 
         # Invoke with timeout and retry
-        response = invoke_with_retry(
+        response = await ainvoke_with_retry(
             observation_chain.with_config(
                 run_name=f"Observer Agent: {location}"
             ),

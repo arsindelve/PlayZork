@@ -128,12 +128,15 @@ This is where decision-making is explicitly separated from proposal generation.
 Each turn executes the following sequence:
 
 1. Update shared state (facts, inventory, map, memory)
-2. Mission agents evaluate state and each propose an action
-3. Explorer agent proposes an exploratory action
-4. Arbiter receives all proposals and selects one
-5. Environment executes the selected action
-6. Results update shared state
-7. Repeat
+2. Assemble a **deterministic turn context** in code — inventory, map, exits, routing to each tracked issue, and what has already been tried here without effect. No LLM call: the data is deterministic, so fetching it directly is both faster and more reliable than asking a model to request it
+3. Mission agents evaluate that context and each propose an action
+4. Explorer agent proposes an exploratory action
+5. Arbiter receives all proposals, with the expected value of any already-refuted action zeroed, and selects one
+6. Environment executes the selected action
+7. Results update shared state
+8. Repeat
+
+Issue discovery and retirement run **concurrently** with proposal and arbitration, since neither depends on the decision; a single writer commits all state changes at the end of the turn.
 
 No single agent ever holds the full cognitive burden.
 
@@ -195,11 +198,13 @@ It claims only that this structure can represent and arbitrate competing priorit
 
 This work reports on a preliminary prototype and intentionally limits the scope of its claims.
 
-* **No task completion:** The current system does not solve *Zork I* and becomes stuck early in gameplay. No claims are made about end-to-end task completion.
+* **No task completion:** The current system does not solve *Zork I*. No claims are made about end-to-end task completion.
+* **Serving, not architecture, dominates measured latency:** on the development machine the local inference server was benchmarked at *flat* throughput across 1, 2, 4 and 8 concurrent requests — i.e. no effective parallelism. Wall-clock per turn is therefore a proxy for total tokens processed, and any architecture comparison must report token counts alongside time or run on serving that genuinely batches.
 * **Limited evaluation:** Results are qualitative and based on a small number of runs. No statistical guarantees or comparative benchmarks are provided.
 * **Model dependence:** Experiments use a single locally hosted LLM configuration; results may not generalize across models or scales.
-* **Manual issue definition:** Issue agents are currently defined manually; automatic discovery, merging, and retirement of issues is not yet implemented.
+* **Unvalidated issue lifecycle:** Issue discovery, semantic de-duplication, and retirement are automated via LLM observers, but the quality of that lifecycle (missed issues, premature closure, duplicate leakage) has not been measured.
 * **Unmeasured tradeoffs:** While the architecture makes exploration explicit, optimal weighting between exploration and exploitation remains an open question.
+* **Scaffolding correctness is a precondition, not a result:** a systematic audit of the deterministic components (map, inventory, memory) found errors that silently corrupted agent inputs — a mis-named tool that made inventory invisible, successful moves recorded as permanent walls, and same-named rooms merged into one node. These are now fixed and regression-tested, but the episode is itself a finding: a weak model cannot compensate for corrupted scaffolding, and such failures are invisible without deliberate instrumentation.
 
 These limitations are not incidental; they define the boundary of the present contribution, which is architectural and methodological rather than performance-driven.
 
@@ -225,26 +230,27 @@ This paper positions itself as an architectural and methodological contribution,
 
 ---
 
-## Current Status (v0.1-arxiv)
+## Current Status
 
-See `STATUS.md` for detailed system status.
+See `STATUS.md` for dated development logs. The tag `v0.1-arxiv` (the archived Zenodo deposit) is a **pre–multi-agent baseline**; the architecture described above is now implemented on `main`.
 
 **Working:**
 
-* Two-phase agent architecture (research → decision)
-* Tool-based memory access (history and memory toolkits)
-* Local LLM inference (Llama 3.3 via Ollama)
-* Structured output enforcement
-* State persistence across turns
+* Multi-agent deliberation per turn: up to 5 IssueAgents + ExplorerAgent + InteractionAgent propose in parallel; a separate Decision Agent arbitrates
+* Automatic issue lifecycle: an ObserverAgent discovers new strategic issues, semantic de-duplication merges them, an IssueClosedAgent retires resolved ones, and importance decays lazily over turns
+* Map graph with BFS pathfinding and blocked-direction tracking (failed movements are recorded and never re-proposed)
+* Inventory tracking, death analysis with lessons-learned persistence, and dual (recent + long-running) history summaries
+* SQLite persistence with session resumption; per-turn HTML reports of every proposal and decision
+* Structured output enforcement throughout; local LLM inference (Qwen 2.5 14B via Ollama) or OpenAI
+* Multiple game backends: *Zork I*, *Planetfall* (hosted APIs), and a local Escape Room test game
+* **Both experiment arms implemented:** `PLAYZORK_CONDITION=multi_agent | single_shot` selects the architecture or the single-inference control, which receives the same information and the same model
+* **Per-turn token accounting** (`turn_tokens`), so runs are comparable across machines and the architecture is charged for what it costs rather than for how fast the host happens to be
 
 **Not Working:**
 
 * Does not solve *Zork I* (gets stuck early)
-* Shallow tool usage in research phase
-* Memory tools underutilized
-* Command loops not fully prevented
-
-This tag represents a **pre–multi-agent baseline**: tool infrastructure in place, single-agent architecture stable, but reasoning quality insufficient for sustained progress.
+* Command loops not fully prevented (a dedicated LoopDetectionAgent exists but is disabled as ineffective)
+* Evaluation remains qualitative; no comparative benchmarks yet
 
 ---
 
@@ -254,45 +260,73 @@ This project uses **UV** for dependency management and **Ollama** for local LLM 
 
 ### Prerequisites
 
-Ollama running with Llama 3.3:
+Ollama running with the configured Qwen model:
 
 ```
-ollama pull llama3.3
-ollama serve
+brew install ollama
+brew services start ollama
+ollama pull qwen2.5:14b
 ```
 
-Optional `.env` configuration:
+Create the local runtime configuration:
 
-```
-OLLAMA_HOST="http://[your-host]:11434"
+```bash
+cp .env.example .env
 ```
 
 ### Running the System
 
 ```
-uv sync
+uv sync --locked
 uv run python VersionTwo/main.py
 ```
 
-```
-Project Structure
-```
+Runtime is configured via `.env`: `PLAYZORK_GAME` (zork | planetfall | escaperoom), `PLAYZORK_SESSION_ID` (sessions resume), and `PLAYZORK_LLM_PROVIDER` (ollama | openai). The run writes state to `data/zork_sessions.db`, logs to `logs/`, and per-turn HTML reports to `logs/sessions/<session-id>/`.
+
+### Project Structure
 
 ```
 VersionTwo/
-├── adventurer/           # Agent decision logic
-│   ├── adventurer_service.py
-│   └── prompt_library.py
+├── adventurer/              # Arbiter chain + all prompts
+│   ├── adventurer_service.py    # Builds the decision chain and decision graph
+│   ├── single_shot_service.py   # Control arm: one inference per turn, full context
+│   ├── adventurer_response.py   # Structured output schema for the arbiter
+│   └── prompt_library.py        # Every prompt in the system (static methods)
 ├── tools/
-│   ├── history/         # History toolkit with summarization
-│   └── memory/          # Memory toolkit with importance scoring
-├── zork/                # Zork API client
-├── game_session.py      # Main game loop
-└── display_manager.py   # Terminal UI
+│   ├── agent_graph/         # LangGraph pipeline + deliberating agents
+│   │   ├── decision_graph.py    # BuildContext → (Spawn → Decide | Close | Observe) → Persist
+│   │   ├── turn_context.py      # Deterministic per-turn facts, assembled in code
+│   │   ├── issue_agent.py       # One advocate per tracked strategic issue
+│   │   ├── explorer_agent.py    # Advocates for unexplored directions
+│   │   ├── interaction_agent.py # Advocates for local object interactions
+│   │   ├── loop_detection_agent.py  # Loop breaker (currently disabled)
+│   │   ├── issue_closed_agent.py    # Retires resolved issues
+│   │   └── observer_agent.py        # Discovers new issues
+│   ├── history/             # Turn history + dual LLM summaries
+│   ├── memory/              # Strategic issue store (write-only, with semantic dedup)
+│   ├── mapping/             # Location graph, BFS pathfinding, blocked-direction tracking
+│   ├── inventory/           # Item tracking with LLM turn analysis
+│   ├── analysis/            # Big-picture strategy + death analysis
+│   ├── database/            # Shared SQLite persistence
+│   └── reporting/           # Per-turn HTML reports
+├── zork/                    # Game API client (Zork, Planetfall, Escape Room backends)
+├── game_session.py          # Main game loop
+├── config.py                # Game/provider/model configuration (.env-driven)
+└── display_manager.py       # Rich terminal UI
 
-STATUS.md
-NOTES.md
+STATUS.md                    # Dated development logs
+NOTES.md                     # Research notes
 ```
+
+---
+
+## Measurement Notes
+
+Two findings from instrumenting the system are worth stating up front, because they shape how any result here should be read.
+
+**Wall-clock measures token volume, not architecture.** The development machine's local inference server delivers flat throughput regardless of request concurrency (0.26 req/s at 1, 2 and 4 concurrent, with realistic prompts). Restructuring *when* calls happen therefore cannot help; only reducing total tokens can. Consequently `score@wall-clock` is reported alongside token counts, and comparisons across hardware use tokens as the common unit.
+
+**Removing calls works; reordering them does not.** Replacing per-agent LLM "research" round-trips with deterministic context assembly cut per-turn calls from `10 + 2N` to `5 + N` for N tracked issues and halved turn time. A subsequent change that ran independent work concurrently produced no reliable improvement on the same hardware, for the reason above.
 
 ---
 
@@ -328,4 +362,4 @@ If you use this work, please cite:
 
 ## Acknowledgments
 
-Built with LangChain, Ollama, and Llama 3.3. *Zork I* © Infocom, 1980.
+Built with LangChain, LangGraph, Ollama, and Qwen 2.5. *Zork I* and *Planetfall* © Infocom.

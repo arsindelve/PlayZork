@@ -3,6 +3,7 @@ from typing import List, Optional
 from tools.database import DatabaseManager
 
 from .mapper_state import MapperState, LocationTransition
+from .directions import CANONICAL_DIRECTIONS, normalize_direction
 from .mapper_tools import initialize_mapper_tools, get_mapper_tools
 from .pathfinder import PathFinder
 
@@ -30,7 +31,10 @@ class MapperToolkit:
         self,
         current_location: str,
         player_command: str,
-        turn_number: int
+        turn_number: int,
+        game_response: Optional[str] = None,
+        api_direction: Optional[str] = None,
+        exits: Optional[list] = None
     ) -> None:
         """
         Update map state after a game turn completes.
@@ -40,6 +44,8 @@ class MapperToolkit:
             current_location: Current location name
             player_command: Command that was executed
             turn_number: Current turn number
+            game_response: This turn's game text, used to detect a death or a
+                refused move before either is mistaken for a passage (#12, #10)
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -48,7 +54,10 @@ class MapperToolkit:
             self.state.update_from_turn(
                 current_location=current_location,
                 player_command=player_command,
-                turn_number=turn_number
+                turn_number=turn_number,
+                game_response=game_response,
+                api_direction=api_direction,
+                exits=exits
             )
         except Exception as e:
             logger.error(f"ERROR in mapper update_after_turn: {e}", exc_info=True)
@@ -98,4 +107,5 @@ class MapperToolkit:
 
 
 # Export public API
-__all__ = ['MapperToolkit', 'MapperState', 'LocationTransition', 'PathFinder']
+__all__ = ['MapperToolkit', 'MapperState', 'LocationTransition', 'PathFinder',
+           'CANONICAL_DIRECTIONS', 'normalize_direction']

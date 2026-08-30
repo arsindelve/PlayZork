@@ -2,6 +2,7 @@
 from typing import Optional
 from langchain_core.tools import tool
 
+from .locations import normalize_location
 from .mapper_state import MapperState
 
 
@@ -79,6 +80,10 @@ def get_exits_from_location(location: str) -> str:
     if not exits:
         return f"No known exits from '{location}'. Either you haven't been there yet, or you haven't tried moving from there."
 
+    # Echo the map's own spelling rather than the caller's, so the model learns
+    # the backend's casing instead of seeing its guess reflected back (#13).
+    location = _mapper_state.resolve_location(location)
+
     result = f"KNOWN EXITS FROM '{location}':\n\n"
     for direction, destination in exits:
         result += f"  {direction} -> '{destination}'\n"
@@ -140,7 +145,7 @@ def get_direction_to_location(from_location: str, to_location: str) -> str:
     if _mapper_state is None:
         return "Error: Mapper tools not initialized."
 
-    if from_location.strip().lower() == to_location.strip().lower():
+    if normalize_location(from_location) == normalize_location(to_location):
         return "ALREADY THERE"
 
     next_step = _mapper_state.pathfinder.get_next_step(from_location, to_location)

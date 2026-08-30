@@ -2,6 +2,22 @@
 from typing import Optional, List, Dict, Tuple, TYPE_CHECKING
 from collections import deque
 
+from .locations import normalize_location
+
+# Inverse of each canonical direction, for provisional reverse edges. Kept here
+# rather than imported from turn_context so the mapping package stays
+# dependency-free (see directions.py).
+_REVERSE_DIRECTIONS = {
+    "NORTH": "SOUTH", "SOUTH": "NORTH",
+    "EAST": "WEST", "WEST": "EAST",
+    "NORTHEAST": "SOUTHWEST", "SOUTHWEST": "NORTHEAST",
+    "NORTHWEST": "SOUTHEAST", "SOUTHEAST": "NORTHWEST",
+    "UP": "DOWN", "DOWN": "UP",
+    "N": "SOUTH", "S": "NORTH", "E": "WEST", "W": "EAST",
+    "NE": "SOUTHWEST", "SW": "NORTHEAST", "NW": "SOUTHEAST", "SE": "NORTHWEST",
+    "U": "DOWN", "D": "UP",
+}
+
 if TYPE_CHECKING:
     from .mapper_state import MapperState
 
@@ -31,19 +47,67 @@ class PathFinder:
             Dict mapping location -> [(direction, destination), ...]
         """
         graph: Dict[str, List[Tuple[str, str]]] = {}
+        provisional: Dict[str, List[Tuple[str, str]]] = {}
+        blocked_directions: Dict[str, set] = {}
         transitions = self.mapper_state.get_all_transitions()
 
         for trans in transitions:
-            # Skip BLOCKED transitions (failed movement attempts)
-            if trans.to_location == "BLOCKED":
+            # Skip BLOCKED transitions (failed movement attempts), but REMEMBER
+            # them: a direction the game has already refused must never be
+            # re-offered as a provisional reverse.
+            if normalize_location(trans.to_location) == normalize_location("BLOCKED"):
+                blocked_directions.setdefault(
+                    normalize_location(trans.from_location), set()
+                ).add((trans.direction or "").strip().upper())
                 continue
 
-            if trans.from_location not in graph:
-                graph[trans.from_location] = []
+            # Graph keys are case-folded so a room entered under one casing and
+            # left under another is ONE node (#13). Only directions are ever
+            # returned, so nothing the LLM or the HTML map displays changes.
+            from_key = normalize_location(trans.from_location)
+            if from_key not in graph:
+                graph[from_key] = []
 
-            graph[trans.from_location].append(
-                (trans.direction, trans.to_location)
-            )
+            to_key = normalize_location(trans.to_location)
+            graph[from_key].append((trans.direction, to_key))
+
+            # PROVISIONAL REVERSE EDGE — for routing only, never stored.
+            #
+            # `map_transitions` is directed, so walking A->B taught us nothing
+            # about getting back, and the agent could not PLAN a return to
+            # anywhere it had not already walked back from. In pf4-20260824 the
+            # escape pod was at Deck Nine and the agent, one room away, was
+            # told "NO PATH"; it only got back by inventing "RETURN TO DECK
+            # NINE", which Planetfall's parser happened to accept and Zork's
+            # would not.
+            #
+            # This is a ROUTING hint, not a recorded fact. Nothing is written
+            # to the database and no reverse edge appears on the map, so the
+            # stored world model stays exactly as conservative as before. One-
+            # way passages (Zork's slide, the chimney) therefore never gain a
+            # false edge in the map — the guess costs at most one refused move,
+            # which `is_movement_refusal` then records as a real BLOCKED edge,
+            # and the route corrects itself. That is the direction the standing
+            # invariant says to err in: a wrong "yes" costs a turn and the game
+            # re-teaches it, a wrong "no" silently removes something real.
+            #
+            # A real edge always wins: reverses are appended after every
+            # recorded transition is in place, and never for a direction that
+            # already has one.
+            reverse = _REVERSE_DIRECTIONS.get((trans.direction or "").strip().upper())
+            if reverse:
+                provisional.setdefault(to_key, []).append((reverse, from_key))
+
+        # Merge provisional reverses, letting recorded edges take precedence.
+        for node, edges in provisional.items():
+            known = graph.setdefault(node, [])
+            recorded = {d.strip().upper() for d, _ in known}
+            blocked = blocked_directions.get(node, set())
+            for direction, destination in edges:
+                if direction in recorded or direction in blocked:
+                    continue
+                recorded.add(direction)
+                known.append((direction, destination))
 
         return graph
 
@@ -63,6 +127,11 @@ class PathFinder:
             List of directions to follow (e.g., ["NORTH", "EAST"])
             or None if no path exists
         """
+        # These arrive straight from an LLM tool call, so their casing is not
+        # necessarily the backend's (#13).
+        from_location = normalize_location(from_location)
+        to_location = normalize_location(to_location)
+
         # Handle same location case
         if from_location == to_location:
             return []

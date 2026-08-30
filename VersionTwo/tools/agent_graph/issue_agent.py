@@ -6,6 +6,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_core.language_models import BaseChatModel
 from adventurer.prompt_library import PromptLibrary
+from .tool_execution import invoke_tool_safely, TOOL_ERROR_PREFIX
+from tools.mapping.locations import UNKNOWN_LOCATION, is_known_location
 import logging
 
 
@@ -65,141 +67,70 @@ class IssueAgent:
             f"Discovered: Turn {self.turn_number}"
         )
 
-    async def research_and_propose(
-        self,
-        research_agent: Runnable,
-        decision_llm: BaseChatModel,
-        history_tools: list,
-        current_location: str,
-        current_game_response: str,
-        current_score: int,
-        current_moves: int
-    ) -> IssueProposal:
+    @staticmethod
+    def _declined(proposal) -> bool:
+        """True when the agent effectively proposed nothing.
+
+        Local models express this several ways — an empty string, the literal
+        word "nothing", or a real-looking action at zero confidence — and all
+        three reach the arbiter as an unusable proposal.
         """
-        Execute research cycle and generate a proposal for solving this issue.
+        action = (getattr(proposal, "proposed_action", "") or "").strip().lower()
+        confidence = getattr(proposal, "confidence", 0) or 0
+        return (not action) or action in ("nothing", "none", "n/a") or confidence <= 0
+
+    async def propose(
+        self,
+        decision_llm: BaseChatModel,
+        context,
+    ) -> IssueProposal:
+        """Generate a proposal for solving this issue.
+
+        The old phase-1 "research" LLM round-trip is gone (#25). It asked a
+        14B model for permission to run SQLite queries whose arguments the
+        code already knew, executed them once, never fed results back for a
+        second round, and discarded `response.content` whenever tool calls
+        existed. TurnContext now supplies the same facts deterministically —
+        and completely, where the LLM route could silently return any subset
+        (#4, #5, #6).
 
         Args:
-            research_agent: LLM chain with tools for calling history
-            decision_llm: LLM for generating structured proposal
-            history_tools: List of available history tools
-            current_location: Current game location
-            current_game_response: Latest game response text
-            current_score: Current game score
-            current_moves: Current move count
+            decision_llm: LLM for generating the structured proposal
+            context: This turn's TurnContext
 
         Returns:
             IssueProposal with proposed_action and confidence score
         """
         logger = logging.getLogger(__name__)
+        # Function-local import: tests monkeypatch llm_utils.ainvoke_with_retry
+        from llm_utils import ainvoke_with_retry
 
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"[IssueAgent ID:{self.memory.id}] AGENT: IssueAgent")
-        logger.info(f"[IssueAgent ID:{self.memory.id}] ID: {self.memory.id}")
         logger.info(f"[IssueAgent ID:{self.memory.id}] ISSUE: {self.issue_content}")
         logger.info(f"[IssueAgent ID:{self.memory.id}] IMPORTANCE: {self.importance}/1000")
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Phase 1: Research for '{self.issue_content}'")
 
-        # Determine location status for research instructions
-        if self.location and current_location:
-            issue_loc_normalized = self.location.strip().lower()
-            current_loc_normalized = current_location.strip().lower()
-            is_same_location = issue_loc_normalized == current_loc_normalized
-        else:
-            is_same_location = True
+        current_location = context.location
+        current_game_response = context.game_text
 
-        # Build research instruction based on location
-        if not is_same_location and self.location:
-            research_instruction = (
-                f"You are investigating this strategic issue: '{self.issue_content}'. "
-                f"The issue is at '{self.location}' but you are at '{current_location}'. "
-                f"REQUIRED: 1) Call get_direction_to_location(from_location='{current_location}', to_location='{self.location}') to find path. "
-                f"2) Call get_current_inventory() to check if you have items that could solve this issue. "
-                f"3) Call get_full_summary() for context."
-            )
-        else:
-            research_instruction = (
-                f"You are investigating this strategic issue: '{self.issue_content}'. "
-                f"Use the available tools to gather relevant history context."
-            )
+        # Where the issue actually points, which is not always where it was
+        # noticed. "Ensign Blather at Reactor Lobby — return to Deck Nine as
+        # ordered" was navigated toward Reactor Lobby, the room we were already
+        # standing in, so the route was NO PATH and this agent had nothing to
+        # offer while the escape pod sat two rooms away.
+        from tools.memory.issue_target import resolve_issue_target
+        self.target_location = resolve_issue_target(
+            self.issue_content, self.location,
+            getattr(context, "known_locations", None)) or self.location
 
-        # Phase 1: Research using history tools
-        # Must match the research agent prompt parameters: score, locationName, moves, game_response
-        research_input = {
-            "input": research_instruction,
-            "score": current_score,
-            "locationName": current_location,
-            "moves": current_moves,
-            "game_response": current_game_response
-        }
-
-        logger.info(f"[IssueAgent] Calling research_agent.ainvoke()...")
-        from llm_utils import ainvoke_with_retry
-        research_response = await ainvoke_with_retry(
-            research_agent.with_config(
-                run_name=f"IssueAgent Research: {self.issue_content[:60]}"
-            ),
-            research_input,
-            operation_name=f"IssueAgent Research: {self.issue_content[:40]}"
-        )
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Research agent responded successfully")
-
-        # Execute tool calls if present
-        if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
-            tool_results = []
-            tools_map = {tool.name: tool for tool in history_tools}
-
-            logger.info(f"[IssueAgent ID:{self.memory.id}] Made {len(research_response.tool_calls)} tool calls:")
-
-            for tool_call in research_response.tool_calls:
-                tool_name = tool_call['name']
-                tool_args = tool_call.get('args', {})
-
-                logger.info(f"[IssueAgent ID:{self.memory.id}]   -> {tool_name}({tool_args})")
-
-                if tool_name in tools_map:
-                    tool_result = tools_map[tool_name].invoke(tool_args)
-                    logger.info(f"[IssueAgent ID:{self.memory.id}]      Result: {str(tool_result)[:150]}...")
-                    tool_results.append(f"{tool_name} result: {tool_result}")
-
-                    # Store tool call history for reporting
-                    self.tool_calls_history.append({
-                        "tool_name": tool_name,
-                        "input": str(tool_args),
-                        "output": str(tool_result)
-                    })
-
-            self.research_context = "\n\n".join(tool_results) if tool_results else "No tools executed."
-        else:
-            logger.info(f"[IssueAgent ID:{self.memory.id}] No tool calls made")
-            self.research_context = research_response.content if hasattr(research_response, 'content') else str(research_response)
-
-        # Extract navigation direction and inventory from research
-        navigation_direction = "NOT CHECKED"
-        inventory_items = []
-
-        for tool_call in self.tool_calls_history:
-            tool_name = tool_call.get("tool_name", "")
-            output = tool_call.get("output", "")
-
-            if tool_name == "get_direction_to_location":
-                if output in ["NO PATH", "ALREADY THERE"] or output.startswith("Error"):
-                    navigation_direction = output
-                else:
-                    navigation_direction = output  # e.g., "SOUTH"
-
-            elif tool_name == "get_current_inventory":
-                # Parse inventory output
-                if "empty" not in output.lower() and "no items" not in output.lower():
-                    # Try to extract items from the inventory output
-                    inventory_items = [item.strip() for item in output.replace("\n", ",").split(",") if item.strip()]
+        # Everything the research phase used to fetch, fetched in code.
+        navigation_direction = context.direction_to(self.target_location)
+        inventory_summary = context.inventory_summary
+        self.research_context = context.research_context_for(self.target_location)
 
         logger.info(f"[IssueAgent ID:{self.memory.id}] Navigation direction: {navigation_direction}")
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Inventory items: {inventory_items}")
-
-        # Phase 2: Generate proposal based on research
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Phase 2: Generating proposal for '{self.issue_content}'")
-        logger.info(f"[IssueAgent ID:{self.memory.id}] Research context length: {len(self.research_context)} chars")
+        logger.info(f"[IssueAgent ID:{self.memory.id}] Inventory: {inventory_summary}")
 
         proposal_prompt = ChatPromptTemplate.from_messages([
             ("system", PromptLibrary.get_issue_agent_system_prompt()),
@@ -211,15 +142,12 @@ class IssueAgent:
         logger.info(f"[IssueAgent ID:{self.memory.id}] Calling proposal_chain.invoke()...")
 
         # Calculate location status for spatial reasoning
-        if self.location and current_location:
-            issue_loc_normalized = self.location.strip().lower()
+        if self.target_location and is_known_location(current_location):
+            issue_loc_normalized = self.target_location.strip().lower()
             current_loc_normalized = current_location.strip().lower()
             location_status = "SAME LOCATION" if issue_loc_normalized == current_loc_normalized else "DIFFERENT LOCATION"
         else:
             location_status = "UNKNOWN"
-
-        # Prepare inventory summary for proposal
-        inventory_summary = ", ".join(inventory_items) if inventory_items else "empty"
 
         proposal = await ainvoke_with_retry(
             proposal_chain.with_config(
@@ -227,7 +155,7 @@ class IssueAgent:
             ),
             {
                 "issue": self.issue_content,
-                "issue_location": self.location or "Unknown",
+                "issue_location": self.target_location or "Unknown",
                 "current_location": current_location,
                 "location_status": location_status,
                 "navigation_direction": navigation_direction,
@@ -243,6 +171,32 @@ class IssueAgent:
         self.proposed_action = proposal.proposed_action
         self.reason = proposal.reason
         self.confidence = proposal.confidence
+
+        # An issue you are not standing at has a deterministic answer: walk
+        # toward it. The prompt already carries `navigation_direction` and
+        # `location_status`, and the model declined anyway — in pf-20260824 it
+        # returned "nothing" at confidence 0 for a 900-importance escape pod
+        # two rooms away, while the ship's clock ran. Same shape as #21: a rule
+        # stated only in prose is not a mechanism, so enforce it here.
+        #
+        # Confidence describes the RELIABILITY OF THE ACTION, not the worth of
+        # the issue: one step along a BFS shortest path over edges we recorded
+        # ourselves is about as dependable as a proposal gets. Whether the
+        # issue deserves pursuing is already priced in by the importance term
+        # of the expected value — 900 importance gives EV 63 and outranks
+        # exploration's 47.5, a decayed 300 gives 21 and does not.
+        if self._declined(proposal) and location_status == "DIFFERENT LOCATION":
+            step = (navigation_direction or "").strip().upper()
+            if step and step not in ("NO PATH", "NOT AVAILABLE", "UNKNOWN"):
+                self.proposed_action = step
+                self.confidence = 70
+                self.reason = (
+                    f"Cannot act on this issue from {current_location}; it is "
+                    f"at {self.target_location}. {step} is the next step on the known "
+                    f"route there.")
+                logger.info(
+                    f"[IssueAgent ID:{self.memory.id}] Declined with no action; "
+                    f"substituting route step {step} toward {self.target_location}")
 
         # Log proposal summary
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

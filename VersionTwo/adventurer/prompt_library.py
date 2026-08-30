@@ -130,10 +130,18 @@ Output JSON with:
 
   @staticmethod
   def get_decision_agent_human_prompt():
-    return f"""=== GAME STATE ===
+    return f"""=== OBJECTIVE ===
+{GAME_OBJECTIVE}
+
+Score: {{score}} — {{score_trajectory}}
+
+=== GAME STATE ===
 Location: {{locationName}}
-Score: {{score}} | Moves: {{moves}}
+Moves: {{moves}}
 Game Response: {{game_response}}
+
+=== PLACES SEEN BUT NOT ENTERED ===
+{{frontier}}
 
 === RESEARCH CONTEXT ===
 {{research_context}}
@@ -144,11 +152,20 @@ Game Response: {{game_response}}
 === YOUR TASK ===
 Evaluate the proposals above and choose the best action.
 
-Consider:
-1. Expected Value: Which proposal has highest (importance × confidence)?
-2. Are we stuck in a loop? (prefer exploration)
-3. Any consensus among agents?
-4. What does research context warn against?
+Consider, in this order:
+1. Does any proposal plausibly ADVANCE THE OBJECTIVE — reaching somewhere new
+   that could hold treasure, acquiring a useful item, or solving a puzzle that
+   unblocks progress? Prefer it, even if another proposal scores higher.
+2. If the score has not moved for many turns, the current line of play is not
+   working. Prefer a proposal that changes the situation over one that
+   continues it.
+3. When nothing clearly advances the objective and only exploration is on
+   offer, prefer exploring TOWARD a place listed above as seen-but-not-entered
+   — a building you have walked past is far likelier to hold something than
+   more open terrain.
+4. Expected Value (importance × confidence) as a tiebreak, not a rule. The EV
+   figure knows nothing about the objective; you do.
+5. Ignore any proposal marked ALREADY TRIED HERE or WOULD UNDO.
 
 Choose the best proposal and explain your reasoning clearly in the 'reason' field.
 
@@ -677,15 +694,35 @@ Respond with structured output."""
   @staticmethod
   def get_interaction_agent_human_prompt():
     return """CURRENT LOCATION: {current_location}
-CURRENT SCORE: {current_score}
+SCORE: {current_score}
 
-INVENTORY:
-{inventory}
-
-CURRENT GAME RESPONSE:
+WHAT JUST HAPPENED:
 {game_response}
 
-Analyze the game response for interactive objects and propose the best interaction."""
+INVENTORY: {inventory}
+
+COMMANDS THE GAME CAN PARSE HERE — this is a GRAMMAR, not advice:
+{available_actions}
+
+This list says which phrasings the parser understands. It says NOTHING about
+which are worth doing, and it deliberately includes the OPPOSITE of what you
+want: "close X" sits next to "open X", "drop X" next to "take X". Choosing an
+action because it appears here is a mistake — the list is for getting the
+WORDING right once you have decided what to do.
+
+Never undo your own progress: do not close what you opened, drop what you
+took, or lock what you unlocked, unless the game text gives a reason to.
+
+ALREADY TRIED HERE, NO EFFECT (never propose these again):
+{already_tried}
+
+A regex hint, which is frequently WRONG and must be ignored unless the game
+text plainly supports it: {parser_hint}
+
+Choose ONE interaction that makes PROGRESS. Decide what is worth doing from
+the room description and your inventory, then phrase it using the grammar
+above if it appears there. Never propose an action on an object the game has
+not mentioned, and never propose "nothing" or an action on "you"."""
 
   # ═══════════════════════════════════════════════════════════
   # ISSUE CLOSED AGENT PROMPTS
@@ -693,6 +730,11 @@ Analyze the game response for interactive objects and propose the best interacti
 
   @staticmethod
   def get_issue_closed_analysis_prompt(tracked_issues, recent_history, location, game_response):
+    """Built here and handed to the model as a PLAIN STRING, not as a
+    LangChain template — so brace escaping collapses exactly once (this
+    f-string), not twice. Writing `{{{{` here, the convention used by the
+    template-rendered prompts elsewhere in this file, showed the model `{{`
+    and taught it malformed JSON (#28)."""
     return f"""You are the IssueClosedAgent in a {GAME_NAME}-playing AI system.
 
 YOUR SINGLE RESPONSIBILITY:
@@ -843,21 +885,28 @@ Return JSON with:
 - closed_issue_ids: List of memory IDs (integers) for issues that should be closed
 - reasoning: Brief explanation of why these issues were closed
 
-CRITICAL: Return the ID number from each tracked issue.
-Example: If tracked issue is "- [ID:5, Importance:405/1000] Climbable cliff above Rocky Ledge"
-Return in closed_issue_ids: 5
+CRITICAL - IDs ARE COPIED, NEVER INVENTED:
+Every ID you return MUST be copied from the "CURRENTLY TRACKED ISSUES" list above:
+the number that appears after "ID:" on the line you are closing.
+An ID that is not in that list is DISCARDED and the issue stays open.
+The IDs in the example below are placeholders. NEVER return them.
 
-Example output:
-{{{{
-  "closed_issue_ids": [5, 12],
-  "reasoning": "Issue ID 5 (mailbox) was opened and leaflet taken. Issue ID 12 (grating) was unlocked and opened."
-}}}}
-
-If no issues should be closed:
-{{{{
+DEFAULT ANSWER - use this whenever no issue was actually resolved this turn:
+{{
   "closed_issue_ids": [],
   "reasoning": "No tracked issues have been resolved in recent history."
-}}}}
+}}
+
+FORMAT EXAMPLE ONLY - the placeholder IDs 9001/9002 do not exist, never copy them:
+Suppose the tracked list above had contained exactly these two lines:
+  - [ID:9001, Importance:405/1000] Small mailbox at West Of House - open it
+  - [ID:9002, Importance:310/1000] Locked grating at Clearing - find key and unlock it
+and recent history showed the mailbox opened and the grating unlocked. You would return:
+{{
+  "closed_issue_ids": [9001, 9002],
+  "reasoning": "ID 9001 (mailbox) was opened. ID 9002 (grating) was unlocked with the key."
+}}
+Use the real ID numbers from the tracked list above - not 9001 or 9002.
 
 Analyze the tracked issues against recent history and identify which to close:
 """
@@ -1009,7 +1058,13 @@ Analyze this response and output JSON with:
 
   @staticmethod
   def get_long_running_summary_system_prompt():
-    return """You are a game state database for an interactive fiction game. Maintain a COMPREHENSIVE, STRUCTURED record of ALL discoveries.
+    return """You are a game state database for an interactive fiction game. Maintain a STRUCTURED record of what matters.
+
+LENGTH BUDGET: stay under 2000 characters. This record is sent to every agent
+on every turn, so its length is paid many times per turn. When you approach the
+budget, DROP detail in this order: resolved puzzles first, then fully-explored
+locations with nothing left in them, then old failures. NEVER drop current
+state, inventory, or unsolved puzzles.
 
 FORMAT (use exactly):
 ```
@@ -1153,6 +1208,73 @@ Provide a 2-3 sentence summary of what we learned here."""
   # ═══════════════════════════════════════════════════════════
 
   @staticmethod
+  def get_single_shot_system_prompt():
+    """Control arm for the thesis experiment: one inference, full context.
+
+    Given the SAME information the multi-agent arm assembles, minus the
+    deliberation. Deliberately generous — a weak baseline would make the
+    comparison meaningless.
+    """
+    return f"""You are an expert adventurer playing {GAME_NAME}.
+
+OBJECTIVE: {GAME_OBJECTIVE}
+
+You will be shown everything known about the game so far: the current room,
+your inventory, the map built up to now, the issues being tracked, what has
+already been tried here without effect, and summaries of the whole session.
+
+Choose the single best next command.
+
+HOW TO CHOOSE:
+1. If the room description mentions something you have not yet examined,
+   taken or opened, that is usually worth doing.
+2. Prefer actions that make progress on a tracked issue over aimless movement.
+3. Explore directions that are not yet on the map, but only ones the room
+   plausibly has.
+4. NEVER repeat a command listed under ALREADY TRIED HERE. The game is
+   deterministic: it will produce exactly the same result again. Choose
+   something genuinely different instead.
+5. Prefer the simplest command form the game accepts: "NORTH", "TAKE LAMP",
+   "OPEN DOOR".
+
+Return exactly these fields:
+- command: the exact command to send to the game
+- reason: one or two sentences on why
+- moved: the direction, if this command is a movement; otherwise \"\""""
+
+  @staticmethod
+  def get_single_shot_human_prompt():
+    return """CURRENT LOCATION: {locationName}
+SCORE: {score}      MOVES: {moves}
+
+WHAT JUST HAPPENED:
+{game_response}
+
+INVENTORY: {inventory}
+
+KNOWN EXITS FROM HERE: {exits}
+
+ALREADY TRIED HERE, NO EFFECT (never repeat these):
+{already_tried}
+
+ISSUES BEING TRACKED:
+{tracked_issues}
+
+MAP SO FAR:
+{known_map}
+
+RECENT TURNS:
+{recent_turns}
+
+RECENT SUMMARY:
+{full_summary}
+
+THE STORY SO FAR:
+{long_summary}
+
+What is the single best next command?"""
+
+  @staticmethod
   def get_inventory_analyzer_system_prompt():
     return f"""You analyze {GAME_NAME} game turns to detect inventory changes.
 
@@ -1202,6 +1324,26 @@ CRITICAL RULES FOR INVENTORY TRACKING
    - "brass lantern" → use "brass lantern" (not "lantern")
    - "rusty key" → use "rusty key" (not "key")
    - Keep adjectives and full descriptions as game provides them
+   - EXCEPTION for items_removed: name the item using the EXACT string it has
+     in CURRENTLY CARRYING. If the player types "DROP LAMP" and CURRENTLY
+     CARRYING lists "brass lantern", return "brass lantern", not "lamp".
+   - Never list an item in items_removed unless it appears in CURRENTLY CARRYING
+
+7. ALREADY-HELD ITEMS ARE A NO-OP, NEVER A REMOVAL:
+   If the item is ALREADY in CURRENTLY CARRYING, return EMPTY LISTS for that
+   item: do not add it again, and NEVER put it in items_removed.
+   ✓ "TAKE LEAFLET" + "Taken." + CURRENTLY CARRYING already lists leaflet
+     → items_added: [], items_removed: []   (nothing changed)
+   ✗ NEVER reason "it was already held, so it was removed" — taking something
+     you already hold changes nothing. Removal requires the player to have
+     LOST the item: dropped, given away, stolen, destroyed or consumed.
+
+8. REVEALING AN ITEM IS NOT TAKING IT:
+   Opening or moving a container shows what is inside; it does not put it in
+   your hands. Only an explicit take succeeds in acquiring it.
+   ✓ "Opening the small mailbox reveals a leaflet." → items_added: []
+   ✓ "TAKE LEAFLET" → "Taken." → items_added: ["leaflet"]
+   ✗ "reveals a leaflet" → items_added: ["leaflet"]   (WRONG - not held yet)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT
@@ -1218,7 +1360,9 @@ Respond with structured JSON output."""
 
   @staticmethod
   def get_inventory_analyzer_human_prompt():
-    return """PLAYER COMMAND: {player_command}
+    return """CURRENTLY CARRYING: {current_inventory}
+
+PLAYER COMMAND: {player_command}
 
 GAME RESPONSE: {game_response}
 

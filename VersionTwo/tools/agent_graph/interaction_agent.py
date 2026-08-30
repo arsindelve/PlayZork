@@ -17,6 +17,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_core.prompts import ChatPromptTemplate
 from .interaction_response import InteractionResponse
+from .tool_execution import invoke_tool_safely, TOOL_ERROR_PREFIX
 from adventurer.prompt_library import PromptLibrary
 
 
@@ -46,135 +47,47 @@ class InteractionAgent:
         # Tool call history (for reporting)
         self.tool_calls_history: list = []
 
-    async def research_and_propose(
+    async def propose(
         self,
-        research_agent: Runnable,
         decision_llm: BaseChatModel,
-        history_tools: list,
-        mapper_tools: list,
-        current_location: str,
-        current_game_response: str,
-        current_score: int,
-        current_moves: int,
-        inventory_tools: list = None  # Optional for backward compatibility
-    ):
-        """
-        Analyze current location for interactive objects and propose action.
+        context,
+    ) -> None:
+        """Propose an interaction with something in this room.
 
-        Phases:
-        1. Get current inventory (via research_agent with tools)
-        2. Parse game response for interactive objects (deterministic)
-        3. If unclear, use LLM to analyze interactions
-        4. Generate proposal with confidence
-
-        Args:
-            research_agent: LLM chain with tools for calling inventory
-            decision_llm: LLM for generating structured proposals
-            history_tools: Available history tools
-            mapper_tools: Available mapper tools
-            current_location: Current game location
-            current_game_response: Latest game response text
-            current_score: Current game score
-            current_moves: Current move count
-            inventory_tools: Inventory toolkit tools (optional)
+        Phase 1 used to be a whole LLM round-trip asking the model to call
+        get_inventory — 106s on the measured turn, to retrieve a list the code
+        already had (#25). TurnContext supplies it, and on the hosted backends
+        it comes from the game itself (#30).
         """
         logger = logging.getLogger(__name__)
+        # Function-local import: tests monkeypatch llm_utils.ainvoke_with_retry
+        from llm_utils import ainvoke_with_retry
 
-        # Store current location for reporting
-        self.current_location = current_location
+        current_location = context.location
+        current_game_response = context.game_text
+        inventory_list = list(context.inventory)
 
         logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"[InteractionAgent] AGENT: InteractionAgent")
-        logger.info(f"[InteractionAgent] PURPOSE: Identify and propose interactions with local objects")
         logger.info(f"[InteractionAgent] CURRENT LOCATION: {current_location}")
         logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"[InteractionAgent] Phase 1: Getting current inventory")
-
-        # Phase 1: Get inventory using research agent with tools
-        inventory_list: List[str] = []
-
-        if inventory_tools:
-            # Combine all available tools
-            all_tools = history_tools + mapper_tools + inventory_tools
-
-            research_input = {
-                "input": "Use get_inventory to list all items currently in inventory.",
-                "score": current_score,
-                "locationName": current_location,
-                "moves": current_moves,
-                "game_response": current_game_response
-            }
-
-            try:
-                from llm_utils import ainvoke_with_retry
-                research_response = await ainvoke_with_retry(
-                    research_agent.with_config(
-                        run_name="InteractionAgent Inventory Check",
-                        configurable={"tools": all_tools}
-                    ),
-                    research_input,
-                    operation_name="InteractionAgent Inventory Check"
-                )
-
-                # Execute any tool calls to get inventory
-                if hasattr(research_response, 'tool_calls') and research_response.tool_calls:
-                    tools_map = {tool.name: tool for tool in all_tools}
-
-                    logger.info(f"[InteractionAgent] Made {len(research_response.tool_calls)} tool calls:")
-
-                    for tool_call in research_response.tool_calls:
-                        tool_name = tool_call['name']
-                        tool_args = tool_call.get('args', {})
-
-                        if tool_name == "get_inventory" and tool_name in tools_map:
-                            logger.info(f"[InteractionAgent]   -> {tool_name}()")
-                            tool_result = tools_map[tool_name].invoke(tool_args)
-                            logger.info(f"[InteractionAgent]      Result: {str(tool_result)}")
-
-                            # Store tool call history for reporting
-                            self.tool_calls_history.append({
-                                "tool_name": tool_name,
-                                "input": str(tool_args),
-                                "output": str(tool_result)
-                            })
-
-                            # Parse inventory (comma-separated list or "empty" message)
-                            if tool_result and "empty" not in tool_result.lower():
-                                inventory_list = [item.strip() for item in tool_result.split(',')]
-                            break
-            except Exception as e:
-                logger.warning(f"[InteractionAgent] Failed to get inventory: {e}")
-                # Continue without inventory
 
         logger.info(f"[InteractionAgent] Inventory: {inventory_list if inventory_list else 'empty'}")
 
-        # Phase 2: Deterministic parsing for common interactions
-        logger.info(f"[InteractionAgent] Phase 2: Running deterministic parsing")
+        # The game itself reports which commands it will accept here (#30).
+        # When it does, that is ground truth and the regex guesswork below is
+        # not needed at all.
+        available = getattr(context, "available_actions", {}) or {}
+        logger.info(f"[InteractionAgent] Game-reported objects: {list(available) or 'none'}")
 
-        deterministic_result = self._deterministic_parse(current_game_response, inventory_list)
-
-        if deterministic_result:
-            # Found a clear interaction deterministically!
-            logger.info(f"[InteractionAgent] ⚡ DETERMINISTIC MATCH: {deterministic_result['action']}")
-
-            self.proposed_action = deterministic_result['action']
-            self.reason = deterministic_result['reason']
-            self.confidence = deterministic_result['confidence']
-            self.detected_objects = deterministic_result.get('objects', [])
-            self.inventory_items = deterministic_result.get('items_used', [])
-
-            # Log proposal summary
-            logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            logger.info(f"[InteractionAgent] PROPOSAL SUMMARY - DETERMINISTIC")
-            logger.info(f"[InteractionAgent] Proposed Action: '{self.proposed_action}' (confidence: {self.confidence}/100)")
-            logger.info(f"[InteractionAgent] Detected Objects: {self.detected_objects}")
-            logger.info(f"[InteractionAgent] Reason: {self.reason}")
-            logger.info(f"[InteractionAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-            # Skip LLM - we have a clear match
-            return
-
-        logger.info(f"[InteractionAgent] No deterministic match, proceeding to LLM analysis")
+        # The deterministic parser is a HINT ONLY and must never short-circuit
+        # the LLM (#16). It used to return early on a match, which meant the
+        # LLM never ran on precisely the turns the regexes misfired — and they
+        # misfired on Zork's most common reply. "You see nothing special about
+        # the mailbox." produced `TAKE NOTHING` at confidence 90, above almost
+        # every real proposal on the arbiter's list.
+        hint = self._deterministic_parse(current_game_response, inventory_list)
+        if hint:
+            logger.info(f"[InteractionAgent] Parser hint (not authoritative): {hint['action']}")
 
         # Phase 3: LLM analysis for complex interactions
         logger.info(f"[InteractionAgent] Phase 3: Analyzing interactions with LLM")
@@ -192,9 +105,12 @@ class InteractionAgent:
             ),
             {
                 "current_location": current_location,
-                "current_score": current_score,
+                "current_score": context.score,
                 "inventory": ", ".join(inventory_list) if inventory_list else "Your inventory is empty.",
-                "game_response": current_game_response[:1000]  # Truncate if too long
+                "game_response": current_game_response[:1000],  # Truncate if too long
+                "available_actions": context.available_actions_summary,
+                "already_tried": context.unproductive_summary,
+                "parser_hint": hint["action"] if hint else "none",
             },
             operation_name="InteractionAgent LLM Analysis"
         )
@@ -229,19 +145,46 @@ class InteractionAgent:
         """
         text = game_response.lower()
 
-        # Pattern 1: Takeable items
+        # A negated sentence describes what is NOT here. Proposing an action on
+        # it is guaranteed to fail: "You cannot see any button here." used to
+        # yield PRESS BUTTON at confidence 80 (#16).
+        if re.search(r"\b(?:cannot|can't|couldn't|don't|doesn't|isn't|aren't|"
+                     r"no longer|not\s+here|nothing|anything)\b", text):
+            return None
+
+        # Pattern 1: Takeable items.
+        # Capture the FULL noun phrase and keep its head noun: the old patterns
+        # took the first word after the article, so "a brass lantern" became
+        # TAKE BRASS and "a red button" became TAKE RED (#16).
+        # Stop the noun phrase at the first delimiter, so "a brass lantern and
+        # a sword here" yields "brass lantern" rather than running on.
+        # NOTE both quantifiers are lazy. A greedy `{0,3}` swallows the words
+        # before the lazy tail gets a chance, so "a small mailbox here." was
+        # captured as "small mailbox here" and proposed TAKE HERE.
+        NOUN = r"((?:\w+ ){0,3}?\w+?)(?=\s+(?:and|here|on|in|is|are)\b|[.,])"
         takeable_patterns = [
-            r"there (?:is|are) (?:a |an )?(\w+)(?: and (?:a |an )?(\w+))? here",
-            r"you (?:see|notice) (?:a |an )?(\w+)",
-            r"(?:a |an )?(\w+) (?:sits|lies|rests) (?:here|on the \w+)"
+            rf"there (?:is|are) (?:a |an |the )?{NOUN}",
+            rf"you (?:see|notice) (?:a |an |the )?{NOUN}",
+            rf"(?:a |an |the )?{NOUN}\s+(?:sits|lies|rests)\b",
         ]
 
         for pattern in takeable_patterns:
             match = re.search(pattern, text)
             if match:
-                item = match.group(1).upper()
+                phrase = (match.group(1) or "").strip()
+                # The head noun is the last word of the phrase.
+                item = phrase.split()[-1].upper() if phrase else ""
                 # Skip if it's a location descriptor (common false positives)
-                if item.lower() not in ['door', 'room', 'hallway', 'corridor', 'wall', 'floor', 'ceiling']:
+                # Head nouns that are never a takeable object. Belt and braces
+                # behind the negation guard above: a bad head noun produces a
+                # command the game cannot parse, and this agent's proposals
+                # reach the arbiter at high confidence (#16).
+                NOT_OBJECTS = {
+                    'door', 'room', 'hallway', 'corridor', 'wall', 'floor', 'ceiling',
+                    'special', 'unusual', 'here', 'there', 'it', 'you', 'nothing',
+                    'anything', 'something', 'this', 'that', 'them',
+                }
+                if item and item.lower() not in NOT_OBJECTS:
                     return {
                         'action': f'TAKE {item}',
                         'reason': f'Found takeable item: {item}',
@@ -251,7 +194,10 @@ class InteractionAgent:
 
         # Pattern 2: Closed containers
         if 'closed' in text:
-            container_match = re.search(r'(\w+) (?:is |are )?closed', text)
+            # Copula is MANDATORY and the subject may not be "you": without it,
+            # "You closed the wooden door." — the game confirming your OWN
+            # command — produced OPEN YOU at confidence 85 (#16).
+            container_match = re.search(r'\b(?!you\b)(\w+) (?:is|are) closed', text)
             if container_match:
                 container = container_match.group(1).upper()
                 return {
@@ -263,7 +209,7 @@ class InteractionAgent:
 
         # Pattern 3: Locked objects (check if we have key)
         if 'locked' in text:
-            locked_match = re.search(r'(\w+) (?:is |are )?locked', text)
+            locked_match = re.search(r'\b(?!you\b)(\w+) (?:is|are) locked', text)
             if locked_match:
                 obj = locked_match.group(1).upper()
 

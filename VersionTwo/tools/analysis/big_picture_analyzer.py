@@ -56,7 +56,11 @@ class BigPictureAnalyzer:
             Analytical insight string about game progress, blockers, and priorities
         """
         # Get history data
-        recent_turns = self.history_toolkit.state.get_recent_turns(50)
+        # Bounded on purpose: this prompt grows with the window until it is
+        # full, and it is the dominant term in per-turn latency growth
+        # (see STATUS.md, 2026-08-22 checkpoint analysis).
+        from config import BIG_PICTURE_HISTORY_TURNS
+        recent_turns = self.history_toolkit.state.get_recent_turns(BIG_PICTURE_HISTORY_TURNS)
         full_summary = self.history_toolkit.state.get_long_running_summary()
 
         # Format recent turns for analysis
@@ -66,7 +70,17 @@ class BigPictureAnalyzer:
         prompt = self._build_analysis_prompt(recent_turns_text, full_summary)
 
         try:
-            response = self.llm.invoke(prompt)
+            # Routed through invoke_with_retry like every other LLM call: this
+            # runs on the EXPENSIVE model every turn with up to
+            # BIG_PICTURE_HISTORY_TURNS turns of raw text in the prompt, and it
+            # was previously invisible in the logs (bare .invoke, no markers),
+            # so 3 of the ~16 LLM calls per turn could not be measured at all.
+            from llm_utils import invoke_with_retry
+            response = invoke_with_retry(
+                self.llm,
+                prompt,
+                operation_name=f"BigPictureAnalyzer: Turn {turn_number}",
+            )
             analysis = response.content
 
             # Persist to database for other agents to access

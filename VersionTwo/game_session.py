@@ -10,7 +10,20 @@ from tools.mapping import MapperToolkit
 from tools.database import DatabaseManager
 from display_manager import DisplayManager
 from game_logger import GameLogger
-from config import get_cheap_llm, get_expensive_llm
+import time
+
+from config import EXPERIMENT_CONDITION, get_cheap_llm, get_expensive_llm
+from token_meter import get_token_meter
+
+
+# Turn-level failure policy (see GitHub issue #1). A turn can fail for reasons
+# that say nothing about the run's health — one malformed LLM response, one
+# transient API error. Losing the whole session to that is what made long runs
+# impossible, so a failed turn falls back to a harmless command instead. A
+# sustained failure streak (game API down, model unreachable) still ends the
+# session rather than looping forever.
+FALLBACK_COMMAND = "LOOK"
+MAX_CONSECUTIVE_TURN_FAILURES = 3
 
 
 @dataclass
@@ -78,13 +91,25 @@ class GameSession:
         initialize_analysis_tools(session_id, self.db)
         self.logger.logger.info("Analysis tools initialized")
 
-        # Pass toolkits to adventurer service
-        self.adventurer_service = AdventurerService(
-            self.history_toolkit,
-            self.memory_toolkit,
-            self.mapper_toolkit,
-            self.inventory_toolkit
-        )
+        # Which architecture plays this run — the thesis's independent
+        # variable (config.EXPERIMENT_CONDITION). Both implement the same
+        # interface, so everything downstream is unaffected.
+        if EXPERIMENT_CONDITION == "single_shot":
+            from adventurer.single_shot_service import SingleShotService
+            self.adventurer_service = SingleShotService(
+                self.history_toolkit,
+                self.memory_toolkit,
+                self.mapper_toolkit,
+                self.inventory_toolkit,
+            )
+        else:
+            self.adventurer_service = AdventurerService(
+                self.history_toolkit,
+                self.memory_toolkit,
+                self.mapper_toolkit,
+                self.inventory_toolkit
+            )
+        self.logger.logger.info(f"CONDITION: {EXPERIMENT_CONDITION}")
 
         # Resume turn numbering from where this session left off
         last_turn = self.db.get_latest_turn_number(session_id)
@@ -111,20 +136,59 @@ class GameSession:
             # Initialize the game state.
             await self.zork_service.play_turn("verbose")
 
-            # Bootstrap inventory from game INVENTORY command
-            await self._bootstrap_inventory()
+            # Bootstrap inventory from game INVENTORY command. A failure here
+            # costs us the starting inventory, not the run.
+            try:
+                await self._bootstrap_inventory()
+            except Exception as e:
+                self.logger.logger.error(
+                    f"Inventory bootstrap failed; continuing with empty inventory: {e}",
+                    exc_info=True,
+                )
 
-            adventurer_response = await self.__play_turn("look", display)
+            # Run indefinitely until user interrupts.
+            # A failed turn is contained here: it costs one command, not the
+            # session (see issue #1). KeyboardInterrupt and CancelledError are
+            # BaseExceptions, so they propagate past `except Exception`.
+            next_command = "look"
+            consecutive_failures = 0
 
-            # Run indefinitely until user interrupts
             while True:
-                adventurer_response = await self.__play_turn(adventurer_response, display)
+                try:
+                    next_command = await self.__play_turn(next_command, display)
+                    consecutive_failures = 0
+                except Exception as e:
+                    consecutive_failures += 1
+                    self.logger.logger.error(
+                        f"Turn {self.turn_number} failed "
+                        f"({consecutive_failures}/{MAX_CONSECUTIVE_TURN_FAILURES}): {e}",
+                        exc_info=True,
+                    )
+                    if consecutive_failures >= MAX_CONSECUTIVE_TURN_FAILURES:
+                        print(
+                            f"\n{consecutive_failures} consecutive turn failures "
+                            f"(last: {e}). Ending session."
+                        )
+                        break
+                    print(
+                        f"\nTurn failed ({e}). "
+                        f"Recovering with '{FALLBACK_COMMAND}' "
+                        f"(failure {consecutive_failures}/{MAX_CONSECUTIVE_TURN_FAILURES})."
+                    )
+                    # The failed turn produced no decision, so the next report
+                    # must not attribute the previous turn's reasoning to the
+                    # fallback command.
+                    self.pending_decision = PendingDecision(
+                        reasoning=f"Recovery: previous turn failed ({e})"
+                    )
+                    next_command = FALLBACK_COMMAND
 
         except KeyboardInterrupt:
             # Clean exit on Ctrl+C - let main.py handle the message
             raise
         except Exception as e:
             print(f"\nAn error occurred during gameplay: {e}")
+            self.logger.logger.error(f"Gameplay ended on error: {e}", exc_info=True)
         finally:
             # Drain pending post-turn analyzers/reports so we don't lose the
             # final turns' output. Failures are logged but do not block exit.
@@ -140,7 +204,15 @@ class GameSession:
         :return: The next input to be processed.
         """
         try:
+            # Close out the PREVIOUS turn's token accounting before starting
+            # this one. Measuring between turn starts (rather than at the end
+            # of the decision graph) attributes the background work — summaries,
+            # big-picture, death analysis — to the turn that spawned it.
+            self._record_previous_turn_tokens()
+
             self.turn_number += 1
+            self._turn_started_at = time.monotonic()
+            get_token_meter().start_turn(self.turn_number)
             self.logger.log_turn_start(self.turn_number, input_text)
 
             # Step 1: Send input to the Zork service and get the response
@@ -148,19 +220,29 @@ class GameSession:
             self.logger.log_game_response(zork_response.Response)
 
             # Step 2: Update history BEFORE decision (so research sees current turn)
-            self.history_toolkit.update_after_turn(
+            # Record the turn synchronously — this turn's agents research
+            # against it via get_recent_turns. Summarization is dispatched off
+            # the critical path (#24 option 2): it cost 65s+ at the head of
+            # every turn while contributing almost nothing to the decision
+            # being made right now, since the previous summary plus the raw
+            # current turn already carry the same information.
+            turn = self.history_toolkit.record_turn(
                 game_response=zork_response.Response,
                 player_command=input_text,  # The command that was just executed
                 location=zork_response.LocationName,
                 score=zork_response.Score,
                 moves=zork_response.Moves
             )
+            self._dispatch_summary_refresh(turn)
 
             # Step 2b: Update mapper to track location transitions
             self.mapper_toolkit.update_after_turn(
                 current_location=zork_response.LocationName,
                 player_command=input_text,
-                turn_number=self.turn_number
+                turn_number=self.turn_number,
+                game_response=zork_response.Response,
+                api_direction=zork_response.LastMovementDirection,
+                exits=getattr(zork_response, "Exits", None)
             )
 
             # Step 3: Process through LangGraph (Research → Decide → CloseIssues → Observe → Persist)
@@ -169,7 +251,8 @@ class GameSession:
              issue_closed_response, observer_response, decision_prompt,
              research_tool_calls, decision_tool_calls) = await self.adventurer_service.handle_user_input(
                 zork_response,
-                self.turn_number
+                self.turn_number,
+                input_text,
             )
 
             # Extract closed issues and new issue from responses
@@ -240,8 +323,54 @@ class GameSession:
 
         except Exception as e:
             self.logger.log_error(str(e))
-            print(f"\nAn error occurred while processing turn: {e}")
-            raise  # Re-raise to be caught by play() method
+            # play() decides whether to recover with a fallback command or end
+            # the session; it owns the user-facing message.
+            raise
+
+    def _record_previous_turn_tokens(self) -> None:
+        """Persist and log what the last turn cost in tokens.
+
+        Wall-clock alone cannot compare architectures across machines, and on
+        one machine it is a proxy for token volume anyway — this box's Ollama
+        has flat throughput regardless of concurrency. Tokens are the unit that
+        survives a hardware change (see STATUS.md 2026-08-24).
+        """
+        snapshot = get_token_meter().snapshot()
+        if not snapshot.calls:
+            return
+        wall = time.monotonic() - getattr(self, "_turn_started_at", time.monotonic())
+        try:
+            by_op = "; ".join(
+                f"{name}:{tin}/{tout}x{calls}"
+                for name, (tin, tout, calls) in sorted(snapshot.by_operation.items())
+            )
+            self.db.add_turn_tokens(
+                session_id=self.session_id,
+                turn_number=snapshot.turn_number,
+                input_tokens=snapshot.input_tokens,
+                output_tokens=snapshot.output_tokens,
+                llm_calls=snapshot.calls,
+                wall_seconds=round(wall, 1),
+                by_operation=by_op,
+            )
+        except Exception as e:
+            self.logger.logger.warning(f"Could not persist token usage: {e}")
+
+        rate = snapshot.total_tokens / wall if wall > 0 else 0
+        self.logger.logger.info(
+            f"[TOKENS] {snapshot.summary()} in {wall:.0f}s ({rate:.0f} tok/s)"
+        )
+
+    def _dispatch_summary_refresh(self, turn) -> None:
+        """Regenerate the history summaries off the critical path (#24).
+
+        Tracked like the other post-turn work so it is drained at shutdown,
+        and coalesced inside HistoryToolkit so overlapping turns cannot let an
+        older summary overwrite a newer one.
+        """
+        task = asyncio.create_task(self.history_toolkit.refresh_summaries(turn))
+        task.add_done_callback(self._on_background_task_done)
+        self._background_tasks.append(task)
 
     def _dispatch_post_turn_io(
         self,
@@ -387,12 +516,35 @@ class GameSession:
 
         # Send INVENTORY command to game
         inventory_response = await self.zork_service.play_turn("INVENTORY")
+
+        # Prefer the backend's own inventory list (#30): it is exact, it costs
+        # no LLM call, and it removes the failure mode where an unparseable
+        # reply looked identical to "carrying nothing" and wiped a resumed
+        # session's items.
+        api_inventory = getattr(inventory_response, "Inventory", None)
+        if api_inventory is not None:
+            self.logger.logger.info(f"Inventory reported by the game: {api_inventory}")
+            self.inventory_toolkit.state.sync_with_game(api_inventory, turn_number=0)
+            self.logger.logger.info("Inventory bootstrap complete (from game)")
+            return
+
         game_inventory_text = inventory_response.Response
 
         self.logger.logger.info(f"Game inventory response: {game_inventory_text}")
 
         # Parse inventory from game response using LLM
         items = self._parse_inventory_response(game_inventory_text)
+
+        # A parse failure is indistinguishable from "carrying nothing" once it
+        # becomes an empty list, and sync_with_game treats the list as ground
+        # truth — on a RESUMED session that would mark every held item dropped.
+        # Skip the sync instead and keep what the database already knows (#21).
+        if items is None:
+            self.logger.logger.warning(
+                "Inventory bootstrap: could not parse the game's INVENTORY reply; "
+                "keeping stored inventory unchanged"
+            )
+            return
 
         self.logger.logger.info(f"Parsed items: {items}")
 
@@ -401,7 +553,7 @@ class GameSession:
 
         self.logger.logger.info("Inventory bootstrap complete")
 
-    def _parse_inventory_response(self, response: str) -> list:
+    def _parse_inventory_response(self, response: str) -> Optional[list]:
         """
         Parse game's INVENTORY response into list of items using LLM.
 
@@ -432,7 +584,12 @@ Output ONLY the JSON array, nothing else."""
         try:
             result = llm.invoke(prompt)
             items = json.loads(result.content)
-            return items if isinstance(items, list) else []
+            if not isinstance(items, list):
+                self.logger.logger.error(
+                    f"Inventory parse returned {type(items).__name__}, not a list"
+                )
+                return None
+            return [str(i).strip() for i in items if str(i).strip()]
         except Exception as e:
             self.logger.logger.error(f"Failed to parse inventory: {e}")
-            return []
+            return None

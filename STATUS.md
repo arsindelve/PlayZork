@@ -808,3 +808,573 @@ TURN FLOW (Updated):
    - Multiple deaths in same session
    - Deaths at different locations
    - Deaths from different causes (combat, environment, puzzles)
+
+---
+
+# Development Log: 2026-08-21
+
+## Research Reframing (Thesis Direction)
+
+The project's original motivation — external memory scaffolding for small-context models — is obsolete: 1M-context models fit an entire game run in context. The standing research question is now:
+
+> **Can the multi-agent deliberation architecture (advocacy agents + arbiter + deterministic toolkits) let much LESS powerful models (qwen2.5:14b local) solve the game?**
+
+Architecture as a substitute for model capability. This is a candidate **Master's in AI thesis**. Key implication: correctness of the deterministic scaffolding (map, inventory, memory) is a *precondition* for interpretable experiments — a weak model cannot compensate for corrupted state, so any negative result from a buggy platform is uninterpretable.
+
+## Full Code Audit → 27 GitHub Issues
+
+Ran a nine-agent parallel audit (one reviewer per agent, plus the mapper and the orchestration layer). Every finding was verified by **executing the actual code** — real parsers driven with real game prose, throwaway SQLite DBs, installed library sources inspected. Unverified claims were dropped.
+
+**Result: [27 GitHub issues](https://github.com/arsindelve/PlayZork/issues), all labeled `bug`.**
+
+### Correctness (#1–#22) — headline findings per component
+
+- **Systemic (#1–#5)**: no exception handling anywhere in the turn path (one malformed LLM response ends the session); the dedup call has no retry at all; `TURN_BUDGET_SECONDS` (600s) < one call's retry envelope (~1530s), so retries are dead code and mid-graph timeouts can half-commit memory state; `tool_choice="any"` is silently ignored by ChatOllama; research LLM bound with 8 tools but Observer can execute only 2.
+- **IssueAgent (#6–#7)**: instructs the model to call `get_current_inventory()` — a tool that does not exist — so inventory renders as "empty" every turn on every code path (the high-confidence "I have the item" branch is unreachable); `"Unknown"`-location memories are pathfound to a nonexistent node → forced confidence 0 forever.
+- **Explorer/Mapper (#8–#15)**: substring alias matching fabricates "mentioned" directions ("NE" in CORNER → Attic proposes NORTHEAST at confidence 95); `N` never matches `NORTH` in the explored-check; `MOVE RUG` records direction "E" (the verb MOVE contains E); BLOCKED records are permanent (UNIQUE constraint silently rejects corrections — the trap door route is unreachable forever after one early failed DOWN); death/respawn writes a fabricated edge BFS then routes through; lookups are case-sensitive end to end; CLIMB/ENTER unrecognized → unreachable orphan rooms.
+- **InteractionAgent (#16–#18)**: deterministic regex parser bypasses the LLM with `TAKE NOTHING` (fires on Zork's standard EXAMINE reply), `OPEN YOU`, negation-blind `PRESS BUTTON` at confidence 80–90; unknown inventory presented as authoritatively empty; no history → re-proposes the same failed action every turn.
+- **IssueClosedAgent (#19–#20)**: returned IDs never validated — the prompt's own worked example `[5, 12]` can close real unrelated issues, invisibly and irreversibly (dedup matches closed rows); closer ranks by undecayed importance while the spawner uses decayed, so actively-worked issues can become un-closable.
+- **Inventory (#21)**: cache and DB permanently diverge (phantom items feed every prompt for the rest of the session).
+- **LoopDetectionAgent (#22)**: disabled safely today; confirmed broken five ways if re-enabled (nonexistent tool name → can only ever propose INVENTORY; parser can't read the real tool format; fabricated score data; proposes the very command it flags; turn parser corrupts location-less turns).
+
+### Orchestration (#23–#27) — with measured timings
+
+Turn 1 of today's smoke run (`logs/game_codex-smoke-20260821.log`) took **7m25s with only 2 subagents and zero IssueAgents**:
+
+| Phase | Time | Share |
+|---|---|---|
+| History summaries (serial, blocking, expensive model) | 86s | 19% |
+| Spawn agents (4 LLM calls) | 146s | 33% |
+| Research node (redundant) | 27s | 6% |
+| Decision | 74s | 17% |
+| Post-decision bookkeeping (observe + persist) | 112s | 25% |
+
+Findings: 25% of the turn happens **after the command is chosen** (#23); summaries block every turn's start and grow with game length — 113s by turn 2 (#24); ~40% of turn time is LLM round-trips for deterministic data fetches (#25); LangGraph is wired as a pure linear chain — its fan-out concurrency is unused, `research` waits behind spawn despite zero data dependency (#26); "parallel" fan-out achieved only ~1.9× against the single Ollama server, and the sync retry's timeout abandons-but-doesn't-cancel in-flight requests, piling retries onto the queue that caused the timeout (#27).
+
+## Plan of Attack (PLAN.md, committed)
+
+Milestone-ordered roadmap: **M1** runs survive (exception handling, budget coherence) → **M2** five-minute fixes (#6, #20, #9, #19, #7) → **M3** trustworthy world state (map upsert first — permanence makes every other mapper bug permanent) → **M4** turn engine restructure (deterministic TurnContext closes #4/#5/#17 for free; graph ends at `decide`) → **M5** honest proposals → **M6** LoopDetectionAgent decision point → thesis experiment protocol (seeded runs: single-shot-with-full-history baseline vs. architecture, plus ablations; score@turns and score@wall-clock). Estimated 8–12 focused days to a runnable experiment.
+
+## Documentation Overhaul (commit 8a56668, pushed)
+
+- **CLAUDE.md**: rewritten for the actual multi-agent architecture (decision graph, agent roster, toolkits, `.env`-driven config, session resumption) — the old text still described the pre-multi-agent single-decider design.
+- **README**: Current Status now describes `main` (v0.1-arxiv noted as the archived pre-multi-agent Zenodo baseline); accurate project structure tree; "manual issue definition" limitation replaced with the true one (automated lifecycle, unvalidated quality); Qwen 2.5 acknowledgments.
+- **PLAN.md**: new.
+
+## Uncommitted Working-Tree Changes (same day, separate session)
+
+- Config moved to `.env`-driven (`PLAYZORK_GAME` / `PLAYZORK_SESSION_ID` / `PLAYZORK_LLM_PROVIDER`); `GAME_NAME`/`GAME_OBJECTIVE` now derived from the active backend (fixes the prompts-say-Planetfall-while-playing-EscapeRoom inconsistency)
+- `run_playzork.py` PyCharm entry point
+- Research agent now binds history + mapper + inventory + analysis tools; research node execution map widened to match
+- Persist node analyzes the executed `player_command` instead of the next decision's command, with new test `tests/test_decision_graph.py`
+- `.env.example` rewritten
+
+## Testing
+
+All tests pass: 48 pathfinder + 1 new persist-node test.
+
+
+# Development Log: 2026-08-22 — Milestones 2 & 3, and the M3 checkpoint run
+
+## Shipped
+
+- **Milestone 2** (`7c7266b`) — #6, #7, #9, #19, #20 closed.
+- **Milestone 3** (`f03856f`) — #8, #10, #11, #12, #13, #14, #21 closed; #15 half-fixed and updated.
+- **Inventory analyzer fix** (`17a4354`) — found by the checkpoint run, three turns in.
+- Tests: **145 → 463**. New issues filed: #28–#32.
+
+Both milestones were investigated by parallel read-only subagents (one per issue) and applied serially, because the issues overlap heavily on the same files.
+
+## The checkpoint run
+
+Session `m3-checkpoint-20260822`, 15 turns, Zork I, qwen2.5:14b via local Ollama.
+Stopped at 15 rather than 30 — see "the deadlock" below; the information saturated.
+
+### What the run validated
+
+| Issue | Evidence from live play |
+|---|---|
+| #1 | **15 turns, 0 exceptions, 0 turn failures.** |
+| #3 | `Attempt 1/3 (timeout: 180s)` — the coherent retry envelope. |
+| #8 | West Of House logged `['WEST']`. The 2026-08-21 log for the same room: `['WEST', 'SOUTHEAST']` (fabricated from HOU**SE**). |
+| #10 | `GO SOUTH` → canonical `SOUTH`. `MOVE RUG` wrote **no** map row (the old code extracted `E` from the verb). |
+| #12 | Probed a real grue/troll death: died in Cellar, respawned Forest, **no edge recorded**, `previous_location` correctly kept as the respawn room. |
+| #13 | `West **Of** House` and `North **of** House` both appeared in one map — the exact inconsistency that made this corrective rather than defensive. |
+| #14 | Two raw-command edges recorded: `Forest Path --[CLIMB TREE]--> Up A Tree`, `Behind House --[ENTER WINDOW]--> Kitchen`. Both were previously dropped, orphaning those rooms. |
+| #24 (opt 1) | `Both summaries generated in 13.9s (concurrent)`. |
+
+The mapper produced 5 edges, all correct Zork geography, and **zero** BLOCKED rows.
+
+Probing also confirmed #10's deliberate *exclusion*: "The door is boarded and you can't remove the boards." contains "can't" but is object-specific — a temporary puzzle state — and correctly wrote nothing, while "You cannot go that way." correctly wrote BLOCKED. A naive deny-list would have burned the boarded door permanently.
+
+### Finding 1 — a regression the tests could not reach
+
+Turn 3, `TAKE LEAFLET` → `"Taken."` → **`Items removed: ['leaflet']`**. Successfully picking something up emptied it from inventory. The model's reasoning named the cause: *"it was already in their inventory, so it was removed... despite the action being a take command."*
+
+Two chained defects: a pre-existing one (`"reveals a leaflet"` recorded as acquired) put the leaflet in inventory early, and then the M3 rule *"never list an item in items_added if it already appears in CURRENTLY CARRYING"* — which said only what **not** to do — left the model to invent an alternative, and it chose removal.
+
+Fixed in `17a4354` by stating the no-op explicitly. **This is the checkpoint's whole justification**: 463 unit tests and seven parallel investigations missed it, because it exists only in the interaction between a prompt rule and one model's reasoning. Three turns of real play found it.
+
+### Finding 2 — turn latency grows superlinearly, and summaries drive it
+
+```
+turn   1    3    5    7    9   11   13
+secs  79   83  148  187  194  208  225
+summ  13.9 26.6 52.4 67.0 65.9  ...
+```
+
+Turn time **more than doubled in nine turns**, and roughly half the growth is the summary phase (13.9s → 65.9s, ~34% of a turn), on a fixed model and machine with the concurrency fix already applied.
+
+This is #24 option 3 confirmed and quantified. Option 1 halved a constant; it did nothing to the growth *rate*. Extrapolating ~6s/turn, the summary phase alone reaches minutes by turn 50 — and Zork is hundreds of turns.
+
+**This changes M4's ordering.** #24 options 2 and 3 should precede #25's TurnContext: moving summarization off the critical path removes it from turn latency entirely, which is a larger and cheaper win than shaving research round-trips. For a thesis where latency is experimental throughput and the protocol needs N seeded runs per condition, this is the binding constraint on whether the experiment is runnable.
+
+### Finding 3 — the deadlock
+
+```
+turn 11  EXAMINE PILE OF LEAVES  -> "There is nothing special about the pile of leaves."
+turn 12  NORTH                   -> "The forest becomes impenetrable to the north."
+turn 13  EXAMINE PILE OF LEAVES  -> (repeat)
+turn 14  NORTH                   -> (repeat)
+turn 15  EXAMINE PILE OF LEAVES  -> (repeat)
+```
+
+Two known-refused actions, alternating. Three gaps compound:
+
+1. **The map never learned the wall.** "The forest becomes impenetrable to the north." is a genuine topological refusal outside #10's allow-list, so no BLOCKED row was written and the explorer still counts NORTH as unexplored. The under-detect bias is working as designed (no false wall) but the explorer learns nothing. Filed as a follow-up.
+2. **Nothing suppresses repetition** — both negative results were in recent history. This is #18 (M5), now with a real trace.
+3. **The loop detector is disabled** (#22).
+
+The #22 "keep disabled?" decision now has data: the capability is needed. #18 looks like the better vehicle — deterministic, no LLM call, and it addresses the cause rather than detecting the symptom.
+
+Encouraging counter-observation: before deadlocking, the agent broke a wander loop on its own to issue `EXAMINE PILE OF LEAVES`, acting on a strategic issue the ObserverAgent had stored eight turns earlier. The memory → IssueAgent → arbiter path closes end to end.
+
+## Caveats
+
+- The 78s turn-1 time is **not** comparable to the 2026-08-21 baseline of 445s. The summary phase alone went 86s → 13.9s, a 6x change where parallelising two calls can buy at most 2x, so the rest is machine load or history length. M4's before/after must be measured on one machine in one session.
+- This session's *inventory* data is poisoned from turn 3 by Finding 1 and should not be used. The fix was verified directly against the model instead.
+
+## Next
+
+1. #24 options 2 and 3 (summaries off the critical path, bound the growth) — promoted ahead of #25 on Finding 2.
+2. #30 — consume `LastMovementDirection` / `exits`, before TurnContext is designed around command parsing.
+3. Then the rest of M4, and M5's #18 with Finding 3 as its justification.
+
+
+## Correction to Finding 2 (same day, before implementing)
+
+Finding 2 above attributed the latency growth to the summaries' own text
+growing. **That attribution is wrong**, and the fix it implied (#24 option 3,
+"bound the long-running summary") would have targeted a non-cause. Correcting
+it here rather than editing it away, because the reasoning matters.
+
+Measured from the same run:
+
+| | turn 1 | turn 14 |
+|---|---|---|
+| LLM calls per turn | 16 | 16 (**constant**) |
+| Total LLM call-seconds | 98s | 359s |
+| Wall clock | 79s | 228s |
+| Effective parallelism | 1.24x | 1.57x |
+| Stored summary text | 374-832 chars | never larger |
+
+The call **count** never changes; each call gets slower (~10s -> ~28s mean).
+The summaries are tiny — 832 characters at their largest, a few seconds of
+generation — so their own size cannot explain a 4-9x slowdown.
+
+What actually grows is the *history-shaped* prompt content: `get_recent_turns`
+output, the map, and tool results threaded into research and decision prompts.
+The dominant single contributor is `BigPictureAnalyzer`, which pulled
+`get_recent_turns(50)` into a prompt it runs on the **expensive** model **every
+turn**. It was also invisible: it and `DeathAnalyzer` called `.invoke()`
+directly with no retry wrapper and no log markers, so 3 of the 16 calls per
+turn could not be measured at all.
+
+The summaries merely *looked* worst because they run first in a turn and
+therefore collide head-on with the previous turn's background analyzers. That
+also explains the plateau: turn times flatten near 225s once the 50-turn
+window fills.
+
+**Lesson for the thesis measurement discipline:** the first plausible story
+fit the shape of the data and was still wrong. Every LLM call must be
+instrumented, or analysis silently reasons about two-thirds of the work.
+
+## Acted on
+
+- `BigPictureAnalyzer` and `DeathAnalyzer` now go through `invoke_with_retry`
+  — log markers, timeout and retry, and no more measurement blind spot.
+- The big-picture window is bounded and configurable:
+  `BIG_PICTURE_HISTORY_TURNS` (default 20, was a hardcoded 50).
+- **#24 option 2 implemented.** `HistoryToolkit.record_turn()` stays synchronous
+  on the critical path (this turn's agents research against it via
+  `get_recent_turns`); `refresh_summaries()` is dispatched as a tracked
+  background task, coalesced under a lock so overlapping turns cannot let an
+  older summary overwrite a newer one.
+- **#24 option 3 deliberately NOT implemented** — it targets a non-cause.
+- `OLLAMA_NUM_PARALLEL` is confirmed unset on this machine, exactly as #27
+  warned. Effective parallelism measured at ~1.6x against 16 calls per turn.
+
+The strategic conclusion also flips back: with a constant 16 calls per turn
+against a saturated single server, **reducing the number of calls (#25) is the
+dominant lever**, not reordering them. Moving summaries off the critical path
+still shortens the turn, but on a saturated server it relocates work rather
+than removing it.
+
+
+# Development Log: 2026-08-24 — M4 continued, and the finding that reframes it
+
+## Shipped
+
+- **#28** (`9b3f621`) — prompt JSON examples. Narrower than filed: only the plain-string path was over-escaped; the template-rendered prompts were already correct. Introduced by my own #19 rewrite.
+- **#23 + #26** (`5d97771`, follow-up) — the graph fans out; nodes return partial state; `build_context` hoisted; `close_issues`/`observe` async; `turn_number` moved from a mutable side-channel dict into graph state.
+- Tests: 496 → 506.
+
+## THE FINDING: this machine's Ollama has no useful parallelism at all
+
+Benchmarked directly, warm model, identical prompts:
+
+| concurrency | wall | per-call | throughput | speedup |
+|---|---|---|---|---|
+| 1 | 3.8s | 3.8s | 0.26/s | 1.00x |
+| 2 | 7.7s | 5.7s | 0.26/s | 0.99x |
+| 4 | 15.3s | 9.6s | 0.26/s | **0.99x** |
+
+At ~1700-token prompts (realistic for this system). The small-prompt run is identical: 0.79 / 0.78 / 0.78 / 0.76 req/s at 1 / 2 / 4 / 8.
+
+**Throughput is flat. Concurrency buys nothing; it only divides the same tokens/sec across more requests, so per-call latency scales linearly.**
+
+### What this invalidates
+
+- **#27 understates it.** The audit measured "~1.9x, not 4x" and read that as *degraded* parallelism. It is not degraded — it is **absent**. The 1.9x was measurement overlap of queued requests, not concurrent service.
+- **#23/#26 cannot produce a throughput win on this hardware**, and the measurement says so: turns 1–2 improved (49→29s, 87→68s) but turns 3–4 got *worse* (62→72s, 68→78s), because the diamond raises peak in-flight requests from 6 to 8 and mean per-call latency from 24.8s to **31.1s**. Net over four turns: 7%, which is inside the noise.
+- **#25's win was real precisely because it removed calls** (12 → 6), not because it reordered them.
+
+### What actually governs turn time
+
+Turn time = total tokens processed per turn ÷ ~fixed tokens/sec. Nothing else. The levers are:
+
+1. **Fewer LLM calls** — #25 did this, and it is the only lever that has produced a measured win.
+2. **Shorter prompts** — the `BIG_PICTURE_HISTORY_TURNS` bound, and anything else that trims history-shaped content.
+3. **Fewer output tokens** — untouched so far; structured outputs are small but proposals and reasoning are not.
+4. **Different serving** — vLLM with real continuous batching, or a smaller model.
+
+**For the thesis this is a hardware constraint that belongs in the methodology, not a bug.** `score@wall-clock` on this rig is a measure of total tokens per turn. Any architecture comparison must either report token counts alongside wall-clock, or run on serving that actually batches — otherwise the multi-agent arm is penalised for token volume in a way that says nothing about the architecture.
+
+## Was the #23/#26 refactor still worth doing?
+
+Yes, but for correctness rather than speed, and the write-up should say so:
+
+- The graph now expresses the real dependency structure, which is what #26 asked for and what "I wanted to use LangGraph for fun and learning" was supposed to deliver. It was previously a straight line that would have behaved identically as sequential awaits.
+- `close_issues` and `observe` are async, so a timeout **cancels** the request instead of leaking a thread and retrying alongside it (#27's amplifier).
+- Nodes return only their own keys, which makes the disjointness of their writes explicit and checkable.
+- It positions the system to benefit immediately if serving is ever changed.
+
+## Four for four
+
+Every substantial refactor this week has had a defect that the unit suite missed and a live run caught:
+
+1. M2 — inventory analyzer inverted a TAKE into a removal (prompt × model interaction).
+2. #25 — deleted import left the Observer silently disabled; #1's containment hid it.
+3. #23/#26 — separate fan-in edges are not a join; `persist` ran twice per turn.
+4. #26 follow-up — `create_decision_graph()` signature change crashed on startup; **no test constructed the real `AdventurerService`**, so 504 tests passed against code that could not boot.
+
+Each of the four was invisible-by-design rather than loud. A wiring test that constructs the real service now exists (#4 above), and the standing rule stands: **run the thing before believing the suite**.
+
+
+## 2026-08-24, later — M5 correctness, experiment scaffolding, GPU prep
+
+Context: the PC with the 5070 Ti arrives at the weekend, so this block is deliberately all hardware-independent work.
+
+**Shipped:** #28, #23+#26, #30 follow-through, #18, #33, #16, #15, plus token accounting, a vLLM provider and the experiment's control arm. Tests 496 → 587. Issues 23 → 27 closed, 6 open.
+
+### The deadlock is fixed (#18, #33)
+
+The M3 checkpoint ended with the agent alternating two already-refused commands for five turns. Promoted ahead of remaining latency work on the grounds that faster hardware only deadlocks faster, and a run that flatlines at turn 11 cannot produce `score@turns` data.
+
+`TurnContext` now tracks commands already shown to do nothing *in this room*, and the arbiter sees any repeat at **EV 0.0** with the prior response quoted. The demotion is in code, not prompt text — the #21 inventory bug established that a 14B model handed a bare prohibition invents its own way around it.
+
+#33 widened the refusal allow-list from *observed* backend phrasings. A drafted `impassable + mountains` pattern was written and deleted: Zork's Forest room *description* reads "revealing impassible mountains" — scenery on a **successful** move. It escaped the first check only on a spelling coincidence.
+
+### Two fixes that turned out to be "ask the server, not the model"
+
+- **#16** — the InteractionAgent's regex emitted `TAKE NOTHING` at confidence 90 on Zork's standard EXAMINE reply, and short-circuited the LLM on exactly those turns. The real fix was #30's `ActionsAvailableFromLocation`: the game reports, per object, which commands it will accept. The parser is now a hint that can never bypass the LLM.
+- **#15** — same-named rooms merged into one node. #30's `exits` array discriminates them: verified live, `Forest [2,0,1]` and `Forest #2 [3,2,1]` are now separate nodes.
+
+Both follow the pattern established by #30's inventory work: stop inferring what the backend already knows.
+
+### Instrumentation and scaffolding
+
+- **Per-turn token accounting** → `turn_tokens`. Metered in `llm_utils`, the choke point both retry helpers pass through. Totals are a **floor**: structured-output calls carry no usage metadata and are skipped rather than estimated.
+- **vLLM provider** — `PLAYZORK_LLM_PROVIDER=vllm`, so Saturday is a config change.
+- **Control arm** — `PLAYZORK_CONDITION=single_shot`. One inference, full context, same model tier. Live smoke run played sensibly at ~20s/turn vs the treatment's ~70s.
+
+### Baseline for the hardware move
+
+Apple M5, 24GB, qwen2.5:14b: **generation 14 tok/s, prefill 237 tok/s**. A 3.5k-token call takes 14.4s, of which **10.4s is prefill** — which is why a GPU should help disproportionately here, prefill being compute-bound and parallel where generation is bandwidth-bound and sequential.
+
+### Five for five
+
+Every substantial change this week shipped with a green suite and had a defect found by a live run:
+
+1. M2 — inventory analyzer inverted a TAKE into a removal (prompt × model interaction).
+2. #25 — a deleted import left the ObserverAgent silently disabled.
+3. #23/#26 — separate fan-in edges are not a join; `persist` ran twice per turn.
+4. #26 follow-up — a signature change crashed on startup; no test built the real service.
+5. #16 — a greedy quantifier turned "a small mailbox here." into `TAKE HERE`.
+
+Four of the five were *silent*, which is the direct cost of #1's error containment: a broken component logs and continues. The standing rule is now in CLAUDE.md — prefer tests that **execute** over tests that inspect source, and run a session before believing the suite.
+
+### Docs
+
+CLAUDE.md was materially wrong (it still documented the deleted research node and the pre-#30 inventory path) and has been rewritten: new graph topology, the experiment setup, and an **Invariants** section recording the false-negative-beats-false-positive rule that now governs the whole world model. README gained a Measurement Notes section stating plainly that wall-clock on this rig measures token volume.
+
+---
+
+# Development Log: 2026-08-24 (later) — Planetfall, and six defects Zork could not show
+
+Playing a second game was worth more than any amount of further work on the
+first. Zork exercises one shape of failure; Planetfall exercised six others,
+and one of them had been silently costing every Zork run as well.
+
+## The run that made it obvious
+
+`pf-20260824`. Planetfall opens on a doomed ship: escape via the pod or die
+with it. The game hands over the escape route in the **starting room**:
+
+```json
+"actionsAvailableFromLocation": {"escape pod bulkhead": ["open bulkhead", "close bulkhead"]}
+```
+
+Every stage handled it correctly. The parser read it; it reached the prompt
+verbatim; the ObserverAgent stored it at importance 900 with the right
+location; the InteractionAgent proposed `OPEN escape pod bulkhead` at
+confidence 70 on turn 2.
+
+Then the arbiter chose `GO UP` and walked away from it.
+
+```
+InteractionAgent: [Confidence: 70/100]             OPEN escape pod bulkhead
+ExplorerAgent:    [Confidence: 95/100, EV: 47.5]   GO UP                     ← chosen
+```
+
+**The InteractionAgent was never given an expected value**, while the decision
+prompt ranks by expected value. The only agent that proposes object
+interactions was structurally unrankable. And the explorer's EV scales with
+`unexplored/10`, which is maximal at the start of every game — precisely when
+the pod mattered. This had been quietly shaping Zork too, where ExplorerAgent
+won 16 of 26 contested turns.
+
+## Six fixes
+
+1. **InteractionAgent EV.** Evidence-weighted rather than tuned to win this
+   case: a command the *backend* listed for an object present here is
+   guaranteed to parse (#30/#16) — strictly stronger evidence than an
+   advertised exit, which is sometimes refused — so it scores 100, mirroring
+   the explorer's +3 for a game-confirmed exit. A model-invented interaction
+   scores 50, so at confidence 70 it gets 35 and **still loses** to
+   exploration's 47.5. A test pins that, because otherwise this would just be
+   handing the agent a blanket win.
+2. **Its repeat/undo multiplier was discarded** — `note, _ = repeat_note(...)`
+   kept the warning line and threw away the zeroing, making #18 a prohibition
+   in prose for this agent. The #21 lesson, re-learned.
+3. **The game clock was parsed and never read.** `Time` has been on the
+   response model since #30; the only matches in the codebase were `timeout`
+   and `setTimeout`. On a timed objective the agents could not see the deadline
+   they were being judged against. Zork returns 0 by probe, so it renders only
+   where a clock exists.
+4. **Planetfall's objective was "Complete the mission"** — interpolated into
+   every prompt as the arbiter's only statement of what it plays for.
+5. **IssueAgent now walks to its issue.** It returned `nothing` at confidence 0
+   for the 900-importance pod two rooms away, with the route already in its
+   prompt. Confidence 70 describes the reliability of the *action* — one step
+   along a BFS path over edges we recorded — while worth is priced by the
+   importance term: 900 gives EV 63 and outranks exploration, a decayed 300
+   gives 21 and does not.
+6. **Movement was three commands and had no inverse.** `GO WEST` / `WEST` / `W`
+   were distinct keys, and `_INVERSES` held no directions while `inverse_of`
+   required an object after the verb. So nothing detected that EAST reverses
+   WEST. In Zork `frontier3-20260824` the agent reached **Behind House — the
+   room containing the window into the house** — and oscillated
+   `GO WEST → EAST → GO WEST` off it, with **zero** suppressions in 16 turns.
+   Planetfall reproduced it vertically.
+
+   Ship directions (port/starboard/fore/aft) were added as **aliases**, not new
+   canonical directions: EAST and STARBOARD are one passage, and since the
+   explorer's EV scales with the unexplored count, aliasing them separately
+   would inflate its EV and let it re-walk a passage under the other name.
+   Mapping verified by live probe: starboard→E, port→W, fore→N, aft→S.
+
+## Verified in play, not just in the suite
+
+| | turn 2 decision |
+|---|---|
+| control `pf-20260824` | `GO UP` |
+| fixed `pf2-20260824` | **`OPEN escape pod bulkhead`** |
+
+Tests 661 → 736.
+
+## What this cost, and the lesson
+
+Three consecutive Zork runs were spent chasing an empty frontier that turned
+out to be two *different* wiring bugs, and both times the available conclusion
+was "milestone 5b doesn't help" — which would have charged a wiring bug to the
+architecture. The rule that keeps earning its place: **run the thing, and read
+the raw rows rather than guessing.** The third attempt found it in the DB in
+about a minute.
+
+A second rule was added after nearly reporting a 27% token saving that was
+entirely a turn-count artifact (26-turn control vs 11-turn treatment; matched
+on turns 1–10 the honest figure is +4.1%): **never compare a per-turn mean
+across runs of unequal length.**
+
+## RESULT: the agent escaped the Feinstein (`pf4-20260824`, turn 15)
+
+First non-zero score of the project — **3 points** — and the first time any run
+has completed an objective.
+
+```
+11 | GO NORTH  | "A massive explosion rocks the ship."
+12 | OPEN ...  | "It's already open!"  (the emergency opened the bulkhead)
+13 | GO WEST   | Escape Pod — "The pod door clangs shut as heavy explosions..."
+15 | GO DOWN   | "...a huge explosion blows the Feinstein into tiny pieces"
+```
+
+**What the agent actually earned.** The pod's controls are "entirely
+automated": once inside, the door sealed and the ejection ran on its own, and
+`GO NORTH`/`GO DOWN` at turns 14–15 were wasted moves that happened not to
+matter. The agent solved the real puzzle — *be at Deck Nine and go WEST while
+the ship comes apart* — rather than executing a clean sequence.
+
+**The decision that won it was chosen at EV 0.0.** `WEST` had been marked
+unproductive at turn 10, when the bulkhead was still closed. The arbiter picked
+it anyway, reasoning *"the escape pod bulkhead is now open"* — a world change
+the deterministic `unproductive` layer cannot represent, because it assumes
+"the same command, in the same room, with nothing changed since, produces the
+same response" and nothing invalidates the record when the world moves.
+
+**This is a limit on "prompt text is not a mechanism".** That principle was
+right six times running today. Here it is wrong: the code layer assumed a
+static world, the LLM arbiter noticed the world had changed, and mechanising
+that judgment away would have killed the run. The zero-EV filter added earlier
+today came within one positive-EV proposal of deleting the winning move from
+the ballot — it survived only because every other proposal was also zero.
+
+**Consequence — narrow the filter.** Withhold *undo* demotions (structurally
+wasteful, world-independent); never withhold *already-tried* demotions (true
+only while the world is unchanged). Both pf3 overrides that motivated the
+filter were undo cases, so this keeps the whole demonstrated benefit.
+
+**Which fixes were load-bearing:**
+
+| fix | contribution |
+|---|---|
+| ship directions (port/starboard) | moved laterally at all, instead of climbing |
+| specific objective + game clock | the arbiter's reasons cite the emergency |
+| InteractionAgent EV | put the bulkhead on the ballot on turn 2 |
+| undo demotion | ended the pf3 oscillation |
+| zero-EV filter | **neutral-to-harmful** — nearly blocked the escape |
+
+
+## Reproducible: escaped twice (`pf4`, `pf5`), both by an EV-0.0 override
+
+`pf5-20260824` reached the Escape Pod at **turn 12** (pf4: turn 13), score 3.
+Two runs, two escapes -- the result is a capability, not an accident.
+
+**Both escapes were won by a proposal the deterministic layer had zeroed.**
+`WEST` gets marked unproductive when the agent tries it before the emergency,
+while the bulkhead is shut; the explosion then opens it and nothing invalidates
+the record. In both runs the arbiter chose `WEST` anyway at EV 0.0 -- pf4:
+*"because the escape pod bulkhead is now open"*, pf5: *"because the recent
+explosion and the sliding open of the door"*.
+
+**The narrowing was load-bearing in pf5, not merely prudent.** The ballot at
+the escape decision:
+
+```
+InteractionAgent: [Confidence: 80/100, EV: 80.0, game-confirmed]  OPEN escape pod bulkhead
+ExplorerAgent:    [Confidence: 95/100, EV: 0.0]                   GO WEST      <- the escape
+  ALREADY TRIED HERE, no effect: "The escape pod bulkhead is closed."
+```
+
+A positive-EV proposal was present, so the earlier un-narrowed filter would
+have withheld `GO WEST` outright and the agent would have chosen `OPEN` --
+which answers *"It's already open!"* and wastes the turn.
+
+**The lesson, stated against my own prior.** "Prompt text is not a mechanism"
+held six times today and is wrong at this boundary. The deterministic layer
+encodes *"the same command, in the same room, with nothing changed since,
+produces the same response"*; an exploding spaceship violates the premise, and
+only the LLM arbiter could see that. Mechanising its judgment away would have
+cost both escapes.
+
+## Still blocking reliability
+
+- **Premature issue closure.** The escape-pod issue is closed in 4 of 5 runs,
+  always right after the turn-2 refusal -- the IssueClosedAgent reads *"Why
+  open the door ... if there's no emergency?"* as resolution rather than "not
+  yet". pf4 escaped with **every** issue closed, so the memory system
+  contributed nothing to either success. The closure prompt is already
+  maximally careful (it parses acceptance criteria and gives explicit
+  DO-NOT-CLOSE examples), so the guard must be code: apply staged closures only
+  on a turn where something actually changed -- score, location or inventory.
+  Nothing can newly become resolved by a turn that accomplished nothing.
+- **Issue target vs sighting location.** `location` records where an issue was
+  *observed*. For "white house seen from West of House" that is the useful
+  room; for "Blather orders you to return to Deck Nine", observed at Reactor
+  Lobby, it routes the agent to where it already stands. Both runs fell back to
+  inventing `RETURN TO DECK NINE`, which Planetfall's parser accepts and Zork's
+  would not. The target must be extracted, not assumed to be the sighting room.
+
+
+## pf7: the memory system contributed for the first time (3rd escape)
+
+`pf7-20260824` reached the Escape Pod at **turn 12**, score 3. Three
+consecutive escapes now (turns 13, 12, 12), all on local `qwen2.5:14b`.
+
+**What changed.** The closure guard refused three closures, so the escape-pod
+issue survived the whole approach instead of being closed on turn 2 or 3. At
+turn 7 both IssueAgents proposed `DOWN` at confidence 90 and **the arbiter
+chose them over the ExplorerAgent's `GO UP`**:
+
+```
+[IssueAgent ID:46] Navigation direction: DOWN     <- target resolved + reverse-edge route
+[ExplorerAgent]    'GO UP'  (conf 75)
+[IssueAgent ID:46] 'DOWN'   (conf 90)
+DECISION MADE: DOWN
+REASON: Chose IssueAgent #1 (importance 531, confidence 90, EV 47.8)
+```
+
+That is the first decision in this project driven by tracked memory. It also
+confirms the goal-directed-return exemption in live play: `DOWN` reverses turn
+6's `GO UP` and was correctly NOT demoted as backtracking, because it is the
+next step toward a tracked issue.
+
+All five previously-broken links now carry load:
+
+| link | before | now |
+|---|---|---|
+| issue survives | closed turn 2-3 | open, 3 closures refused |
+| target resolution | routed to where it stood | Deck Nine |
+| return route | NO PATH | DOWN |
+| undo demotion | zeroed the return | exempt as a route step |
+| IssueAgent | `nothing` @ conf 0 | `DOWN` @ conf 90, chosen |
+
+**What did NOT change, stated plainly.** Memory drove the POSITIONING, not the
+escape. The final move was again an EV-0.0 override:
+
+```
+[ExplorerAgent]    'GO WEST'                   conf 95, EV 0.0   <- chosen
+[InteractionAgent] 'open escape pod bulkhead'  conf 80, EV 80
+REASON: "...because the recent explosion has caused the door to slide open"
+```
+
+Three escapes, three EV-0.0 overrides, each with a positive-EV alternative on
+the same ballot. The architecture now gets the agent to the right room and
+keeps it there; the escape itself still depends on the arbiter reasoning past a
+stale suppression that the world model cannot invalidate.
+
+**Root defect behind all three:** `unproductive` encodes "the same command, in
+the same room, with nothing changed since, produces the same response" and has
+no invalidation when the world changes. An explosion opening a bulkhead
+violates the premise. The recency window is the only thing that eventually
+clears it, and it is slower than the emergency.
