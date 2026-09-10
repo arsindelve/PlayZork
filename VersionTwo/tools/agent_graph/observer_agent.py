@@ -18,6 +18,14 @@ from .tool_execution import invoke_tool_safely
 import logging
 
 
+# How many open issues to show the Observer for duplicate avoidance (#29).
+# The list's job is "have I already reported this?", so it wants EVERY open
+# issue; this cap is only a prompt-size safety valve. Measured sessions stay
+# well under it, so in practice it returns all open issues. Deliberately NOT
+# decayed — see _tracked_issues_for_dedup.
+TRACKED_ISSUE_DEDUP_CAP = 50
+
+
 class ObserverAgent:
     """
     Analyzes game responses to identify new strategic issues.
@@ -69,15 +77,10 @@ class ObserverAgent:
         self.logger.info(f"[ObserverAgent] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         self.logger.info(f"[ObserverAgent] Analyzing game response at {location}")
 
-        # Phase 0: Get already-tracked issues to avoid duplicates
+        # Phase 0: Get already-tracked issues so the model does not re-report
+        # one that is already open.
         self.logger.info(f"[ObserverAgent] Phase 0: Retrieving tracked issues...")
-        tracked_issues = memory_toolkit.state.get_top_memories(limit=20)  # Get top 20 tracked issues
-        tracked_issues_text = "\n".join([
-            f"- [{mem.importance}/1000] {mem.content}"
-            for mem in tracked_issues
-        ]) if tracked_issues else "No issues tracked yet."
-
-        self.logger.info(f"[ObserverAgent] Found {len(tracked_issues)} tracked issues")
+        tracked_issues_text = self._tracked_issues_for_dedup(memory_toolkit)
 
         # Phase 1: Gather historical context using research agent
         self.logger.info(f"[ObserverAgent] Phase 1: Gathering historical context...")
@@ -136,6 +139,37 @@ class ObserverAgent:
         self.logger.info(f"  item: '{response.item}'")
 
         return response
+
+    def _tracked_issues_for_dedup(self, memory_toolkit: MemoryToolkit) -> str:
+        """The open-issue list shown to the model for duplicate avoidance (#29).
+
+        This is NOT the spawner/closer's importance-ranked working set, and it
+        must not be decayed the way those are (#20). Its job is "have I already
+        reported this?", so it wants EVERY open issue — a stale issue decayed to
+        effective importance 0 is still open, and re-reporting it makes a
+        duplicate. Decaying (or a tight importance-ranked limit) would push
+        exactly those stale-but-open issues out of view and make duplicates
+        MORE likely, not fewer.
+
+        So: open issues only (get_top_memories excludes closed by default),
+        undecayed (current_turn left unset), capped only to bound prompt size.
+        When the cap bites we log it; the MemoryDeduplicator — which also
+        compares against closed issues — is the semantic backstop.
+        """
+        tracked_issues = memory_toolkit.state.get_top_memories(limit=TRACKED_ISSUE_DEDUP_CAP)
+        if len(tracked_issues) >= TRACKED_ISSUE_DEDUP_CAP:
+            self.logger.warning(
+                f"[ObserverAgent] Duplicate-avoidance list hit its cap of "
+                f"{TRACKED_ISSUE_DEDUP_CAP} open issues; older ones are omitted "
+                f"and may be re-reported. Raise TRACKED_ISSUE_DEDUP_CAP or close "
+                f"stale issues."
+            )
+        self.logger.info(f"[ObserverAgent] Found {len(tracked_issues)} tracked issues")
+        if not tracked_issues:
+            return "No issues tracked yet."
+        return "\n".join(
+            f"- [{mem.importance}/1000] {mem.content}" for mem in tracked_issues
+        )
 
     def _create_observation_prompt(self, game_response: str, location: str, historical_context: str, tracked_issues: str) -> str:
         """Create the prompt for game response observation"""
