@@ -82,8 +82,8 @@ if LLM_PROVIDER not in {"openai", "ollama", "vllm"}:
 # continuous batching, which is the difference that matters here: this project
 # fans out 5-10 concurrent calls per turn, and Ollama was measured serving them
 # at FLAT throughput (see STATUS.md 2026-08-24) — i.e. no concurrency at all.
-VLLM_BASE_URL = os.getenv("PLAYZORK_VLLM_BASE_URL", "http://localhost:8000/v1").strip()
-VLLM_MODEL = os.getenv("PLAYZORK_VLLM_MODEL", "Qwen/Qwen2.5-14B-Instruct").strip()
+VLLM_BASE_URL = os.getenv("PLAYZORK_VLLM_BASE_URL", "http://localhost:11434").strip()
+VLLM_MODEL = os.getenv("PLAYZORK_VLLM_MODEL", "qwen3:14b").strip()
 
 # ═══════════════════════════════════════════════════════════
 # EXPERIMENT CONDITION
@@ -185,8 +185,8 @@ LONG_SUMMARY_MAX_CHARS = int(os.getenv("PLAYZORK_LONG_SUMMARY_MAX_CHARS", "2500"
 # ═══════════════════════════════════════════════════════════
 MODELS = {
     "ollama": {
-        "cheap": "qwen3.8:27b-mxfp8",      # Research, summarization, deduplication
-        "expensive": "qwen3.8:27b-mxfp8",  # Decision-making, agent proposals (same model — stays warm, no swap)
+        "cheap": "qwen3:14b",      # Example valid model (replace with one from 'ollama list')
+        "expensive": "qwen3:14b",  # Use the same model if it's warm
     },
     "openai": {
         "cheap": "gpt-5-nano-2025-08-07",
