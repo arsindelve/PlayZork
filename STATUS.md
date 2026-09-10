@@ -1496,7 +1496,10 @@ Whether the missing behaviour is a **new drive** in the roster, or an **existing
 drive whose reach is too literal** (the InteractionAgent's drive "engage the
 window" is arguably right, but it only emits the backend's object-verbs —
 open/close/examine — never "enter"), is **undecided and left to the proposed
-solution.**
+solution** — now drafted in `docs/GOAL_AGENTS_PROPOSAL.md` (recursive,
+self-terminating "Meeseeks" goal-agents), which is **gated on an unresolved
+feasibility question: can qwen3:14b create and spawn goals at all?** That gate is
+to be settled by probing the model before any build.
 
 Secondary observations from the same run:
 
