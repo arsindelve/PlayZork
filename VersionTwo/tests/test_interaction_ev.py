@@ -30,7 +30,8 @@ def interaction(action="OPEN escape pod bulkhead", confidence=70):
 
 def explorer(action="GO UP", confidence=95, unexplored=10):
     return NS(confidence=confidence, proposed_action=action, reason="r",
-              best_direction="UP", unexplored_directions=["X"] * unexplored)
+              best_direction="UP", unexplored_directions=["X"] * unexplored,
+              is_retry=False, exploration_ev_count=lambda: unexplored)
 
 
 def ev_of(text, agent):

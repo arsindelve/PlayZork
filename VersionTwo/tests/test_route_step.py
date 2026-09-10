@@ -46,7 +46,7 @@ class TestGoalDirectedReturnSurvives:
     def _explorer(self, action, confidence=95):
         return NS(proposed_action=action, confidence=confidence,
                   best_direction=action, unexplored_directions=["x"] * 10,
-                  reason="r")
+                  reason="r", is_retry=False, exploration_ev_count=lambda: 10)
 
     def test_a_return_toward_the_pod_is_not_demoted(self):
         """UP just moved us here, so DOWN reverses it — but the pod is DOWN."""

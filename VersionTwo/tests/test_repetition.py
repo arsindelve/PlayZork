@@ -127,7 +127,8 @@ def _proposals(ctx):
     issue = SimpleNamespace(proposed_action="EXAMINE PILE OF LEAVES", confidence=85,
                             importance=500, issue_content="Pile of leaves", reason="investigate")
     explorer = SimpleNamespace(proposed_action="NORTH", confidence=95, best_direction="NORTH",
-                               unexplored_directions=["NORTH", "SOUTH"], reason="unexplored")
+                               unexplored_directions=["NORTH", "SOUTH"], reason="unexplored",
+                               is_retry=False, exploration_ev_count=lambda: 2)
     return _format_agent_proposals([issue], explorer, None, None, context=ctx)
 
 

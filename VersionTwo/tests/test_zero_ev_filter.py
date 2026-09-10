@@ -23,9 +23,12 @@ POD = {"escape pod bulkhead": ["open bulkhead", "close bulkhead"],
        "ensign blather": ["examine blather"]}
 
 
-def explorer(action="GO WEST", confidence=95, unexplored=10):
+def explorer(action="GO WEST", confidence=95, unexplored=10, is_retry=False):
+    # Mirrors the real ExplorerAgent interface: exploration_ev_count() drives
+    # the EV (frontier count, or a floor of 1 for a refused-direction retry, #31).
     return NS(proposed_action=action, confidence=confidence, best_direction=action,
-              unexplored_directions=["x"] * unexplored, reason="r")
+              unexplored_directions=["x"] * unexplored, reason="r", is_retry=is_retry,
+              exploration_ev_count=lambda: 1 if is_retry else unexplored)
 
 
 def interaction(action="examine blather", confidence=70):

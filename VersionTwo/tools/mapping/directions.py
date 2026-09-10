@@ -50,6 +50,37 @@ def normalize_direction(direction: Optional[str]) -> str:
     return DIRECTION_ABBREVIATIONS.get(token, token)
 
 
+def explorer_direction_pools(known_exits: Iterable) -> tuple:
+    """Split known exits into (unexplored_frontier, retry) for the explorer.
+
+    `known_exits` is the (direction, destination) list from
+    `MapperState.get_exits_from`. A real destination means the direction is
+    genuinely explored and is dropped from both pools. A `BLOCKED` destination
+    is only PROVISIONALLY closed (#11/#31): the wall may have been a troll, a
+    locked grating or a raised drawbridge that has since cleared, and #11 lets
+    a later success overwrite the row — but only if the direction is tried
+    again. So a blocked direction is returned as a low-priority *retry*
+    candidate rather than treated as explored; otherwise nothing ever re-tries
+    it and the map can only degrade. A direction with both a real passage and a
+    stale BLOCKED row counts as explored (the passage wins).
+
+    Both pools are returned in CANONICAL_DIRECTIONS order for reproducibility.
+    """
+    explored = {
+        normalize_direction(direction)
+        for direction, destination in known_exits
+        if destination != "BLOCKED"
+    }
+    blocked = {
+        normalize_direction(direction)
+        for direction, destination in known_exits
+        if destination == "BLOCKED"
+    } - explored
+    unexplored = [d for d in CANONICAL_DIRECTIONS if d not in explored and d not in blocked]
+    retry = [d for d in CANONICAL_DIRECTIONS if d in blocked]
+    return unexplored, retry
+
+
 # ---------------------------------------------------------------------------
 # Prose scanning (GitHub issue #8)
 # ---------------------------------------------------------------------------

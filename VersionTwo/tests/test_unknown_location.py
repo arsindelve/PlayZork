@@ -79,11 +79,13 @@ def test_persist_still_stores_a_real_location(monkeypatch):
 
 class FakeExplorerAgent:
     def __init__(self, current_location, unexplored_directions, mentioned_directions,
-                 turn_number, game_exits=None):
+                 turn_number, game_exits=None, retry_directions=None):
         self.current_location = current_location
         self.unexplored_directions = unexplored_directions
         self.mentioned_directions = mentioned_directions
+        self.retry_directions = list(retry_directions or [])
         self.best_direction = "NORTH"
+        self.is_retry = False
         self.proposed_action = None
         self.reason = None
         self.confidence = None

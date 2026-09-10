@@ -14,9 +14,8 @@ from tools.history import HistoryToolkit
 from tools.memory import MemoryToolkit
 from tools.mapping import MapperToolkit
 from tools.mapping.directions import (
-    CANONICAL_DIRECTIONS,
+    explorer_direction_pools,
     find_mentioned_directions,
-    normalize_direction,
 )
 from tools.memory.closure_guard import closure_is_contradicted
 from tools.memory.issue_target import resolve_issue_target
@@ -263,15 +262,13 @@ def create_spawn_agents_node(
             if location_is_known
             else []
         )
-        # Canonicalize so a passage recorded as "N" counts as NORTH explored
-        # (#9). Without this the explorer re-proposed the same direction every
-        # turn, forever.
-        known_directions = {normalize_direction(direction) for direction, _ in known_exits}
-
-        unexplored_directions = [
-            d for d in CANONICAL_DIRECTIONS
-            if d not in known_directions
-        ]
+        # Canonicalize so a passage recorded as "N" counts as NORTH (#9), and
+        # split real passages (explored) from BLOCKED edges. A BLOCKED edge is
+        # only PROVISIONALLY closed (#11/#31), so its direction comes back as a
+        # low-priority retry rather than being treated as explored — otherwise
+        # a wall that has since cleared never gets re-tried and the map can
+        # only degrade. See explorer_direction_pools for the full rationale.
+        unexplored_directions, retry_directions = explorer_direction_pools(known_exits)
 
         # Which unexplored directions does the room prose actually name?
         # Whole-word matching only: substring containment scored "NE" inside
@@ -284,24 +281,29 @@ def create_spawn_agents_node(
             unexplored_directions,
         )
 
-        # Create ONE ExplorerAgent if there are unexplored directions
+        # Spawn ONE ExplorerAgent if anything is left to try here — real
+        # frontier, or a previously-refused direction worth re-probing (#31).
+        has_candidates = bool(unexplored_directions or retry_directions)
         explorer_agent = None
-        if unexplored_directions and not location_is_known:
+        if has_candidates and not location_is_known:
             logger.info(
                 "NO ExplorerAgent spawned - current location is unknown, so there "
                 "is no map node to explore from"
             )
-        elif unexplored_directions:
+        elif has_candidates:
             explorer_agent = ExplorerAgent(
                 current_location=current_location,
                 unexplored_directions=unexplored_directions,
                 mentioned_directions=mentioned_directions,
                 game_exits=context.game_exits,
+                retry_directions=retry_directions,
                 turn_number=0  # Will be set properly when turn_number added to state
             )
-            logger.info(f"SPAWNED 1 ExplorerAgent - {len(unexplored_directions)} unexplored directions: {unexplored_directions}")
+            logger.info(f"SPAWNED 1 ExplorerAgent - {len(unexplored_directions)} unexplored, "
+                        f"{len(retry_directions)} retry: unexplored={unexplored_directions} retry={retry_directions}")
             logger.info(f"  Mentioned in description: {mentioned_directions if mentioned_directions else 'None'}")
-            logger.info(f"  Best direction chosen: {explorer_agent.best_direction}")
+            logger.info(f"  Best direction chosen: {explorer_agent.best_direction}"
+                        f"{' (RETRY of a refused direction)' if explorer_agent.is_retry else ''}")
         else:
             logger.info("NO ExplorerAgent spawned - all directions explored from this location")
 
@@ -621,7 +623,7 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
     # ExplorerAgent (LAST)
     if explorer_agent and explorer_agent.proposed_action and explorer_agent.confidence is not None:
         note, mult, withholdable = repeat_note(explorer_agent.proposed_action)
-        ev = (len(explorer_agent.unexplored_directions)/10) * (explorer_agent.confidence/100) * 50 * mult
+        ev = (explorer_agent.exploration_ev_count()/10) * (explorer_agent.confidence/100) * 50 * mult
         lines = block(ev, withholdable)
         lines.append(f"ExplorerAgent: [Confidence: {explorer_agent.confidence}/100, EV: {ev:.1f}]")
         if note:
@@ -629,6 +631,9 @@ def _format_agent_proposals(issue_agents, explorer_agent, loop_detection_agent,
         lines.append(f"  Best Direction: {explorer_agent.best_direction}")
         lines.append(f"  Proposed Action: {explorer_agent.proposed_action}")
         lines.append(f"  Reason: {explorer_agent.reason}")
+        if explorer_agent.is_retry:
+            lines.append(f"  ↻ Re-probing a previously REFUSED direction — the recorded "
+                         f"wall may have cleared; low priority")
         lines.append(f"  Unexplored Directions: {len(explorer_agent.unexplored_directions)} total")
         lines.append("")
 

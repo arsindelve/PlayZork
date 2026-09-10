@@ -32,7 +32,8 @@ class ExplorerAgent:
         unexplored_directions: List[str],
         mentioned_directions: List[str],
         turn_number: int,
-        game_exits: Optional[List[str]] = None
+        game_exits: Optional[List[str]] = None,
+        retry_directions: Optional[List[str]] = None
     ):
         """
         Initialize the single ExplorerAgent for this turn.
@@ -42,6 +43,11 @@ class ExplorerAgent:
             unexplored_directions: List of all unexplored cardinal directions
             mentioned_directions: List of directions mentioned in game text (subset of unexplored)
             turn_number: Current turn number
+            retry_directions: Directions previously recorded BLOCKED here. A
+                BLOCKED edge is only provisionally closed — the wall may have
+                cleared — so they are offered again but ranked below every real
+                frontier candidate, retried only when a room is otherwise
+                exhausted (#31).
         """
         self.current_location = current_location
         self.unexplored_directions = unexplored_directions
@@ -49,6 +55,8 @@ class ExplorerAgent:
         self.turn_number = turn_number
         # Directions the game itself reports (#30); ranks candidates.
         self.game_exits = list(game_exits or [])
+        # Previously-refused directions, offered at low priority (#31).
+        self.retry_directions = list(retry_directions or [])
 
         # Proposal fields (populated after research)
         self.proposed_action: Optional[str] = None
@@ -61,6 +69,10 @@ class ExplorerAgent:
 
         # Pick the best direction and calculate confidence
         self.best_direction = self._pick_best_direction()
+        # True when the only thing left to try here is a previously-refused
+        # direction — drives low confidence and a small EV (#31).
+        self.is_retry = self.best_direction in self.retry_directions \
+            and self.best_direction not in self.unexplored_directions
 
     def _pick_best_direction(self) -> str:
         """Pick the direction most likely to lead somewhere.
@@ -85,12 +97,18 @@ class ExplorerAgent:
         restricting them, and a direction it omits can still be chosen if
         nothing better is on offer.
         """
-        if not self.unexplored_directions:
+        # Real frontier first, then previously-refused directions as a
+        # fallback pool (#31). A retry never displaces genuine frontier.
+        candidates = self.unexplored_directions + [
+            d for d in self.retry_directions if d not in self.unexplored_directions
+        ]
+        if not candidates:
             return "NORTH"
 
         cardinals = {"NORTH", "SOUTH", "EAST", "WEST"}
         game_exits = {d.upper() for d in (self.game_exits or [])}
         mentioned = {d.upper() for d in (self.mentioned_directions or [])}
+        retry = {d.upper() for d in self.retry_directions}
 
         def score(direction: str) -> tuple:
             points = 0
@@ -100,10 +118,15 @@ class ExplorerAgent:
                 points += 2
             if direction in cardinals:
                 points += 1
-            # Stable tiebreak on the canonical order, so a run is reproducible.
-            return (-points, self.unexplored_directions.index(direction))
+            # A refused direction must rank below every genuinely unexplored
+            # candidate, however weakly evidenced, so it is retried only once a
+            # room is otherwise exhausted (#31, option 3).
+            if direction in retry and direction not in self.unexplored_directions:
+                points -= 100
+            # Stable tiebreak on the candidate order, so a run is reproducible.
+            return (-points, candidates.index(direction))
 
-        return min(self.unexplored_directions, key=score)
+        return min(candidates, key=score)
 
     def _calculate_confidence(self, chosen_direction: str) -> int:
         """
@@ -115,6 +138,12 @@ class ExplorerAgent:
         Returns:
             Confidence score (1-100)
         """
+        # Re-probing a refused direction: low confidence by design (#31). The
+        # wall may have cleared (troll gone, grating unlocked) but usually has
+        # not, so this should win only when nothing better is on offer.
+        if self.is_retry:
+            return 30
+
         unexplored_count = len(self.unexplored_directions)
 
         # Base confidence from unexplored count
@@ -132,6 +161,19 @@ class ExplorerAgent:
 
         # Cap at 95 (never 100% certain)
         return min(base + bonus, 95)
+
+    def exploration_ev_count(self) -> int:
+        """The 'n' in the ExplorerAgent's expected-value term.
+
+        A frontier proposal scales with how much is unexplored here; a retry of
+        a refused direction (#31) is worth a single tentative move, so it floors
+        at 1 rather than 0 — nonzero enough to be rankable by the arbiter (a
+        zero-EV proposal is withheld while any positive one exists), small
+        enough to lose to any real lead.
+        """
+        if self.is_retry:
+            return 1
+        return len(self.unexplored_directions)
 
     async def propose(
         self,
