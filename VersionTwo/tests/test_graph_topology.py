@@ -208,8 +208,9 @@ def test_the_real_graph_uses_a_join_not_three_separate_edges():
 
     source = inspect.getsource(dg.create_decision_graph)
 
-    assert '["decide", "close_issues", "observe"], "persist"' in source, \
-        "persist must join all three branches, or it runs twice per turn"
+    assert '["decide", "close_issues", "observe", "goal_experiment"], "persist"' in source, \
+        "persist must join ALL branches via one LIST edge (incl. the passive " \
+        "goal_experiment branch), or it runs more than once per turn"
 
 
 def test_adventurer_service_constructs_the_real_graph(monkeypatch):

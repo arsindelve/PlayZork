@@ -1045,6 +1045,23 @@ def _apply_pending_closures(state, memory_toolkit, logger) -> None:
 
 
 
+def create_goal_experiment_node(decision_llm):
+    """EXPERIMENT: a passive branch that logs a per-turn goal judgement and nothing
+    else (see goal_experiment_agent.py). Reads the shared TurnContext, writes no
+    state keys, contributes no proposal — so it cannot affect the chosen command.
+    """
+    from .goal_experiment_agent import GoalExperimentAgent
+    agent = GoalExperimentAgent(decision_llm)
+
+    async def goal_experiment_node(state: DecisionState) -> dict:
+        context = state.get("turn_context")
+        if context is not None:
+            await agent.run(context)
+        return {}
+
+    return goal_experiment_node
+
+
 def create_decision_graph(
     decision_chain: Runnable,
     decision_llm,
@@ -1089,6 +1106,8 @@ def create_decision_graph(
     graph.add_node("close_issues", create_close_issues_node(
         decision_llm, history_toolkit, memory_toolkit))
     graph.add_node("observe", create_observe_node(decision_llm, history_toolkit, memory_toolkit))
+    # EXPERIMENT branch (passive; logs a goal judgement, changes nothing).
+    graph.add_node("goal_experiment", create_goal_experiment_node(decision_llm))
     graph.add_node("persist", create_persist_node(memory_toolkit, inventory_toolkit))
 
     # Define flow
@@ -1116,6 +1135,7 @@ def create_decision_graph(
     graph.add_edge("build_context", "spawn_agents")
     graph.add_edge("build_context", "close_issues")
     graph.add_edge("build_context", "observe")
+    graph.add_edge("build_context", "goal_experiment")  # EXPERIMENT (passive)
     graph.add_edge("spawn_agents", "decide")
     # A LIST start_key is a real join: LangGraph waits for ALL three branches.
     # Adding the three edges separately does NOT do this — the branches have
@@ -1123,7 +1143,7 @@ def create_decision_graph(
     # so persist was scheduled in the super-step where close and observe
     # finished AND AGAIN when decide finished. Verified live: PERSIST ran
     # twice per turn.
-    graph.add_edge(["decide", "close_issues", "observe"], "persist")
+    graph.add_edge(["decide", "close_issues", "observe", "goal_experiment"], "persist")
     graph.add_edge("persist", END)
 
     return graph.compile()
