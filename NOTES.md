@@ -73,3 +73,24 @@
 ## One question I don't know how to answer yet
 
 • Now that the scaffolding is correct, the 2026-08-21 question can finally be asked — but the answer may be unflattering in a way worth preparing for. If the fixed **single-shot** arm plays comparably, the honest finding is that this architecture's value is not decision quality. That would still be a result: much of what was rebuilt this week — deterministic world state, the API signals, repetition suppression — helps *both* arms and is where the measurable gain actually came from. The thesis may be about scaffolding correctness rather than deliberation, and the experiment should be designed so that outcome is a finding rather than a disappointment.
+
+
+---
+
+# Notes (2026-09-10)
+
+## What surprised me
+
+• **The agent opened the escape route and walked away.** It navigated to Behind House and chose `OPEN WINDOW` — the single action that unlocks Zork's Kitchen and its first points — then went `NORTH`. Not a scoring bug and not a bad rank: across 25 turns *no agent ever proposed entering the window*. The best move the game offered was never on the ballot. I had been treating "score 0" as a decision-quality problem; it is a generation problem wearing a decision-quality mask.
+• **The whole multi-agent design is only as runnable as the model's default verbosity.** What made local play possible was not any audit fix — it was one line disabling qwen3's thinking. A trivial prompt: 118 output tokens with thinking, 2 without. Five of those firing concurrently at a serial Ollama server buried every turn under the 180s timeout; one 25-turn attempt managed a single decision in ~13 minutes. The architecture's cost is set by the model's defaults, not just its own call count.
+• **My own fix reflex was the architecture's bug in miniature.** "Open something = progress → propose entering it" solved the example in front of me, not the class. The reactive framing is contagious: it is exactly how the three proposers already work, and it is exactly why they miss.
+
+## What feels fragile
+
+• **Candidate generation is the floor the whole thing stands on, and it is three narrow reactive vocabularies** — flagged issues, cardinal directions, current-room object verbs. Their union is a strict subset of useful actions. Selection can never be better than what generation puts on the ballot, and the audit spent itself on selection.
+• **Issues are leaves, not goals.** An issue is satisfied by its first action and has no successor. "Get inside the house" cannot exist as a persistent objective; only "open the window" can, and it dies on success. The memory model has no representation of a plan, so the system cannot sequence toward anything more than one move deep.
+• **The experiment tooling is now itself a source of error.** Backgrounded game processes on Windows did not die when the watcher "killed" them (MSYS `kill` against a detached python), orphaning several that held VRAM and quietly degraded concurrency between runs. Timing measurements are only as trustworthy as the process hygiene around them.
+
+## One question I don't know how to answer yet
+
+• If the honest finding is that this architecture's contribution is **selection, not generation**, and long-horizon play is bottlenecked on **generation**, then what is the thesis actually demonstrating? The trap is symmetric: a generator strong enough to close the gap risks *being* a single-shot player in an agent costume — the very baseline the architecture is meant to beat — while a generator weak enough to stay "just a proposer" leaves the gap open. The clean experiment may be to hold **generation constant across arms** and measure only what deliberation adds on top — but I don't know how to hold generation constant without, in effect, designing the answer. This is the same worry as 2026-08-24 (value may be scaffolding, not deliberation), sharpened: it may be *generation*, and generation is the one thing the multi-agent frame does not obviously own.
