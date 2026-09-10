@@ -1,9 +1,13 @@
 # Goal-Agents ("Meeseeks") — a recursive, self-terminating goal layer
 
-**Status:** Proposal. Not built. Design + decision log as of 2026-09-10. The
-feasibility gate near the end is unresolved and blocks implementation. The design
-was reached through the reasoning recorded in the Decision Log at the bottom —
-read that to understand *why* each choice was made, not just what it is.
+**Status:** Proposal. Not built. Design + decision log as of 2026-09-10. The core loop
+(create goal + closing condition, persist, advocate the follow-through) is **validated
+on a traversal puzzle** with qwen3:14b — it took the exact run failure from score 0 to
+score 10 end-to-end (see the feasibility section). What remains unproven is the
+**binding** part: admission control under the ~25-goal budget (when to create a goal at
+all), and altitude/grounding across non-traversal puzzles. The design was reached
+through the reasoning recorded in the Decision Log at the bottom — read that to
+understand *why* each choice was made, not just what it is.
 
 ## Why
 
@@ -176,35 +180,53 @@ The goal-as-state reframe gives a **better dedup key than text**:
   — and, under the budget, to *decline* most facts.
 - **Children** spawned by parents on an unmet precondition (decomposition in context).
 
-## The feasibility gate (UNRESOLVED — blocks build)
+## The feasibility gate — the loop is validated on a traversal puzzle (2026-09-10)
 
-**Serious open concern: owning and spawning goals may be beyond qwen3:14b.** Goal
-creation has historically been the hardest thing to get the local model to do. If the
-weak model can't do the hard operations, the architecture relocates the intelligence
-into a step the target model can't perform, and the thesis ("can *much weaker* models
-solve long-horizon tasks via this architecture") eats itself.
+**Original concern: owning and spawning goals may be beyond qwen3:14b** (it has
+historically emitted actions, not aims). Probed against the **real Behind House
+backend metadata** (temp 0 + temp 0.7 samples, think:false). Result: the core loop
+works reliably on this puzzle; the open risks are elsewhere.
 
-**Empirical probe, 2026-09-10 (qwen3:14b, temp 0, think:false, freeform).**
+1. **Bare-scenario goal (terse prompt, "target state" only).** 5/5 state-shaped, zero
+   imperatives — but altitude wobbled: on the window it said *"the window is fully
+   open"* (the leaf), not "I am inside." Misleading in isolation — see (2).
 
-- *Operation 1 — root goal as a target state:* 5/5 scenarios returned **state-shaped**
-  answers, **zero imperatives.** The "it only emits actions" fear is largely
-  unfounded with a decent prompt + one example. BUT **altitude was unreliable**: on
-  the *window* — the exact failing case — it produced *"the window is fully open"* (a
-  leaf), not *"I am inside the house"*; on West-of-House it jumped to the whole win
-  condition. Altitude, not state-vs-action, is the real difficulty — and it is the
-  minority (traversal) puzzle type, see decision log.
-- *Operation 2 — spawn a sub-goal when blocked:* concepts mostly sound (defeat/distract
-  the troll; get a treasure), but **phrasing drifted back to actions** ("I must find a
-  way to…") and one **hallucinated a mechanism** — *"I have found a key to unlock the
-  door"*, which is wrong for Zork (you enter via the window). **Grounding**, not
-  altitude, is the failure surface for spawning; grounding can lean on the backend's
-  accepted-command list / observed facts rather than the model's guess.
+2. **Grounded goal + closing condition (real room payload).** Asked for a GOAL *and* a
+   CLOSING condition, given the actual description + exits + accepted-commands:
+   **11/12 produced the get-inside goal with an inside-STATE closing condition**
+   ("…you are inside the house"), across both the thin real objective ("reach 350")
+   and a rich one. 1/12 hallucinated a "key" in the closing (grounding failure).
+   **Key lesson: ask for the goal *and its closing condition*, and let altitude live in
+   the closing condition — qwen writes that reliably even when the goal label reads
+   action-y ("open the window to gain access…").** A closing of "you are inside" does
+   NOT fire on window-open — the exact fix for the run's bug.
 
-The relative-importance design (§ single tree) and the mostly-deterministic admission
-gate keep the qwen surface small — creation-as-state and local importance, with code
-guards — which is the reason to think 14b might clear the bar with structure. To be
-retested with structured output + an altitude example + a verb-shape reject guard, and
-compared against qwen3.8:27b when available.
+3. **Follow-through advocacy.** With the goal "I am inside" still open and the window
+   now open, **6/6 proposed `ENTER WINDOW`** — the follow-through no drive produced in
+   the live run.
+
+4. **End-to-end against the live backend.** `open window` → `enter window` →
+   **Kitchen, score 10** — Zork's first points. The precise `analysis25b` failure
+   (open → `CLOSE WINDOW` → walk away → score 0), reproduced as a *fix*, with
+   qwen3:14b driving every LLM step reliably.
+
+**Grounding note (matters for the roster):** after opening, the "entry is possible"
+signal appears in **`exits`** (it gained W=3 and 8="In"), NOT in
+`actionsAvailableFromLocation` (still only open/close/examine window). So the
+InteractionAgent (object-verbs) structurally cannot propose entering; a movement/goal
+drive reading `exits`/location can. Closing conditions and advocacy should read
+`exits`/location, not the object-command list.
+
+**What this settles and what it does not.** It validates the *loop mechanics* — create
+goal + closing, persist while closing unmet, advocate the follow-through — and shows
+qwen3:14b can drive each LLM step reliably **on this (traversal) puzzle**. It does NOT
+settle: (a) **admission control** — when to create a goal vs not, under the ~25 budget
+(the actual binding constraint; untested here); (b) altitude/closing quality on
+**non-traversal** puzzles; (c) **grounding robustness** (1/12 hallucinated a closing);
+(d) the **qwen3.8:27b** comparison. The relative-importance + mostly-deterministic
+admission design keeps the per-step LLM surface small, which is why the 14B has a
+chance. Probe scripts: `nav_zork.py`, `qwen_goal_probe3.py`, `qwen_advocacy_probe.py`
+(session scratchpad).
 
 **Fallback if qwen cannot:** a stronger model does the *rare* hard operations (root
 creation, spawn decisions), qwen does the *frequent* cheap advocacy. Infra already
@@ -220,7 +242,13 @@ about *where* the capability floor is, not a failure.
   — the one thing the probe shows qwen wobbles on.
 - The **decay rate** that declares a blocked leaf hopeless without evicting the merely
   early.
-- Whether qwen3:14b clears the feasibility gate at all — pending the structured retest.
+- **Admission control** under the ~25 budget — when to create a goal vs decline. This
+  is the binding constraint and is untested; the run over-created trivia (mailbox,
+  leaves).
+- Altitude/closing quality on **non-traversal** puzzles, and **grounding robustness**
+  (closing conditions must be checkable against real state; 1/12 hallucinated one).
+- The **qwen3.8:27b** comparison, when the author points at a host. (The loop itself is
+  no longer in doubt on the 14B for a traversal puzzle — see feasibility section.)
 
 ---
 
