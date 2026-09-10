@@ -77,6 +77,16 @@ LLM_PROVIDER = os.getenv("PLAYZORK_LLM_PROVIDER", "ollama").strip().lower()
 if LLM_PROVIDER not in {"openai", "ollama", "vllm"}:
     raise ValueError("PLAYZORK_LLM_PROVIDER must be 'openai', 'ollama' or 'vllm'")
 
+# Reasoning ("thinking") models like qwen3 default to emitting a long
+# <think>...</think> trace before their answer. That is doubly harmful here:
+# it balloons latency — fatal when 5 agents fan out concurrently at a single
+# Ollama server that serializes them (STATUS.md 2026-08-24), pushing each call
+# past LLM_TIMEOUT_SECONDS — and it leaks think tags into content that must
+# parse as structured output. This project was tuned for the non-reasoning
+# qwen2.5:14b, so thinking is OFF by default. Set PLAYZORK_OLLAMA_REASONING=true
+# to re-enable it (e.g. a genuinely idle model, or if concurrency is solved).
+OLLAMA_REASONING = os.getenv("PLAYZORK_OLLAMA_REASONING", "false").strip().lower() == "true"
+
 # vLLM exposes an OpenAI-compatible server, so it needs a base URL and the
 # served model name rather than API credentials. Unlike Ollama it does real
 # continuous batching, which is the difference that matters here: this project
@@ -252,6 +262,7 @@ def _build_llm(provider: str, tier: str, temperature: float):
         return ChatOllama(
             model=MODELS["ollama"][tier],
             temperature=temperature,
+            reasoning=OLLAMA_REASONING,
             callbacks=callbacks,
             **kwargs,
         )

@@ -90,6 +90,21 @@ def test_normalize_ollama_host(raw, expected):
     assert config_module._normalize_ollama_host(raw) == expected
 
 
+# Reasoning/thinking is OFF by default — qwen3's <think> traces wreck latency
+# under concurrent fan-out and leak into structured output (this project targets
+# the non-reasoning qwen2.5:14b).
+def test_ollama_thinking_is_disabled_by_default(reload_config):
+    cfg = reload_config(PLAYZORK_LLM_PROVIDER="ollama")
+    assert cfg.OLLAMA_REASONING is False
+    assert cfg.get_expensive_llm(0).reasoning is False
+
+
+def test_ollama_thinking_can_be_re_enabled(reload_config):
+    cfg = reload_config(PLAYZORK_LLM_PROVIDER="ollama", PLAYZORK_OLLAMA_REASONING="true")
+    assert cfg.OLLAMA_REASONING is True
+    assert cfg.get_expensive_llm(0).reasoning is True
+
+
 def test_bind_all_host_becomes_a_connectable_client_url(reload_config):
     """The end-to-end wiring: a `0.0.0.0` OLLAMA_HOST must reach ChatOllama as a
     loopback URL, not verbatim — otherwise every call fails to connect."""
