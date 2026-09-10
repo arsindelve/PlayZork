@@ -69,3 +69,30 @@ def test_ollama_remains_the_default(reload_config):
 
     assert cfg.LLM_PROVIDER == "ollama"
     assert cfg.get_expensive_llm(0) is not None
+
+
+# OLLAMA_HOST normalization — the var the server reads to *bind* is the same one
+# the client reads to *connect*, and `0.0.0.0` is a valid bind but a dead dial.
+@pytest.mark.parametrize("raw, expected", [
+    (None, None),                                          # unset -> ChatOllama default
+    ("", None),
+    ("   ", None),
+    ("0.0.0.0:11434", "http://localhost:11434"),           # the Windows footgun
+    ("0.0.0.0", "http://localhost"),
+    ("http://0.0.0.0:11434", "http://localhost:11434"),    # bind-all with a scheme
+    ("localhost:11434", "http://localhost:11434"),         # scheme-less -> add http
+    ("127.0.0.1:11434", "http://127.0.0.1:11434"),
+    ("http://localhost:11434", "http://localhost:11434"),  # already fine -> untouched
+    ("http://[fd9e:f32d::2]:11434", "http://[fd9e:f32d::2]:11434"),  # remote IPv6 preserved
+])
+def test_normalize_ollama_host(raw, expected):
+    import config as config_module
+    assert config_module._normalize_ollama_host(raw) == expected
+
+
+def test_bind_all_host_becomes_a_connectable_client_url(reload_config):
+    """The end-to-end wiring: a `0.0.0.0` OLLAMA_HOST must reach ChatOllama as a
+    loopback URL, not verbatim — otherwise every call fails to connect."""
+    cfg = reload_config(PLAYZORK_LLM_PROVIDER="ollama", OLLAMA_HOST="0.0.0.0:11434")
+
+    assert cfg.get_expensive_llm(0).base_url == "http://localhost:11434"

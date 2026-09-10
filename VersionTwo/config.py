@@ -206,6 +206,34 @@ MODELS = {
 # FACTORY FUNCTIONS - Use these everywhere to get LLMs
 # ═══════════════════════════════════════════════════════════
 # Clients are memoized per (provider, tier, temperature) so hot paths
+def _normalize_ollama_host(raw: str | None) -> str | None:
+    """Turn the OLLAMA_HOST env var into a URL a *client* can dial.
+
+    OLLAMA_HOST is overloaded. The Ollama *server* reads it to decide what to
+    *bind* — commonly `0.0.0.0:11434`, meaning "listen on every interface" —
+    and clients read the same var to decide what to *connect to*. `0.0.0.0` is
+    a valid bind target but not a valid destination, so a client that copies it
+    verbatim fails with "All connection attempts failed" (observed on Windows,
+    where the Ollama app sets `OLLAMA_HOST=0.0.0.0:11434` as a User env var).
+    Scheme-less values (`localhost:11434`) also need `http://` before httpx
+    will accept them.
+
+    A real remote host, including the bracketed IPv6 form from the README's
+    VM/Mac setup (`http://[fd9e:...]:11434`), is passed through untouched.
+    Returns None when nothing is set, so ChatOllama keeps its own default.
+    """
+    if not raw or not raw.strip():
+        return None
+    scheme, sep, rest = raw.strip().rpartition("://")
+    if not sep:  # rpartition puts the whole string in `rest` when no scheme
+        scheme, rest = "http", raw.strip()
+    # A bind-all address is not connectable — dial the loopback instead. Only
+    # the host part is rewritten, so any `:port` suffix is preserved.
+    if rest == "0.0.0.0" or rest.startswith("0.0.0.0:"):
+        rest = "localhost" + rest[len("0.0.0.0"):]
+    return f"{scheme}://{rest}"
+
+
 # reuse a single ChatOpenAI/ChatOllama instance — preserving HTTP
 # keepalive and avoiding per-turn client construction overhead.
 @lru_cache(maxsize=None)
@@ -219,8 +247,8 @@ def _build_llm(provider: str, tier: str, temperature: float):
     if provider == "ollama":
         from langchain_ollama import ChatOllama
         kwargs = {}
-        if ollama_host := os.getenv("OLLAMA_HOST"):
-            kwargs["base_url"] = ollama_host
+        if base_url := _normalize_ollama_host(os.getenv("OLLAMA_HOST")):
+            kwargs["base_url"] = base_url
         return ChatOllama(
             model=MODELS["ollama"][tier],
             temperature=temperature,
