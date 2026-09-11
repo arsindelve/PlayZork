@@ -1509,3 +1509,54 @@ Secondary observations from the same run:
   #32 inventory resync) are lower-priority for local dev now that reasoning-off
   removed the latency crisis; they matter for a throughput-sensitive experiment
   protocol, not day-to-day play.
+
+
+---
+
+# Development Log: 2026-09-11 — the goal-experiment shadow agent, and a 2135-turn forest loop
+
+Added a **passive goal-experiment agent** (`goal_experiment_agent.py`, commit
+`8dd0875`; design in `docs/GOAL_AGENTS_PROPOSAL.md`): each turn it judges whether the
+situation warrants a NEW goal + closing condition, logs it, and touches nothing else —
+a 4th passive branch off `build_context`, writing no state keys and contributing no
+proposal, so it cannot affect play. Ran it under normal `multi_agent` play, session
+`goalexp50-20260910`. Two findings.
+
+## 1. On this seed the multi_agent player is in a permanent, non-terminating loop
+
+The run was meant to stop at 50 turns; a stop signal that MSYS silently dropped left
+the process orphaned, and it played **~2135 turns overnight** before being killed. In
+all 2135 turns: **score 0**, and only **seven outdoor rooms** — West of House, North
+of House, Forest Path, Clearing, Forest, Canyon View, Rocky Ledge. Furthest reached
+was the Canyon View / Rocky Ledge dead-end. It **never entered the house, never went
+underground, and reached Behind House (the ajar-window way in) zero times** — it went
+North out of the gate and was absorbed into the Forest⇄Clearing loop. Essentially 0%
+of the game, indefinitely. This is not a wandering *tendency*; on this seed it is a
+**stable attractor the deliberation stack cannot leave**. (In Zork the entire game —
+every treasure, the trophy case, the underground — is gated behind getting inside the
+house, which it never did.)
+
+## 2. The shadow goal agent made 1 goal in 2135 turns
+
+"Reach the mailbox" (move 0 — a leaf goal with a leaf closing, "examined the mailbox"),
+then **declined every other turn**, with consistent and correct reasons ("no new
+obstacles, items, or milestones"). Its restraint is genuine — but it was **starved of
+variety**: the player never put a puzzle, an item, or a real obstacle in front of it,
+so admission / altitude / dedup on rich situations remain untested. The one time it had
+an object (the mailbox) it created a leaf-altitude goal — consistent with the altitude
+wobble seen earlier.
+
+## Method conclusion
+
+**Driving the goal experiment with live multi_agent play does not work** — the player
+loops in empty scenery and the agent has nothing to judge. The next test must *show* the
+agent variety: a **curated batch of real backend payloads** from varied rooms (ajar
+window, boarded house, locked grating, an item, the troll), measured offline. See
+`docs/GOAL_AGENTS_PROPOSAL.md`.
+
+## Harness hazard (fix forward)
+
+The background-launch + `kill -INT` pattern **orphaned the process** — MSYS does not
+deliver the signal to the detached Windows python — so it ran ~12 hours overnight
+pinning the GPU. Fixes: add a `PLAYZORK_MAX_TURNS` cap so runs self-terminate, and stop
+live games via PowerShell (`Stop-Process`), never MSYS `kill`.

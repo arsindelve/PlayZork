@@ -243,8 +243,13 @@ about *where* the capability floor is, not a failure.
 - The **decay rate** that declares a blocked leaf hopeless without evicting the merely
   early.
 - **Admission control** under the ~25 budget — when to create a goal vs decline. This
-  is the binding constraint and is untested; the run over-created trivia (mailbox,
-  leaves).
+  is the binding constraint and remains **untested on variety**. Two runs bracket it
+  without settling it: `analysis25b` (2026-09-10) *over-created* trivia inline (mailbox,
+  leaves as goals), while the passive shadow-agent run (`goalexp50`, 2026-09-11) made
+  only **1 goal in 2135 turns** — but only because the multi_agent player looped seven
+  empty outdoor rooms and never showed it a puzzle (see STATUS.md 2026-09-11).
+  **Conclusion: live play cannot exercise this — the next test is a curated batch of
+  real backend payloads from varied rooms, measured offline.**
 - Altitude/closing quality on **non-traversal** puzzles, and **grounding robustness**
   (closing conditions must be checkable against real state; 1/12 hallucinated one).
 - The **qwen3.8:27b** comparison, when the author points at a host. (The loop itself is
