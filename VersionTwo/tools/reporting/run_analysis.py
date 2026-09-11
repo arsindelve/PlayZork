@@ -63,9 +63,35 @@ class Decision:
             return False
         return _norm(self.chosen) != _norm(top[1])
 
+    @property
+    def winning_agent(self) -> str:
+        """Which agent the arbiter actually chose — from its OWN stated reason.
+
+        Attribution must follow the arbiter's "Chose <Agent>" statement, not a
+        string match on the action. When two agents propose the same command the
+        action match is ambiguous and credited the wrong one: PLAN.md records
+        pf6 turn 4 crediting ExplorerAgent (EV 47.5) while IssueAgent (EV 54) was
+        the one chosen. The reason is authoritative; fall back to action-match
+        (preferring the highest-EV match) only when the reason names no agent.
+        """
+        m = _CHOSE.search(self.reason or "")
+        if m:
+            return m.group(1)
+        matches = [p for p in self.proposals if _norm(p[1]) == _norm(self.chosen)]
+        if matches:
+            return max(matches, key=lambda p: p[2])[0]
+        return ""
+
 
 def _norm(command: str) -> str:
     return " ".join((command or "").upper().split())
+
+
+# The agent the arbiter names in "DECISION MADE ... REASON: Chose <Agent> ...".
+# Matches the proposal labels ("IssueAgent #1", "ExplorerAgent", …) so wins can
+# be attributed to the actual choice rather than to an action-string collision.
+_CHOSE = re.compile(
+    r"Chose\s+(IssueAgent #\d+|IssueAgent|ExplorerAgent|InteractionAgent|LoopDetectionAgent)")
 
 
 @dataclass
@@ -99,12 +125,14 @@ class RunAnalysis:
         return len(self.overrides) / len(contested) if contested else 0.0
 
     def agent_win_counts(self) -> Counter:
+        """Wins credited to the agent the arbiter actually chose (see
+        Decision.winning_agent) — one per decision, never double-counted when
+        several agents proposed the same command."""
         wins = Counter()
         for d in self.decisions:
-            for agent, action, _ in d.proposals:
-                if _norm(action) == _norm(d.chosen):
-                    wins[agent] += 1
-                    break
+            agent = d.winning_agent
+            if agent:
+                wins[agent] += 1
         return wins
 
     # ---- progress -------------------------------------------------------

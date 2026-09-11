@@ -599,6 +599,14 @@ edges; issue target resolution; transcript-contradiction closure guard).
    window is the sole eventual escape hatch and it is slower than the
    emergency. **Do not fix this by mechanising the arbiter's override away** --
    that is precisely what the narrowed filter had to walk back.
+   ✅ **Partially fixed (2026-09-11):** `_unproductive` now enforces the
+   "nothing changed since" clause — a suppression is cleared when the world
+   moves: a score gain anywhere, or RE-ENTERING the room (the "left to fetch a
+   key, came back" pattern, which is the common Zork case). Done by world-change
+   invalidation, NOT by touching the arbiter's override. Residual: a pure timed
+   event with no score change and no room re-entry (the exact Planetfall
+   explosion) is still cleared only by the recency window. Tests in
+   `test_repetition.py`.
 2. **Re-run the single-shot control.** No comparison currently in this file
    survives today: every number predates ~12 behavioural changes. Nothing
    should be quoted across that boundary, including figures reported earlier
@@ -610,6 +618,10 @@ edges; issue target resolution; transcript-contradiction closure guard).
 4. **`agent_win_counts` mis-attributes.** Observed pf6 turn 4: the arbiter
    credited ExplorerAgent (EV 47.5) while IssueAgent had EV 54. Harmless today,
    wrong the moment attribution becomes a thesis metric.
+   ✅ **Fixed (2026-09-11):** wins are credited to the agent the arbiter NAMES in
+   its own "Chose <Agent>" reason (`Decision.winning_agent`), never to a
+   string/EV/list-order match; falls back to the highest-EV action-match only
+   when the reason names no agent. `test_run_analysis.py`.
 5. **Still no integration coverage of the live game loop.** Today added five
    more instances of a green suite over broken behaviour.
 6. **Zork's generation gap** is untouched -- the frontier->issue idea stays at

@@ -211,6 +211,33 @@ def test_agent_win_counts_are_attributed(tmp_path):
     assert wins["ExplorerAgent"] == 0
 
 
+WIN_ATTR_LOG = """
+2026-08-24 11:00:00,000 - INFO - ###  TURN 1 START - Command: look
+2026-08-24 11:00:01,000 - INFO - Location: Reactor Lobby
+2026-08-24 11:00:02,000 - INFO - Score: 0, Moves: 1
+2026-08-24 11:00:03,000 - INFO - Game Response (first 100): Reactor Lobby
+2026-08-24 11:00:04,000 - INFO - Agent Proposals:
+IssueAgent #1: [Importance: 900/1000, Confidence: 90/100, EV: 54.0]
+  Proposed Action: DOWN
+ExplorerAgent: [Confidence: 95/100, EV: 47.5]
+  Proposed Action: DOWN
+2026-08-24 11:00:05,000 - INFO - DECISION MADE: DOWN
+2026-08-24 11:00:06,000 - INFO - REASON: Chose ExplorerAgent (confidence 95, EV 47.5) because a change of direction is needed
+"""
+
+
+def test_a_win_follows_the_arbiter_named_choice_not_a_string_match(tmp_path):
+    """Both agents proposed the chosen command (DOWN); attribution must follow
+    the arbiter's own 'Chose ExplorerAgent', not the higher-EV / list-first
+    IssueAgent it would otherwise be credited to (PLAN.md pf6 mis-attribution)."""
+    run = analyse(write_log(tmp_path, WIN_ATTR_LOG))
+
+    assert run.decisions[0].winning_agent == "ExplorerAgent"
+    wins = run.agent_win_counts()
+    assert wins["ExplorerAgent"] == 1
+    assert wins["IssueAgent #1"] == 0  # not double-credited to the collision
+
+
 def test_the_summary_states_what_a_zero_override_rate_would_mean(tmp_path):
     """If the arbiter never overrides, it is a `max()` that costs an LLM call —
     which is what the arbitration ablation exists to test."""

@@ -70,6 +70,47 @@ def test_the_command_that_moved_us_here_is_not_suppressed():
     assert not ctx.is_unproductive("GO NORTH")
 
 
+# --- Invalidation on world change (PLAN.md: "already tried" is only true until
+# the world moves; `unproductive` never enforced the "nothing changed since"
+# clause, so all three Planetfall escapes needed an EV-0.0 arbiter override). ---
+
+
+def test_re_entering_the_room_clears_suppression():
+    """We left the room (e.g. to fetch a key) and came back; a command that did
+    nothing before might work now, so it must not stay suppressed."""
+    ctx = _context([
+        _turn(9, "GO SOUTH", "Clearing", "Clearing"),
+        _turn(10, "OPEN GRATING", "It is locked.", "Clearing"),
+        _turn(11, "NORTH", "Forest", "Forest"),
+        _turn(12, "SOUTH", "Clearing", "Clearing"),
+    ])
+
+    assert not ctx.is_unproductive("OPEN GRATING")
+
+
+def test_a_score_gain_clears_suppression():
+    """The world moved — a previously dead command may now do something."""
+    ctx = _context([
+        _turn(9, "GO SOUTH", "Clearing", "Clearing", score=0),
+        _turn(10, "MOVE LEAVES", "Nothing happens.", "Clearing", score=0),
+        _turn(11, "PUSH LEAVES", "A grating appears!", "Clearing", score=5),
+    ])
+
+    assert not ctx.is_unproductive("MOVE LEAVES")
+
+
+def test_suppression_persists_within_one_uninterrupted_visit():
+    """No re-entry, no score: a genuine no-op stays suppressed — the deadlock
+    this mechanism exists to break must still be caught."""
+    ctx = _context([
+        _turn(9, "GO SOUTH", "Clearing", "Clearing"),
+        _turn(10, "EXAMINE LEAVES", "Nothing special.", "Clearing"),
+        _turn(11, "EXAMINE LEAVES", "Nothing special.", "Clearing"),
+    ])
+
+    assert ctx.is_unproductive("EXAMINE LEAVES")
+
+
 def test_a_scoring_command_is_never_suppressed():
     ctx = _context([
         _turn(10, "LOOK", "Clearing", "Clearing", score=0),

@@ -472,6 +472,20 @@ def build_turn_context(
             scored = turn.score > previous.score
             here = turn.location and location and \
                 turn.location.strip().casefold() == location.strip().casefold()
+            # "Already tried, no effect" is only true WHILE NOTHING HAS CHANGED
+            # SINCE — the clause the definition names but nothing enforced, so a
+            # command marked dead stayed dead through the whole window even after
+            # the world moved (PLAN.md: all three Planetfall escapes needed an
+            # EV-0.0 arbiter override because `WEST` stayed suppressed after the
+            # explosion opened the bulkhead). A world-move invalidates every
+            # suppression gathered so far, because a command that did nothing
+            # before may now work: a score gain anywhere, or RE-ENTERING this
+            # room (we left — e.g. to fetch a key — and returned). The bias
+            # stays toward NOT suppressing: re-trying a truly dead command costs
+            # one turn and the game re-teaches it, whereas a wrong "still
+            # pointless" is a false negative the game never corrects.
+            if scored or (moved and here):
+                seen = {}
             if here and not moved and not scored:
                 seen[normalize_command(turn.player_command)] = turn.game_response
             previous = turn
