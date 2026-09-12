@@ -257,6 +257,60 @@ about *where* the capability floor is, not a failure.
 
 ---
 
+## Implementation scope (2026-09-12): evolve the issue pipeline into goals, staged
+
+**Key realization from the first escape-room run:** Meeseeks is not a greenfield
+subsystem — it is an *evolution of the existing issue pipeline*. Observer → memory →
+IssueAgent → arbiter → closer already spawns advocates and arbitrates, and the shadow
+`GoalExperimentAgent` already authors good `goal + closing_condition` pairs on a
+real-puzzle game ("find a light source → closes when a light source is in the
+inventory"). So the wiring is: change what the Observer *writes*, change *when* the
+closer fires, and reuse everything in between.
+
+**Validation harness: the escape-room dark Storage Closet.** Success = an active "find a
+light source" goal persists, drives the agent to obtain a light, and it escapes the dark
+(score moves). If wiring the goal into the loop solves the dark room, *pursuit* works —
+the one thing the shadow run proved was missing.
+
+### Stage 0 — persistent goal + state-closure (minimal; the pursuit test)
+- **Observer** (`observer_agent.py`): author each issue as
+  `{goal: target state, closing_condition: checkable predicate, importance}` instead of
+  a leaf `remember` string. Reuse the shadow agent's prompt — it already does this.
+  Bias closings to *checkable* predicates (inventory contains X / location is Y / score
+  increased / object state), per the run's "a light source is in the inventory"
+  (checkable against the #30 inventory).
+- **Memory** (`memory_state.py` + db): carry `closing_condition` beside content/importance.
+- **IssueAgent**: unchanged in spirit — it already advocates the next action toward an
+  issue; now that action aims at the *target state*.
+- **Closer** (`IssueClosedAgent`/persist): close on the **closing-condition state test**,
+  deterministic where possible. This is the self-terminate, and it kills the
+  leaf/`CLOSE WINDOW` bug — a goal dies on "inside / have-light", never on
+  "opened / searched". LLM fallback only for un-checkable predicates.
+- *Not yet:* budget, eviction, recursion. Just: does a persistent, state-closed goal get
+  pursued?
+
+### Stage 1 — budget + admission + dedup
+- Hard ~25 cap; admit if effective importance beats the weakest slot; decay + eviction
+  as the give-up death.
+- **State/referent-keyed dedup** — kills the run's near-dup ("find a light source" vs
+  "see in the dark" → same referent/aim).
+- Admission gate: game-signaled actionability (not scenery) → not already covered →
+  importance → beat weakest slot. LLM does only actionability + importance.
+
+### Stage 2 — recursion (only if Stage 0/1 need it)
+- Spawning: a goal blocked on a precondition spawns a child (parent dormant; only
+  actionable leaves advocate); failure propagates up; importance relative to parent; one
+  tree rooted at the objective.
+- Defer until a puzzle *requires* decomposition (the dark room may not — if the light is
+  directly reachable, Stage 0 suffices).
+
+**Sequencing:** Stage 0 against the dark room is the first climb. Keep the per-turn call
+count down throughout — active leaves ≈ advocates, so the budget also bounds latency (the
+prefill-bound cost driver). No closed frontier models anywhere; the weak 14B must carry
+it (bigger *open* models on the Mac are a measured ablation only).
+
+---
+
 ## Decision log — how this design was reached (2026-09-10)
 
 Recorded because the wrong turns are where the decisions actually happened.

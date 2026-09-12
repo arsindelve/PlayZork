@@ -1560,3 +1560,52 @@ The background-launch + `kill -INT` pattern **orphaned the process** — MSYS do
 deliver the signal to the detached Windows python — so it ran ~12 hours overnight
 pinning the GPU. Fixes: add a `PLAYZORK_MAX_TURNS` cap so runs self-terminate, and stop
 live games via PowerShell (`Stop-Process`), never MSYS `kill`.
+
+
+---
+
+# Development Log: 2026-09-12 — fully offline, and the first encouraging goal signal
+
+## Infrastructure: fully-offline play + Ollama tuned for the workload
+
+- **ZorkAI game backends now run locally in Docker** (branch `pr385-compose`): Zork
+  `:5100/ZorkOne`, Planetfall `:5101`, Escape Room `:5102/EscapeRoom`, Stationfall
+  `:5103`, on the host Ollama + qwen3:14b, zero AWS. PlayZork points at them via an
+  env override — `get_game_config()` honors `PLAYZORK_GAME_BASE_URL`/`_ENDPOINT`
+  without touching the committed cloud defaults (commit `49d328c`).
+- **Ollama tuned for our workload:** `NUM_PARALLEL=1` + flash-attention + `q8_0` KV →
+  ~78 tok/s single-stream (up from ~15 at NP=4). Counterintuitive finding:
+  **batching HURTS us** — the workload is prefill-bound (huge prompts, short outputs)
+  and chain-structured, so single-stream speed wins; NP>1 splits the GPU into slower
+  lanes. A 25-turn Zork run at NP=4 was ~76s/turn (worse than the ~32s serial
+  baseline); the escape-room run below at NP=1 was ~19s/turn.
+
+## First real escape-room run (`escaperoom-25-20260912`, NP=1)
+
+25 turns, ~19s/turn, **score 0**, two rooms: Reception → **Storage Closet (dark)**.
+It examined the sign, opened the welcome desk, took and read the leaflet, went North
+into the dark closet — and **flailed for 15 turns** (every compass direction, `LOOK`×3,
+`READ LEAFLET`×2, `USE LEAFLET ON FLOOR`×2). Never escaped. But unlike Zork's diffuse
+forest-nothing, this is a **diagnosable** failure at a concrete obstacle: entered a dark
+room with no light source.
+
+**The encouraging finding — goal creation works on a real-puzzle game.** The shadow
+goal-agent produced **4 well-shaped goals with checkable closing conditions** (vs. 1
+leaf-goal in 2135 Zork turns):
+
+- "Obtain the leaflet" → closes when the leaflet is in the inventory
+- **"Find a light source" → closes when a light source is in the inventory** — the exact
+  obstacle, right altitude, checkable state
+- "Find a way to see in the dark" → closes when the player can see in the dark (near-dup)
+
+So the feasibility gate looks **clearable on the 14B** when the game actually presents
+puzzles. The harness matters as much as the model.
+
+**The gap is pursuit, not generation.** The shadow agent *identified* "find a light
+source," but it is observe-only, and the real arbiter+agents never pursued it — they
+walked into the dark and flailed. An *active* goal-agent advocating that goal turn after
+turn (searching Reception for a lamp rather than wandering into darkness) is exactly what
+the Meeseeks wiring must add. Generation succeeded; pursuit is the binding constraint.
+
+Minor: repetition suppression missed some dark-room repeats (`READ LEAFLET`, `LOOK`
+twice); and the two light-related goals are a near-duplicate (dedup fodder).
