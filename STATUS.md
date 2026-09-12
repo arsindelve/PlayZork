@@ -1609,3 +1609,23 @@ the Meeseeks wiring must add. Generation succeeded; pursuit is the binding const
 
 Minor: repetition suppression missed some dark-room repeats (`READ LEAFLET`, `LOOK`
 twice); and the two light-related goals are a near-duplicate (dedup fodder).
+
+
+## Stage-0 pursuit fallback: means-aware search (2026-09-12)
+
+Built the (C) half of Stage 0 — a means-aware search fallback in the IssueAgent.
+An aim to *obtain/find* something (light source, key, tool) is not resolved at the
+room where it was noticed, so it no longer routes back there (the loop that
+bounced the agent Reception<->dark closet). When it can't act, it SEARCHES: new
+ground -> an un-examined object -> leave a dead-end. Test: test_issue_search_fallback.py.
+
+Re-run `escaperoom-c-20260912`: **the loop broke.** The fallback fired 17x; rooms
+went 2 -> 4 (Reception, Storage Closet, Lounge, **Exit Hallway**); the agent found
+the actual exit ("heavy metal door") and formed the right goals ("unlock the door",
+"open the heavy metal door"). Score still 0: the exit door is locked and the dark
+Storage Closet (needs a light) likely hides the key/clue, so solving requires
+CHAINING sub-goals (get light -> search dark closet -> find key -> unlock exit) --
+decomposition (Stage 2). The fallback moved us from "bounce in the dark" to
+"explore and find the pieces"; chaining the solution is the next increment. Still
+loops some (re-EXAMINE sign, re-open desk, retried the locked door) -- the
+state-closure reframe (Stage 0's other half) + repetition suppression should help.

@@ -79,6 +79,37 @@ class IssueAgent:
         confidence = getattr(proposal, "confidence", 0) or 0
         return (not action) or action in ("nothing", "none", "n/a") or confidence <= 0
 
+    def _declined_now(self) -> bool:
+        """Same test, but on the CURRENT stored proposal — so it reflects any
+        route-step substitution that already ran above."""
+        action = (self.proposed_action or "").strip().lower()
+        return (not action) or action in ("nothing", "none", "n/a") or (self.confidence or 0) <= 0
+
+    def _search_step(self, context):
+        """A goal-directed SEARCH move for a means aim that can't be acted on
+        here: look for the means rather than give up. Deliberately never routes
+        back to the notice location — that is the loop this exists to break.
+
+        Order: (1) a direction the game reports here that the map has NOT yet
+        explored (new ground); (2) an object here not yet examined; (3) any
+        known exit not shown useless, to leave a searched/dark dead-end. Returns
+        (ACTION, confidence) or None if there is genuinely nothing to try.
+        """
+        known = {(d or "").strip().upper() for d, _ in getattr(context, "exits", [])}
+        for d in getattr(context, "game_exits", []) or []:
+            du = (d or "").strip().upper()
+            if du and du not in known and not context.is_unproductive(du):
+                return du, 50
+        for obj in (getattr(context, "available_actions", {}) or {}):
+            cmd = f"EXAMINE {obj}".strip().upper()
+            if not context.is_unproductive(cmd):
+                return cmd, 45
+        for d, _ in getattr(context, "exits", []):
+            du = (d or "").strip().upper()
+            if du and not context.is_unproductive(du):
+                return du, 40
+        return None
+
     async def propose(
         self,
         decision_llm: BaseChatModel,
@@ -172,6 +203,17 @@ class IssueAgent:
         self.reason = proposal.reason
         self.confidence = proposal.confidence
 
+        # A "means" aim — obtain/find something (a light source, a key, a tool)
+        # — is NOT resolved at the room where it was noticed; the means is
+        # elsewhere. Routing back to the notice location (below) just loops:
+        # in escaperoom-25 the agent bounced Reception<->dark Storage Closet
+        # because "find a light source" pointed at the closet. For these aims we
+        # skip the route-to-notice step and SEARCH instead (Stage-0 pursuit).
+        issue_lower = (self.issue_content or "").lower()
+        is_means_aim = any(k in issue_lower for k in (
+            "in my inventory", "in the inventory", "find ", "obtain", "acquire",
+            "light source", "a key", "the key", "a tool", "search for"))
+
         # An issue you are not standing at has a deterministic answer: walk
         # toward it. The prompt already carries `navigation_direction` and
         # `location_status`, and the model declined anyway — in pf-20260824 it
@@ -185,7 +227,7 @@ class IssueAgent:
         # issue deserves pursuing is already priced in by the importance term
         # of the expected value — 900 importance gives EV 63 and outranks
         # exploration's 47.5, a decayed 300 gives 21 and does not.
-        if self._declined(proposal) and location_status == "DIFFERENT LOCATION":
+        if self._declined(proposal) and location_status == "DIFFERENT LOCATION" and not is_means_aim:
             step = (navigation_direction or "").strip().upper()
             if step and step not in ("NO PATH", "NOT AVAILABLE", "UNKNOWN"):
                 self.proposed_action = step
@@ -197,6 +239,22 @@ class IssueAgent:
                 logger.info(
                     f"[IssueAgent ID:{self.memory.id}] Declined with no action; "
                     f"substituting route step {step} toward {self.target_location}")
+
+        # Still no action: pursue a means aim by SEARCHING for the means rather
+        # than giving up ("nothing") or looping back to where it was noticed.
+        # A search step carries this issue's importance, so a high-importance
+        # obstacle ("find a light source", 800) makes the agent look, and
+        # outranks aimless exploration. Prefer new ground, then an un-examined
+        # object, then leaving a searched/dark dead-end (#... Stage-0 pursuit).
+        if is_means_aim and self._declined_now():
+            search = self._search_step(context)
+            if search:
+                self.proposed_action, self.confidence = search
+                self.reason = (f"The means to resolve '{self.issue_content[:50]}' is "
+                               f"not here; searching for it: {self.proposed_action}.")
+                logger.info(
+                    f"[IssueAgent ID:{self.memory.id}] Declined; substituting search "
+                    f"step {self.proposed_action} (confidence {self.confidence})")
 
         # Log proposal summary
         logger.info(f"[IssueAgent ID:{self.memory.id}] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
