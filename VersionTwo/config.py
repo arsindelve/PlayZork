@@ -53,10 +53,27 @@ ACTIVE_GAME = os.getenv("PLAYZORK_GAME", "zork").strip().lower()
 
 # Helper function to get the current game config
 def get_game_config():
-    """Get the configuration for the currently active game."""
+    """Get the configuration for the currently active game.
+
+    `base_url` and `endpoint` are env-overridable so the game can be pointed at
+    a SELF-HOSTED backend (e.g. the ZorkAI Docker stack on localhost:5100-5103)
+    for fully-offline play, WITHOUT editing the committed cloud defaults:
+
+        PLAYZORK_GAME=escaperoom
+        PLAYZORK_GAME_BASE_URL=http://localhost:5102   # /EscapeRoom already matches
+        PLAYZORK_GAME_ENDPOINT=/ZorkOne                # for zork (drops the /Prod prefix)
+
+    The overrides apply to whichever game PLAYZORK_GAME selects; name/objective/
+    score always come from the backend definition. Unset => cloud defaults.
+    """
     if ACTIVE_GAME not in GAME_BACKENDS:
         raise ValueError(f"Invalid ACTIVE_GAME: {ACTIVE_GAME}. Must be one of {list(GAME_BACKENDS.keys())}")
-    return GAME_BACKENDS[ACTIVE_GAME]
+    config = dict(GAME_BACKENDS[ACTIVE_GAME])  # copy so overrides never mutate the defaults
+    if base_url := os.getenv("PLAYZORK_GAME_BASE_URL", "").strip():
+        config["base_url"] = base_url
+    if endpoint := os.getenv("PLAYZORK_GAME_ENDPOINT", "").strip():
+        config["endpoint"] = endpoint
+    return config
 
 
 # Game-facing prompts and scoring must describe the selected backend.
